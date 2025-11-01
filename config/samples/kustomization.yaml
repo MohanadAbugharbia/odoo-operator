@@ -1,5 +1,4 @@
 ## Append samples of your project ##
 resources:
-- odoo_v1_odoodployment.yaml
 - odoo_v1_odoodeployment.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples
