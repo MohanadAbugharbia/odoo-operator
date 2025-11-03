@@ -55,8 +55,5 @@ changelog:
       - "^test:"
 
 release:
-  footer: >-
-
-    ---
-
-    Released by [GoReleaser](https://github.com/goreleaser/goreleaser).
+  extra_files:
+    - glob: ./dist/install.yaml

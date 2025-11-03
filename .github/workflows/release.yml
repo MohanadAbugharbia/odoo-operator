@@ -71,12 +71,13 @@ jobs:
           echo "Next version: $NEXT_VERSION"
           echo "next_version=$NEXT_VERSION" >> $GITHUB_OUTPUT
 
-  build-push:
-    name: Build and push
+  release:
     runs-on: ubuntu-latest
     needs: create-version
     permissions:
+      contents: write
       packages: write
+      attestations: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -84,69 +85,33 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
-      - name: Log in to Docker Hub
+      - name: Log in to docker registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push
-        run: |
-          echo "Building and pushing"
-          make docker-buildx VERSION=${{ needs.create-version.outputs.next_version }}
-
+      
       - name: Make install.yaml
         run: |
           echo "Creating install.yaml"
           make build-installer VERSION=${{ needs.create-version.outputs.next_version }}
-
-      - name: Archive install.yaml
-        uses: actions/upload-artifact@v4
-        with:
-          name: install.yaml
-          path: ./dist/install.yaml
-          retention-days: 1
-
-  create-release:
-    name: Create release
-    runs-on: ubuntu-latest
-    needs:
-      - create-version
-      - build-push
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Get install.yaml
-        uses: actions/download-artifact@v4
-        with:
-          name: install.yaml
-          path: ./dist
-
-      - name: create tag and push
+      - name: Create tag
         run: |
           echo "Creating tag and pushing"
           git config --local user.email "github@action.com"
           git config --local user.name "GitHub Action"
           git tag -a ${{ needs.create-version.outputs.next_version }} -m "Release ${{ needs.create-version.outputs.next_version }}"
           git push origin ${{ needs.create-version.outputs.next_version }}
-
-      - name: Create release
-        uses: ncipollo/release-action@v1
+      
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v4
         with:
-          tag: ${{ needs.create-version.outputs.next_version }}
-          generateReleaseNotes: true
-          artifacts: dist/*
-          draft: ${{ github.event.inputs.draft }}
-          makeLatest: true
+          version: ~> v2
+          args: release --clean {{ if github.event.inputs.draft }} --draft {{ end }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
