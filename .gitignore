@@ -27,3 +27,5 @@ go.work
 *~
 .qodo
 *.env
+# Added by goreleaser init:
+dist/
