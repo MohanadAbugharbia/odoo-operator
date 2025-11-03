@@ -3,9 +3,7 @@ package v1
 import (
 	"context"
 	"fmt"
-	"strconv"
 
-	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -19,52 +17,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-func getSecretValue(client client.Client, ctx context.Context, namespace string, secretName string, secretKey string) (string, error) {
-	secret := &corev1.Secret{}
-
-	err := client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: secretName}, secret)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			return "", utils.ErrSecretNotFound
-		}
-		return "", err
-	}
-
-	value, ok := secret.Data[secretKey]
-	if !ok {
-		return "", utils.ErrSecretKeyNotFound
-	}
-	return string(value), nil
-}
-
-func getInt32SecretValue(client client.Client, ctx context.Context, namespace string, secretName string, secretKey string) (int32, error) {
-	valueStr, err := getSecretValue(client, ctx, namespace, secretName, secretKey)
-	if err != nil {
-		return 0, err
-	}
-	value, err := strconv.ParseInt(valueStr, 10, 32)
-	if err != nil {
-		return 0, err
-	}
-	return int32(value), nil
-}
-
-func getBoolSecretValue(client client.Client, ctx context.Context, namespace string, secretName string, secretKey string) (bool, error) {
-	valueStr, err := getSecretValue(client, ctx, namespace, secretName, secretKey)
-	if err != nil {
-		return false, err
-	}
-	value, err := strconv.ParseBool(valueStr)
-	if err != nil {
-		return false, err
-	}
-	return value, nil
-}
-
 func (odooDbConfig *OdooDatabaseConfig) GetHost(client client.Client, ctx context.Context, namespace string) (string, error) {
 	// Use the HostFromSecret if it is provided
 	if odooDbConfig.HostFromSecret.Name != "" && odooDbConfig.HostFromSecret.Key != "" {
-		host, err := getSecretValue(client, ctx, namespace, odooDbConfig.HostFromSecret.Name, odooDbConfig.HostFromSecret.Key)
+		host, err := utils.GetSecretValue(client, ctx, namespace, odooDbConfig.HostFromSecret.Name, odooDbConfig.HostFromSecret.Key)
 		return host, err
 	}
 	// If HostFromSecret is not provided, use the default host, which can also be given by the user
@@ -73,7 +29,7 @@ func (odooDbConfig *OdooDatabaseConfig) GetHost(client client.Client, ctx contex
 
 func (odooDbConfig *OdooDatabaseConfig) GetPort(client client.Client, ctx context.Context, namespace string) (int32, error) {
 	if odooDbConfig.PortFromSecret.Name != "" && odooDbConfig.PortFromSecret.Key != "" {
-		port, err := getInt32SecretValue(client, ctx, namespace, odooDbConfig.PortFromSecret.Name, odooDbConfig.PortFromSecret.Key)
+		port, err := utils.GetInt32SecretValue(client, ctx, namespace, odooDbConfig.PortFromSecret.Name, odooDbConfig.PortFromSecret.Key)
 		return port, err
 	}
 	// If port is not provided, use the OdooDatabaseConfig Port
@@ -83,7 +39,7 @@ func (odooDbConfig *OdooDatabaseConfig) GetPort(client client.Client, ctx contex
 func (odooDbConfig *OdooDatabaseConfig) GetUser(client client.Client, ctx context.Context, namespace string) (string, error) {
 	// Use the UserFromSecret if it is provided
 	if odooDbConfig.UserFromSecret.Name != "" && odooDbConfig.UserFromSecret.Key != "" {
-		user, err := getSecretValue(client, ctx, namespace, odooDbConfig.UserFromSecret.Name, odooDbConfig.UserFromSecret.Key)
+		user, err := utils.GetSecretValue(client, ctx, namespace, odooDbConfig.UserFromSecret.Name, odooDbConfig.UserFromSecret.Key)
 		return user, err
 	}
 	// If UserFromSecret is not provided, use the default user, which can also be given by the user
@@ -92,7 +48,7 @@ func (odooDbConfig *OdooDatabaseConfig) GetUser(client client.Client, ctx contex
 func (odooDbConfig *OdooDatabaseConfig) GetPassword(client client.Client, ctx context.Context, namespace string) (string, error) {
 	// Use the PasswordFromSecret if it is provided
 	if odooDbConfig.PasswordFromSecret.Name != "" && odooDbConfig.PasswordFromSecret.Key != "" {
-		password, err := getSecretValue(client, ctx, namespace, odooDbConfig.PasswordFromSecret.Name, odooDbConfig.PasswordFromSecret.Key)
+		password, err := utils.GetSecretValue(client, ctx, namespace, odooDbConfig.PasswordFromSecret.Name, odooDbConfig.PasswordFromSecret.Key)
 		return password, err
 	}
 	// If PasswordFromSecret is not provided, return an error
@@ -102,7 +58,7 @@ func (odooDbConfig *OdooDatabaseConfig) GetPassword(client client.Client, ctx co
 func (odooDbConfig *OdooDatabaseConfig) GetDatabase(client client.Client, ctx context.Context, namespace string) (string, error) {
 	// Use the DatabaseFromSecret if it is provided
 	if odooDbConfig.NameFromSecret.Name != "" && odooDbConfig.NameFromSecret.Key != "" {
-		database, err := getSecretValue(client, ctx, namespace, odooDbConfig.NameFromSecret.Name, odooDbConfig.NameFromSecret.Key)
+		database, err := utils.GetSecretValue(client, ctx, namespace, odooDbConfig.NameFromSecret.Name, odooDbConfig.NameFromSecret.Key)
 		return database, err
 	}
 	// If DatabaseFromSecret is not provided, use the default database, which can also be given by the user
@@ -111,7 +67,7 @@ func (odooDbConfig *OdooDatabaseConfig) GetDatabase(client client.Client, ctx co
 
 func (odooDbConfig *OdooDatabaseConfig) GetSSL(client client.Client, ctx context.Context, namespace string) (bool, error) {
 	if odooDbConfig.SSLFromSecret.Name != "" && odooDbConfig.SSLFromSecret.Key != "" {
-		ssl, err := getBoolSecretValue(client, ctx, namespace, odooDbConfig.SSLFromSecret.Name, odooDbConfig.SSLFromSecret.Key)
+		ssl, err := utils.GetBoolSecretValue(client, ctx, namespace, odooDbConfig.SSLFromSecret.Name, odooDbConfig.SSLFromSecret.Key)
 		return ssl, err
 	}
 	// If SSLModeFromSecret is not provided, use the default SSLMode
@@ -120,7 +76,7 @@ func (odooDbConfig *OdooDatabaseConfig) GetSSL(client client.Client, ctx context
 
 func (odooDbConfig *OdooDatabaseConfig) GetMaxConn(client client.Client, ctx context.Context, namespace string) (int32, error) {
 	if odooDbConfig.MaxConnFromSecret.Name != "" && odooDbConfig.MaxConnFromSecret.Key != "" {
-		maxConnections, err := getInt32SecretValue(client, ctx, namespace, odooDbConfig.MaxConnFromSecret.Name, odooDbConfig.MaxConnFromSecret.Key)
+		maxConnections, err := utils.GetInt32SecretValue(client, ctx, namespace, odooDbConfig.MaxConnFromSecret.Name, odooDbConfig.MaxConnFromSecret.Key)
 		return maxConnections, err
 	}
 	// If MaxConnectionsFromSecret is not provided, use the default MaxConnections
