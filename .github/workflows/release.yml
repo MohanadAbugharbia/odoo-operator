@@ -116,7 +116,7 @@ jobs:
         uses: goreleaser/goreleaser-action@v4
         with:
           version: ~> v2
-          args: release --clean ${{ github.event.inputs.draft == 'true' && '--draft' || '' }}
+          args: release ${{ github.event.inputs.draft == 'true' && '--draft' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
