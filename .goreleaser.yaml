@@ -8,6 +8,8 @@
 
 version: 2
 
+project_name: odoo-operator
+
 before:
   hooks:
     # You may remove this if you don't use go modules.
@@ -58,3 +60,34 @@ changelog:
 release:
   extra_files:
     - glob: out/install.yaml
+
+source:
+  enabled: true
+  name_template: "{{ .ProjectName }}.src"
+
+sboms:
+  - artifacts: archive
+  - id: source # Two different sbom configurations need two different IDs
+    artifacts: source
+
+checksum:
+  name_template: "checksums.txt"
+
+signs:
+  - cmd: cosign
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
+docker_signs:
+  - cmd: cosign
+    output: true
+    args:
+      - "sign"
+      - "${artifact}"
+      - "--yes"
