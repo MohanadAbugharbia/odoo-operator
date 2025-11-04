@@ -29,3 +29,4 @@ go.work
 *.env
 # Added by goreleaser init:
 dist/
+out/
