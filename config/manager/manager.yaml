@@ -38,6 +38,7 @@ spec:
                   values:
                     - amd64
                     - arm64
+                    - arm
                 - key: kubernetes.io/os
                   operator: In
                   values:
@@ -53,11 +54,11 @@ spec:
         #   type: RuntimeDefault
       containers:
       - command:
-        - /manager
+        - /odoo-operator
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
-        image: controller:latest
+        image: operator:latest
         name: manager
         securityContext:
           allowPrivilegeEscalation: false

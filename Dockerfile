@@ -32,7 +32,7 @@ ARG TARGETPLATFORM
 WORKDIR /
 # COPY --from=builder /workspace/manager .
 
-COPY $TARGETPLATFORM/odoo-controller /odoo-controller
+COPY $TARGETPLATFORM/odoo-operator /odoo-operator
 USER 65532:65532
 
-ENTRYPOINT ["/odoo-controller"]
+ENTRYPOINT ["/odoo-operator"]

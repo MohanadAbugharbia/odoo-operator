@@ -33,7 +33,7 @@ builds:
 
 dockers_v2:
   - images:
-      - "ghcr.io/mohanadabugharbia/odoo-controller"
+      - "ghcr.io/mohanadabugharbia/odoo-operator"
     tags:
       - "{{ .Version }}"
       - "{{ if .IsNightly }}nightly{{ end }}"
