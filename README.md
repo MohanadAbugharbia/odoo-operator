@@ -18,14 +18,14 @@ Check out the [Odoo](https://www.odoo.com/) website for more information on Odoo
 | Backup | -- |
 | Restore | -- |
 
-Feel free to request more features by creating an [issue](https://github.com/MohanadAbugharbia/odoo-controller/issues/new?template=Blank+issue)
+Feel free to request more features by creating an [issue](https://github.com/MohanadAbugharbia/odoo-operator/issues/new?template=Blank+issue)
 
 ## Installation
 
 Users can just run kubectl apply -f <URL for YAML BUNDLE> to install the project, i.e.:
 
 ```sh
-kubectl apply -f https://github.com/mohanadAbugharbia/odoo-controller/releases/latest/download/install.yaml
+kubectl apply -f https://github.com/mohanadAbugharbia/odoo-operator/releases/latest/download/install.yaml
 ```
 
 ## Getting Started as a contributor
