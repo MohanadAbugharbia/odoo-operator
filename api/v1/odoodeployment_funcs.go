@@ -418,6 +418,7 @@ func (o *OdooDeployment) GetServiceSelectorLabels() map[string]string {
 }
 
 func (o *OdooDeployment) GetHttpServiceTemplate() corev1.Service {
+	internalTrafficPolicy := corev1.ServiceInternalTrafficPolicyCluster
 	service := corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      o.GetHttpServiceName(),
@@ -433,12 +434,16 @@ func (o *OdooDeployment) GetHttpServiceTemplate() corev1.Service {
 					Protocol:   "TCP",
 				},
 			},
+			Type:                  corev1.ServiceTypeClusterIP,
+			SessionAffinity:       corev1.ServiceAffinityNone,
+			InternalTrafficPolicy: &internalTrafficPolicy,
 		},
 	}
 	return service
 }
 
 func (o *OdooDeployment) GetPollServiceTemplate() corev1.Service {
+	internalTrafficPolicy := corev1.ServiceInternalTrafficPolicyCluster
 	service := corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      o.GetPollServiceName(),
@@ -454,6 +459,9 @@ func (o *OdooDeployment) GetPollServiceTemplate() corev1.Service {
 					Protocol:   "TCP",
 				},
 			},
+			Type:                  corev1.ServiceTypeClusterIP,
+			SessionAffinity:       corev1.ServiceAffinityNone,
+			InternalTrafficPolicy: &internalTrafficPolicy,
 		},
 	}
 	return service

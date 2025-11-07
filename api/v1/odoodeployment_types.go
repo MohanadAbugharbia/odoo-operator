@@ -46,9 +46,11 @@ const (
 
 	ReasonFailedGetHttpService    = "FailedGetHttpService"
 	ReasonFailedCreateHttpService = "FailedCreateHttpService"
+	ReasonFailedUpdateHttpService = "FailedUpdateHttpService"
 
 	ReasonFailedGetPollService    = "FailedGetPollService"
 	ReasonFailedCreatePollService = "FailedCreatePollService"
+	ReasonFailedUpdatePollService = "FailedUpdatePollService"
 )
 
 type DatabaseConnectionDetails struct {

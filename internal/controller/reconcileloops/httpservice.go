@@ -18,6 +18,7 @@ import (
 
 	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
 	"github.com/MohanadAbugharbia/odoo-operator/pkg/utils"
+	"github.com/google/go-cmp/cmp"
 )
 
 type OdooHttpServiceReconciler struct {
@@ -45,22 +46,35 @@ func (r *OdooHttpServiceReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return httpService, utilerrors.NewAggregate([]error{err, r.Status().Update(ctx, r.OdooDeployment)})
 	}
 
-	httpService = r.OdooDeployment.GetHttpServiceTemplate()
-	httpService.Name = httpServiceNamespacedName.Name
-	httpService.Namespace = httpServiceNamespacedName.Namespace
+	httpServiceTemplate := r.OdooDeployment.GetHttpServiceTemplate()
+
+	httpServiceTemplate.Spec.ClusterIP = httpService.Spec.ClusterIP
+	httpServiceTemplate.Spec.ClusterIPs = httpService.Spec.ClusterIPs
+	httpServiceTemplate.Spec.IPFamilies = httpService.Spec.IPFamilies
+	httpServiceTemplate.Spec.IPFamilyPolicy = httpService.Spec.IPFamilyPolicy
 
 	ctrl.SetControllerReference(r.OdooDeployment, &httpService, r.Scheme)
 	if createHttpService {
 		logger.Info(fmt.Sprintf("Creating a new service for %s", req.Name))
+		httpService.Spec = httpServiceTemplate.Spec
+		httpService.Name = httpServiceNamespacedName.Name
+		httpService.Namespace = httpServiceNamespacedName.Namespace
 		err = r.Create(ctx, &httpService)
 		if err != nil {
 			logger.Error(err, fmt.Sprintf("error creating %s service.", httpService.Name))
 			utils.UpdateStatus(&r.OdooDeployment.Status.Conditions, "OperatorDegraded", odoov1.ReasonFailedCreateHttpService, fmt.Sprintf("error creating %s service: %v", httpServiceNamespacedName.Name, err), metav1.ConditionFalse)
 			return httpService, utilerrors.NewAggregate([]error{err, r.Status().Update(ctx, r.OdooDeployment)})
 		}
+	} else if diff := cmp.Diff(httpService.Spec, httpServiceTemplate.Spec); diff != "" {
+		logger.V(1).Info(fmt.Sprintf("Diff: %s", diff))
+		httpService.Spec = httpServiceTemplate.Spec
+		err = r.Update(ctx, &httpService)
+		if err != nil {
+			logger.Error(err, fmt.Sprintf("error updating %s service.", httpService.Name))
+			utils.UpdateStatus(&r.OdooDeployment.Status.Conditions, "OperatorDegraded", odoov1.ReasonFailedUpdateHttpService, fmt.Sprintf("error updating %s service: %v", httpServiceNamespacedName.Name, err), metav1.ConditionFalse)
+			return httpService, utilerrors.NewAggregate([]error{err, r.Status().Update(ctx, r.OdooDeployment)})
+		}
 	}
-	// No need to update if service already exists and hasn't changed
-
 
 	return httpService, nil
 }
