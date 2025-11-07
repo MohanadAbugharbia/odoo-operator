@@ -33,7 +33,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	odoov1 "github.com/MohanadAbugharbia/odoo-controller/api/v1"
+	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
 	// +kubebuilder:scaffold:imports
 )
 

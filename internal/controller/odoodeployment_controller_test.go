@@ -27,7 +27,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	odoov1 "github.com/MohanadAbugharbia/odoo-controller/api/v1"
+	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
 )
 
 var _ = Describe("OdooDeployment Controller", func() {

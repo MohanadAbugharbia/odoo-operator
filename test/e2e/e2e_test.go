@@ -24,7 +24,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/MohanadAbugharbia/odoo-controller/test/utils"
+	"github.com/MohanadAbugharbia/odoo-operator/test/utils"
 )
 
 const namespace = "odoo-operator-system"

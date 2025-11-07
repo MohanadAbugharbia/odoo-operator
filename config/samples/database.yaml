@@ -1,0 +1,19 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: cluster-1
+spec:
+  imageName: ghcr.io/cloudnative-pg/postgresql:17
+  instances: 1
+  storage:
+    size: 1Gi
+  managed:
+    roles:
+    - name: odoo
+      ensure: present
+      login: true
+      superuser: false
+      createdb: true
+      passwordSecret:
+        name: cluster-1-app
+

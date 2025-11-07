@@ -35,8 +35,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	odoov1 "github.com/MohanadAbugharbia/odoo-controller/api/v1"
-	"github.com/MohanadAbugharbia/odoo-controller/internal/controller"
+	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
 

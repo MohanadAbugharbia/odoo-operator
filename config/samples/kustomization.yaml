@@ -1,4 +1,12 @@
 ## Append samples of your project ##
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: odoo-sample
+
 resources:
+- https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.27/releases/cnpg-1.27.1.yaml # Install CloudNativePG operator
+- database.yaml
+- secret.yaml
 - odoo_v1_odoodeployment.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

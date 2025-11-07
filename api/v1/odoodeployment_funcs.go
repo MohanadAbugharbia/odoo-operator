@@ -13,7 +13,7 @@ import (
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	"github.com/MohanadAbugharbia/odoo-controller/pkg/utils"
+	"github.com/MohanadAbugharbia/odoo-operator/pkg/utils"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -138,6 +138,11 @@ func (o *OdooDatabaseConfig) GetDbConnectionDetails(
 }
 
 func (o *OdooDeployment) GetPodSpec() corev1.PodSpec {
+	podRestartPolicy := corev1.RestartPolicyAlways
+	podDNSPolicy := corev1.DNSClusterFirst
+	terminationGracePeriodSeconds := int64(30)
+	schedulerName := "default-scheduler"
+
 	podSpec := corev1.PodSpec{
 		Containers: []corev1.Container{
 			{
@@ -180,6 +185,8 @@ func (o *OdooDeployment) GetPodSpec() corev1.PodSpec {
 						ReadOnly:  true,
 					},
 				},
+				TerminationMessagePath:   "/dev/termination-log",
+				TerminationMessagePolicy: corev1.TerminationMessageReadFile,
 			},
 		},
 		Volumes: []corev1.Volume{
@@ -213,6 +220,10 @@ func (o *OdooDeployment) GetPodSpec() corev1.PodSpec {
 			RunAsNonRoot: func(i bool) *bool { return &i }(true),
 			FSGroup:      func(i int64) *int64 { return &i }(101),
 		},
+		RestartPolicy:                 podRestartPolicy,
+		DNSPolicy:                     podDNSPolicy,
+		TerminationGracePeriodSeconds: &terminationGracePeriodSeconds,
+		SchedulerName:                 schedulerName,
 	}
 	return podSpec
 }
@@ -449,6 +460,10 @@ func (o *OdooDeployment) GetPollServiceTemplate() corev1.Service {
 }
 
 func (o *OdooDeployment) GetDeploymentTemplate() appsv1.Deployment {
+	maxUnavailable := intstr.FromString("25%")
+	maxSurge := intstr.FromString("25%")
+	revisionHistoryLimit := int32(10)
+	progressDeadlineSeconds := int32(600)
 	return appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      o.Name,
@@ -465,6 +480,15 @@ func (o *OdooDeployment) GetDeploymentTemplate() appsv1.Deployment {
 				},
 				Spec: o.GetPodSpec(),
 			},
+			Strategy: appsv1.DeploymentStrategy{
+				Type: appsv1.RollingUpdateDeploymentStrategyType,
+				RollingUpdate: &appsv1.RollingUpdateDeployment{
+					MaxUnavailable: &maxUnavailable,
+					MaxSurge:       &maxSurge,
+				},
+			},
+			RevisionHistoryLimit:    &revisionHistoryLimit,
+			ProgressDeadlineSeconds: &progressDeadlineSeconds,
 		},
 	}
 }
@@ -490,4 +514,31 @@ func (o *OdooDeployment) CreateOdooConfigSecretObj(
 	)
 
 	return o.GetOdooConfigSecretTemplate(serializedOdooConfig), nil
+}
+
+// UsesSecret checks whether a given secret is used by a Cluster.
+//
+// This function is also used to discover the set of clusters that
+// should be reconciled when a certain secret changes.
+func (o *OdooDeployment) UsesSecret(secret string) bool {
+	switch secret {
+	case o.Spec.Database.HostFromSecret.Name:
+		return true
+	case o.Spec.Database.PortFromSecret.Name:
+		return true
+	case o.Spec.Database.UserFromSecret.Name:
+		return true
+	case o.Spec.Database.PasswordFromSecret.Name:
+		return true
+	case o.Spec.Database.NameFromSecret.Name:
+		return true
+	case o.Spec.Database.SSLFromSecret.Name:
+		return true
+	case o.Spec.Database.MaxConnFromSecret.Name:
+		return true
+	case o.Spec.Config.AdminPasswordSecretName:
+		return true
+	default:
+		return false
+	}
 }

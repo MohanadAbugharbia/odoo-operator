@@ -22,7 +22,7 @@ spec:
     # user: odoo
     userFromSecret:
       name: cluster-1-app
-      key: user
+      key: username
     passwordFromSecret:
       name: cluster-1-app
       key: password
