@@ -550,3 +550,15 @@ func (o *OdooDeployment) UsesSecret(secret string) bool {
 		return false
 	}
 }
+
+func (o *OdooDeployment) UsesPVC(pvcName string) bool {
+	return o.Status.OdooDataPvcName == pvcName
+}
+
+func (o *OdooDeployment) UsesDeployment(deploymentName string) bool {
+	return o.Name == deploymentName
+}
+
+func (o *OdooDeployment) UsesService(serviceName string) bool {
+	return o.GetHttpServiceName() == serviceName || o.GetPollServiceName() == serviceName
+}

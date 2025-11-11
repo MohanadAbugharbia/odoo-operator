@@ -221,14 +221,29 @@ func (r *OdooDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 func (r *OdooDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&odoov1.OdooDeployment{}).
-		Owns(&corev1.Secret{}, builder.WithPredicates(secretsPredicate)).
-		Owns(&corev1.PersistentVolumeClaim{}, builder.WithPredicates(pvcPredicate)).
-		Owns(&appsv1.Deployment{}, builder.WithPredicates(deploymentPredicate)).
-		Owns(&corev1.Service{}, builder.WithPredicates(servicePredicate)).
+		Owns(&corev1.Secret{}).
+		Owns(&corev1.PersistentVolumeClaim{}).
+		Owns(&appsv1.Deployment{}).
+		Owns(&corev1.Service{}).
 		Watches(
 			&corev1.Secret{},
 			handler.EnqueueRequestsFromMapFunc(r.mapSecretsToOdooDeployments()),
 			builder.WithPredicates(secretsPredicate),
+		).
+		Watches(
+			&corev1.PersistentVolumeClaim{},
+			handler.EnqueueRequestsFromMapFunc(r.mapPVCsToOdooDeployments()),
+			builder.WithPredicates(pvcPredicate),
+		).
+		Watches(
+			&appsv1.Deployment{},
+			handler.EnqueueRequestsFromMapFunc(r.mapDeploymentsToOdooDeployments()),
+			builder.WithPredicates(deploymentPredicate),
+		).
+		Watches(
+			&corev1.Service{},
+			handler.EnqueueRequestsFromMapFunc(r.mapServicesToOdooDeployments()),
+			builder.WithPredicates(servicePredicate),
 		).
 		WithOptions(controller.Options{MaxConcurrentReconciles: 2}).
 		Complete(r)
@@ -248,6 +263,52 @@ func (r *OdooDeploymentReconciler) mapSecretsToOdooDeployments() handler.MapFunc
 		}
 		// build requests for OdooDeployment referring the secret
 		return filterOdooDeploymentsUsingSecret(odooDeployments, secret)
+	}
+}
+
+func (r *OdooDeploymentReconciler) mapPVCsToOdooDeployments() handler.MapFunc {
+	return func(ctx context.Context, obj client.Object) []reconcile.Request {
+		pvc, ok := obj.(*corev1.PersistentVolumeClaim)
+		if !ok {
+			return nil
+		}
+		odooDeployments, err := r.getOdooDeploymentsForPVCsToOdooDeploymentsMapper(ctx, pvc)
+		if err != nil {
+			log.FromContext(ctx).Error(err, "while getting OdooDeployment list", "namespace", pvc.Namespace)
+			return nil
+		}
+		// build requests for OdooDeployment referring the PVC
+		return filterOdooDeploymentsUsingPVC(odooDeployments, pvc)
+	}
+}
+func (r *OdooDeploymentReconciler) mapDeploymentsToOdooDeployments() handler.MapFunc {
+	return func(ctx context.Context, obj client.Object) []reconcile.Request {
+		deployment, ok := obj.(*appsv1.Deployment)
+		if !ok {
+			return nil
+		}
+		odooDeployments, err := r.getOdooDeploymentsForDeploymentsToOdooDeploymentsMapper(ctx, deployment)
+		if err != nil {
+			log.FromContext(ctx).Error(err, "while getting OdooDeployment list", "namespace", deployment.Namespace)
+			return nil
+		}
+		// build requests for OdooDeployment referring the Deployment
+		return filterOdooDeploymentsUsingDeployment(odooDeployments, deployment)
+	}
+}
+func (r *OdooDeploymentReconciler) mapServicesToOdooDeployments() handler.MapFunc {
+	return func(ctx context.Context, obj client.Object) []reconcile.Request {
+		service, ok := obj.(*corev1.Service)
+		if !ok {
+			return nil
+		}
+		odooDeployments, err := r.getOdooDeploymentsForServicesToOdooDeploymentsMapper(ctx, service)
+		if err != nil {
+			log.FromContext(ctx).Error(err, "while getting OdooDeployment list", "namespace", service.Namespace)
+			return nil
+		}
+		// build requests for OdooDeployment referring the Service
+		return filterOdooDeploymentsUsingService(odooDeployments, service)
 	}
 }
 
@@ -271,6 +332,63 @@ func (r *OdooDeploymentReconciler) getOdooDeploymentsForSecretsOrConfigMapsToOdo
 	return odooDeployments, err
 }
 
+func (r *OdooDeploymentReconciler) getOdooDeploymentsForPVCsToOdooDeploymentsMapper(
+	ctx context.Context,
+	object metav1.Object,
+) (odooDeployments odoov1.OdooDeploymentList, err error) {
+	_, isPVC := object.(*corev1.PersistentVolumeClaim)
+
+	if !isPVC {
+		return odooDeployments, fmt.Errorf("unsupported object: %+v", object)
+	}
+
+	// Get all the Odoo Deployments handled by the operator in the PVC namespaces
+	err = r.List(
+		ctx,
+		&odooDeployments,
+		client.InNamespace(object.GetNamespace()),
+	)
+	return odooDeployments, err
+}
+
+func (r *OdooDeploymentReconciler) getOdooDeploymentsForDeploymentsToOdooDeploymentsMapper(
+	ctx context.Context,
+	object metav1.Object,
+) (odooDeployments odoov1.OdooDeploymentList, err error) {
+	_, isDeployment := object.(*appsv1.Deployment)
+
+	if !isDeployment {
+		return odooDeployments, fmt.Errorf("unsupported object: %+v", object)
+	}
+
+	// Get all the Odoo Deployments handled by the operator in the Deployment namespaces
+	err = r.List(
+		ctx,
+		&odooDeployments,
+		client.InNamespace(object.GetNamespace()),
+	)
+	return odooDeployments, err
+}
+
+func (r *OdooDeploymentReconciler) getOdooDeploymentsForServicesToOdooDeploymentsMapper(
+	ctx context.Context,
+	object metav1.Object,
+) (odooDeployments odoov1.OdooDeploymentList, err error) {
+	_, isService := object.(*corev1.Service)
+
+	if !isService {
+		return odooDeployments, fmt.Errorf("unsupported object: %+v", object)
+	}
+
+	// Get all the Odoo Deployments handled by the operator in the Service namespaces
+	err = r.List(
+		ctx,
+		&odooDeployments,
+		client.InNamespace(object.GetNamespace()),
+	)
+	return odooDeployments, err
+}
+
 // filterOdooDeploymentsUsingSecret returns a list of reconcile.Request for the Odoo Deployments
 // that reference the secret
 func filterOdooDeploymentsUsingSecret(
@@ -284,6 +402,72 @@ func filterOdooDeploymentsUsingSecret(
 					NamespacedName: types.NamespacedName{
 						Name:      deployment.Name,
 						Namespace: deployment.Namespace,
+					},
+				},
+			)
+			continue
+		}
+	}
+	return requests
+}
+
+// filterOdooDeploymentsUsingPVC returns a list of reconcile.Request for the Odoo Deployments
+// that reference the PVC
+func filterOdooDeploymentsUsingPVC(
+	odooDeployments odoov1.OdooDeploymentList,
+	pvc *corev1.PersistentVolumeClaim,
+) (requests []reconcile.Request) {
+	for _, deployment := range odooDeployments.Items {
+		if deployment.UsesPVC(pvc.Name) {
+			requests = append(requests,
+				reconcile.Request{
+					NamespacedName: types.NamespacedName{
+						Name:      deployment.Name,
+						Namespace: deployment.Namespace,
+					},
+				},
+			)
+			continue
+		}
+	}
+	return requests
+}
+
+// filterOdooDeploymentsUsingDeployment returns a list of reconcile.Request for the Odoo Deployments
+// that reference the Deployment
+func filterOdooDeploymentsUsingDeployment(
+	odooDeployments odoov1.OdooDeploymentList,
+	deployment *appsv1.Deployment,
+) (requests []reconcile.Request) {
+	for _, odooDeployment := range odooDeployments.Items {
+		if odooDeployment.UsesDeployment(deployment.Name) {
+			requests = append(requests,
+				reconcile.Request{
+					NamespacedName: types.NamespacedName{
+						Name:      odooDeployment.Name,
+						Namespace: odooDeployment.Namespace,
+					},
+				},
+			)
+			continue
+		}
+	}
+	return requests
+}
+
+// filterOdooDeploymentsUsingService returns a list of reconcile.Request for the Odoo Deployments
+// that reference the Service
+func filterOdooDeploymentsUsingService(
+	odooDeployments odoov1.OdooDeploymentList,
+	service *corev1.Service,
+) (requests []reconcile.Request) {
+	for _, odooDeployment := range odooDeployments.Items {
+		if odooDeployment.UsesService(service.Name) {
+			requests = append(requests,
+				reconcile.Request{
+					NamespacedName: types.NamespacedName{
+						Name:      odooDeployment.Name,
+						Namespace: odooDeployment.Namespace,
 					},
 				},
 			)
