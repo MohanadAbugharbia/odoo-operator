@@ -17,6 +17,7 @@ import (
 
 	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
 	"github.com/MohanadAbugharbia/odoo-operator/pkg/utils"
+	"github.com/google/go-cmp/cmp"
 )
 
 type OdooConfigSecretReconciler struct {
@@ -28,6 +29,8 @@ type OdooConfigSecretReconciler struct {
 
 func (r *OdooConfigSecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (corev1.Secret, error) {
 	logger := log.FromContext(ctx)
+
+	logger.V(1).Info("Reconciling Odoo Config Secret")
 
 	// Check if odoo config secret already exists, if not create a new one
 	secret := corev1.Secret{}
@@ -49,27 +52,36 @@ func (r *OdooConfigSecretReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return secret, utilerrors.NewAggregate([]error{err, r.Status().Update(ctx, r.OdooDeployment)})
 	}
 
-	secret, err = r.OdooDeployment.CreateOdooConfigSecretObj(r.Client, ctx, string(adminPassword))
+	newSecret, err := r.OdooDeployment.CreateOdooConfigSecretObj(r.Client, ctx, string(adminPassword))
 	if err != nil {
 		logger.Error(err, fmt.Sprintf("error creating %s secret.", secretNamespacedName.Name))
 		utils.UpdateStatus(&r.OdooDeployment.Status.Conditions, "OperatorDegraded", odoov1.ReasonOdooConfigSecretCreationFailed, fmt.Sprintf("error creating %s secret: %v", secretNamespacedName.Name, err), metav1.ConditionFalse)
 		return secret, utilerrors.NewAggregate([]error{err, r.Status().Update(ctx, r.OdooDeployment)})
 	}
 
-	secret.Name = secretNamespacedName.Name
-	secret.Namespace = secretNamespacedName.Namespace
-
+	ctrl.SetControllerReference(r.OdooDeployment, &secret, r.Scheme)
 	if createSecret {
 		logger.Info(fmt.Sprintf("Creating a new secret for %s", secretNamespacedName.Name))
-		err = r.Create(ctx, &secret)
+		secret.Data = newSecret.Data
+		secret.Name = secretNamespacedName.Name
+		secret.Namespace = secretNamespacedName.Namespace
+		err = r.Create(ctx, &newSecret)
 		if err != nil {
 			logger.Error(err, fmt.Sprintf("error creating %s secret.", secret.Name))
 			utils.UpdateStatus(&r.OdooDeployment.Status.Conditions, "OperatorSucceeded", odoov1.ReasonOdooConfigSecretCreationFailed, fmt.Sprintf("error creating %s secret: %v", secret.Name, err), metav1.ConditionFalse)
 			return secret, utilerrors.NewAggregate([]error{err, r.Status().Update(ctx, r.OdooDeployment)})
 		}
+	} else if diff := cmp.Diff(secret.Data, newSecret.Data); diff != "" {
+		logger.V(1).Info(fmt.Sprintf("Diff: %s", diff))
+		logger.Info(fmt.Sprintf("Updating secret %s for %s", secretNamespacedName.Name, req.Name))
+		secret.Data = newSecret.Data
+		err = r.Update(ctx, &secret)
+		if err != nil {
+			logger.Error(err, fmt.Sprintf("error updating %s secret.", secret.Name))
+			utils.UpdateStatus(&r.OdooDeployment.Status.Conditions, "OperatorDegraded", odoov1.ReasonOdooConfigSecretUpdateFailed, fmt.Sprintf("error updating %s secret: %v", secret.Name, err), metav1.ConditionFalse)
+			return secret, utilerrors.NewAggregate([]error{err, r.Status().Update(ctx, r.OdooDeployment)})
+		}
 	}
-
-	// No need to update if secret already exists and hasn't changed
 
 	return secret, nil
 }
