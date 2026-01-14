@@ -233,7 +233,7 @@ type OdooDeploymentSpec struct {
 
 	// Backup OdooBackupConfig `json:"backup,omitempty"`
 	// The database configuration for the OdooDployment
-	Database OdooDatabaseConfig `json:"database,omitempty"`
+	Database OdooDatabaseConfig `json:"database"`
 	// The configuration for the Odoo
 	Config OdooConfig `json:"config,omitempty"`
 
