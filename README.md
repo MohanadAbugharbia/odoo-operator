@@ -1,8 +1,5 @@
 # Odoo-Operator
-This is a Kubernetes operator for Odoo controlling the lifecycle of an Odoo deployment inside a kubernetes cluster.
-
-## Description
-This project is a Kubernetes operator that manages the lifecycle of an Odoo deployment inside a Kubernetes cluster.
+A Kubernetes operator that manages the full lifecycle of Odoo deployments — including database initialization, secrets, persistent storage, and services — via a single `OdooDeployment` custom resource.
 
 Check out the sample [OdooDeployment](config/samples/odoo_v1_odoodeployment.yaml) for an example of how to use this operator.
 
@@ -10,13 +7,13 @@ Check out the [Odoo](https://www.odoo.com/) website for more information on Odoo
 
 ## Features
 
-| Feature | status |
-|---|---|
-| Deploy | available |
-| Install modules | available |
-| Configure odoo | available |
-| Backup | -- |
-| Restore | -- |
+| Feature | Status | Description |
+|---|---|---|
+| Deploy | available | Create and manage Odoo Deployments, Services, and PVCs |
+| Module installation | available | Initialize the database and install Odoo modules via a Kubernetes Job |
+| Configure Odoo | available | Manage `odoo.conf` settings dynamically via the CR spec |
+| Backup | planned | Snapshot Odoo filestore and database |
+| Restore | planned | Restore from a snapshot |
 
 Feel free to request more features by creating an [issue](https://github.com/MohanadAbugharbia/odoo-operator/issues/new?template=Blank+issue)
 
@@ -31,10 +28,10 @@ kubectl apply -f https://github.com/mohanadAbugharbia/odoo-operator/releases/lat
 ## Getting Started as a contributor
 
 ### Prerequisites
-- go version v1.22.0+
+- go version v1.25.0+
 - docker version 17.03+.
-- kubectl version v1.11.3+.
-- Access to a Kubernetes v1.11.3+ cluster.
+- kubectl version v1.28.0+.
+- Access to a Kubernetes v1.28.0+ cluster.
 
 ### To Deploy on the cluster
 **Build and push your image to the location specified by `IMG`:**
