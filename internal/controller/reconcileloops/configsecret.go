@@ -40,14 +40,14 @@ func (r *OdooConfigSecretReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	if err != nil && errors.IsNotFound(err) {
 		createSecret = true
 	} else if err != nil {
-		logger.Error(err, fmt.Sprintf("error creating %s secret.", req.Name))
-		utils.UpdateStatus(&r.OdooDeployment.Status.Conditions, "OperatorSucceeded", odoov1.ReasonOdooConfigSecretNotAvailable, fmt.Sprintf("error creating %s secret: %v", req.Name, err), metav1.ConditionFalse)
+		logger.Error(err, fmt.Sprintf("error creating %s secret.", secretNamespacedName.Name))
+		utils.UpdateStatus(&r.OdooDeployment.Status.Conditions, "OperatorSucceeded", odoov1.ReasonOdooConfigSecretNotAvailable, fmt.Sprintf("error creating %s secret: %v", secretNamespacedName.Name, err), metav1.ConditionFalse)
 		return secret, utilerrors.NewAggregate([]error{err, r.Status().Update(ctx, r.OdooDeployment)})
 	}
 
 	adminPassword, ok := r.AdminSecret.Data["password"]
 	if !ok {
-		logger.Error(err, fmt.Sprintf("error getting admin password for %s", req.Name))
+		logger.Error(err, fmt.Sprintf("error getting admin password for %s", secretNamespacedName.Name))
 		utils.UpdateStatus(&r.OdooDeployment.Status.Conditions, "OperatorDegraded", odoov1.ReasonOdooAdminPasswordFailed, fmt.Sprintf("error getting admin password for %s from %s: %v", req.Name, r.AdminSecret.Name, err), metav1.ConditionFalse)
 		return secret, utilerrors.NewAggregate([]error{err, r.Status().Update(ctx, r.OdooDeployment)})
 	}

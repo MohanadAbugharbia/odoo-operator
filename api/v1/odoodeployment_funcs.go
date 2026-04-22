@@ -149,6 +149,7 @@ func (o *OdooDeployment) GetPodSpec() corev1.PodSpec {
 				Name:            "odoo",
 				Image:           o.Spec.Image,
 				ImagePullPolicy: o.Spec.ImagePullPolicy,
+
 				Command: []string{
 					"/entrypoint.sh",
 					"-c",
@@ -220,6 +221,7 @@ func (o *OdooDeployment) GetPodSpec() corev1.PodSpec {
 			RunAsNonRoot: func(i bool) *bool { return &i }(true),
 			FSGroup:      func(i int64) *int64 { return &i }(101),
 		},
+		ImagePullSecrets:              o.Spec.ImagePullSecrets,
 		RestartPolicy:                 podRestartPolicy,
 		DNSPolicy:                     podDNSPolicy,
 		TerminationGracePeriodSeconds: &terminationGracePeriodSeconds,
@@ -298,10 +300,11 @@ func (o *OdooConfig) GetSerializedOdooConfig(
 }
 
 func (o *OdooDeployment) GetOdooConfigSecretTemplate(serializedOdooConfig string) corev1.Secret {
+	namespacedName := o.CreateOdooConfigSecretNamespacedName()
 	odooConfigSecret := corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      o.Name,
-			Namespace: o.Namespace,
+			Name:      namespacedName.Name,
+			Namespace: namespacedName.Namespace,
 		},
 		Data: map[string][]byte{
 			"odoo.conf": []byte(serializedOdooConfig),
@@ -317,7 +320,8 @@ func (o *OdooDeployment) GetPvcTemplate() corev1.PersistentVolumeClaim {
 			Namespace: o.Namespace,
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes: o.Spec.OdooFilestore.AccessModes,
+			StorageClassName: &o.Spec.OdooFilestore.StorageClassName,
+			AccessModes:      o.Spec.OdooFilestore.AccessModes,
 			Resources: corev1.VolumeResourceRequirements{
 				Requests: corev1.ResourceList{
 					corev1.ResourceStorage: o.Spec.OdooFilestore.Size,
