@@ -93,9 +93,12 @@ func (r *OdooDatabaseInitJobReconciler) Reconcile(ctx context.Context, req ctrl.
 			// If job is still running, requeue
 			logger.Info("Current InitJob still running, requening")
 			return ctrl.Result{RequeueAfter: 15 * time.Second}, nil, true
+		} else if currentInitJob.Status.Failed > 0 {
+			// If job failed, update the status of the OdooDeployment
+			// logger.Error("Current InitJob")
+			utils.UpdateStatus(&r.OdooDeployment.Status.Conditions, "OperatorDegraded", "FailedInitJob", fmt.Sprintf("Init job %s in namespace %s failed", r.OdooDeployment.Status.CurrentInitJob.Name, r.OdooDeployment.Status.CurrentInitJob.Namespace), metav1.ConditionFalse)
+			return ctrl.Result{}, utilerrors.NewAggregate([]error{nil, r.Status().Update(ctx, r.OdooDeployment)}), true
 		}
-		// If job failed, update the status of the OdooDeployment
-
 	}
 	// Check if InitModulesInstalled list matches the Spec.Modules list
 	// If not, create a new InitJob to install the missing modules

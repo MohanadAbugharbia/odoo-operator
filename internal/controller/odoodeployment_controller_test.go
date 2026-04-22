@@ -90,7 +90,6 @@ var _ = Describe("OdooDeployment Controller", func() {
 							},
 						},
 						OdooFilestore: odoov1.PersistentVolumeClaimSpec{
-							Name: "my-odoo-filestore-pvc",
 							Size: resource.MustParse("10Gi"),
 							AccessModes: []corev1.PersistentVolumeAccessMode{
 								corev1.ReadWriteOnce,

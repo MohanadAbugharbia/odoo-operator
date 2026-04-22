@@ -51,7 +51,6 @@ var _ = Describe("Deployment Reconcile Loop", func() {
 					Image:    "mohanadabugharbia/odoo:18",
 					OdooFilestore: odoov1.PersistentVolumeClaimSpec{
 						Size: resource.MustParse("1Gi"),
-						Name: "test-odoo-filestore-pvc",
 						AccessModes: []corev1.PersistentVolumeAccessMode{
 							corev1.ReadWriteOnce,
 						},

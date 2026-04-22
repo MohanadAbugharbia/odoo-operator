@@ -186,15 +186,6 @@ type OdooConfig struct {
 }
 
 type PersistentVolumeClaimSpec struct {
-	// Name of the persistent volume claim
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:default="odoo-filestore"
-	Name string `json:"name,omitempty"`
-
-	// CreateIfNotExists defines if the persistent volume claim should be created in case not found
-	// +kubebuilder:default=true
-	CreateIfNotExists bool `json:"createIfNotExists,omitempty"`
-
 	// StorageSize defines the size of the new persistent volume claim
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default="10Gi"
@@ -202,7 +193,7 @@ type PersistentVolumeClaimSpec struct {
 
 	// StorageClass is the storageClassName used to create a new persistent volume claim
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:default=default
+	// +kubebuilder:default=standard
 	StorageClassName string `json:"storageClassName,omitempty"`
 	// AccessMode defines the access mode of the new persistent volume claim
 	// +kubebuilder:validation:Optional
@@ -230,6 +221,11 @@ type OdooDeploymentSpec struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default="IfNotPresent"
 	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
+
+	// ImagePullSecrets is an optional list of references to secrets in the same namespace to use for pulling any of the images used by this OdooDeployment.
+	// If specified, these secrets will be passed to individual puller implementations for them to use.
+	// +kubebuilder:validation:Optional
+	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 
 	// Backup OdooBackupConfig `json:"backup,omitempty"`
 	// The database configuration for the OdooDployment
