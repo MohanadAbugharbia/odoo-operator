@@ -40,8 +40,7 @@ spec:
     limitMemorySoft: 2147483648
     limitMemoryHard: 2684354560
   odooFilestore:
-    name: odoo-filestore
-    storageClassName: default
+    storageClassName: standard
     accessModes:
       - ReadWriteOnce
     size: 10Gi

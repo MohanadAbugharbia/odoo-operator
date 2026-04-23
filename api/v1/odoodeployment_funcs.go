@@ -230,10 +230,29 @@ func (o *OdooDeployment) GetPodSpec() corev1.PodSpec {
 	return podSpec
 }
 
+// DeduplicateModules removes duplicate entries from Spec.Modules in place,
+// preserving the original order of first occurrences.
+func (o *OdooDeployment) DeduplicateModules() {
+	seen := make(map[string]struct{}, len(o.Spec.Modules))
+	unique := make([]string, 0, len(o.Spec.Modules))
+	for _, m := range o.Spec.Modules {
+		if _, exists := seen[m]; !exists {
+			seen[m] = struct{}{}
+			unique = append(unique, m)
+		}
+	}
+	o.Spec.Modules = unique
+}
+
 func (o *OdooDeployment) GetDbInitJobTemplate() (batchv1.Job, []string) {
+	// Only install modules that have not previously been installed
+	modulesToInstall := utils.Difference(o.Spec.Modules, o.Status.InitModulesInstalled)
+	if len(modulesToInstall) == 0 {
+		return batchv1.Job{}, []string{}
+	}
 	stringFormattedInitModules := ""
 	// Add the init modules to the string
-	for _, module := range o.Spec.Modules {
+	for _, module := range modulesToInstall {
 		stringFormattedInitModules += fmt.Sprintf("%s,", module)
 	}
 	// Remove the last comma
@@ -265,7 +284,7 @@ func (o *OdooDeployment) GetDbInitJobTemplate() (batchv1.Job, []string) {
 			BackoffLimit: func(i int32) *int32 { return &i }(2),
 		},
 	}
-	return job, o.Spec.Modules
+	return job, modulesToInstall
 }
 
 func (o *OdooConfig) GetSerializedOdooConfig(
