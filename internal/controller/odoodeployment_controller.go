@@ -112,6 +112,8 @@ func (r *OdooDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		"resourceVersion", odooDeployment.ResourceVersion,
 		"generation", odooDeployment.Generation)
 
+	odooDeployment.DeduplicateModules()
+
 	odooAdminSecretReconciler := reconcileloops.OdooAdminPasswordSecretReconciler{
 		Client:         r.Client,
 		Scheme:         r.Scheme,

@@ -53,10 +53,11 @@ func (r *OdooDatabaseInitJobReconciler) Reconcile(ctx context.Context, req ctrl.
 		// If job succeeded, update the status of the OdooDeployment
 		if currentInitJob.Status.Succeeded > 0 {
 			// The current init job has succeeded, so we can clear it
-			logger.Info("Current InitJob succeeded, clearing")
+			logger.Info("Current InitJob succeeded")
+			logger.Info("New modules installed: " + fmt.Sprint(r.OdooDeployment.Status.CurrentInitJob.Modules))
 			r.OdooDeployment.Status.CurrentInitJob.Name = ""
 			r.OdooDeployment.Status.CurrentInitJob.Namespace = ""
-			r.OdooDeployment.Status.InitModulesInstalled = r.OdooDeployment.Status.CurrentInitJob.Modules
+			r.OdooDeployment.Status.InitModulesInstalled = append(r.OdooDeployment.Status.InitModulesInstalled, r.OdooDeployment.Status.CurrentInitJob.Modules...)
 			r.OdooDeployment.Status.CurrentInitJob.Modules = []string{}
 			utils.UpdateStatus(&r.OdooDeployment.Status.Conditions, "OperatorSucceeded", "InitJobSucceeded", "InitJob succeeded, clearing", metav1.ConditionTrue)
 
@@ -105,11 +106,12 @@ func (r *OdooDatabaseInitJobReconciler) Reconcile(ctx context.Context, req ctrl.
 	// If the list is empty, create a new InitJob to install all modules
 	// If the list is the same, do nothing
 	logger.V(1).Info(fmt.Sprintf("Currently installed modules: %d", len(r.OdooDeployment.Status.InitModulesInstalled)))
-	if len(r.OdooDeployment.Status.InitModulesInstalled) == 0 || len(r.OdooDeployment.Status.InitModulesInstalled) != len(r.OdooDeployment.Spec.Modules) {
+	if len(utils.Difference(r.OdooDeployment.Spec.Modules, r.OdooDeployment.Status.InitModulesInstalled)) > 0 {
 		// Create a new InitJob to install all modules
 		logger.Info("Creating a new InitJob to install modules")
 
 		initJob, modulesToInstall := r.OdooDeployment.GetDbInitJobTemplate()
+		logger.Info("New modules to install: " + fmt.Sprint(modulesToInstall))
 		ctrl.SetControllerReference(r.OdooDeployment, &initJob, r.Scheme)
 
 		err := r.Create(ctx, &initJob)
