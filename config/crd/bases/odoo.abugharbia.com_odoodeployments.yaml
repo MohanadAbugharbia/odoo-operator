@@ -57,6 +57,14 @@ spec:
                     default: false
                     description: Enable debug mode for Odoo
                     type: boolean
+                  extraAddonsPaths:
+                    description: 'Extra addons paths for Odoo. Each entry must be
+                      an absolute path with no commas, spaces, newlines, or # characters.'
+                    items:
+                      pattern: ^/[^,\n\r# ]+$
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: set
                   limitMemoryHard:
                     default: 2684354560
                     description: The maximum memory in bytes that the process can

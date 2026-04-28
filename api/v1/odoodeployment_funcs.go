@@ -3,6 +3,7 @@ package v1
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -295,8 +296,10 @@ func (o *OdooConfig) GetSerializedOdooConfig(
 	dbPassword string,
 	dbMaxConn int32,
 	dbName string,
+	extraAddonsPaths []string,
 ) string {
-	return fmt.Sprintf(
+
+	serializedConfig := fmt.Sprintf(
 		"[options]\nadmin_passwd = %s\ndata_dir=%s\n\ndb_host = %s\ndb_port = %d\ndb_user = %s\ndb_password = %s\ndb_maxconn = %d\ndb_name= %s\n\ndebug_mode = %t\nwithout_demo = %t\nproxy_mode = %t\nworkers = %d\nlimit_memory_soft = %d\nlimit_memory_hard = %d\nlimit_request = %d\nlimit_time_cpu = %d\nlimit_time_real = %d\n",
 		adminPassword,
 		o.DataDir,
@@ -316,6 +319,10 @@ func (o *OdooConfig) GetSerializedOdooConfig(
 		o.LimitTimeCPU,
 		o.LimitTimeReal,
 	)
+	if len(extraAddonsPaths) > 0 {
+		serializedConfig += fmt.Sprintf("addons_path = %s\n", strings.Join(extraAddonsPaths, ","))
+	}
+	return serializedConfig
 }
 
 func (o *OdooDeployment) GetOdooConfigSecretTemplate(serializedOdooConfig string) corev1.Secret {
@@ -370,36 +377,6 @@ func (o *OdooDeployment) CreateOdooAdminPasswordSecretNamespacedName() types.Nam
 		Namespace: o.Namespace,
 	}
 }
-
-// TODO: Fix this function. Implementation suggestion: Pass a reference to the secret to be created
-// func (o *OdooDeployment) CreateOdooConfigSecret(
-// 	client client.Client,
-// 	ctx context.Context,
-// ) (corev1.Secret, error) {
-
-// 	secretNamespacedName := o.CreateOdooConfigSecretNamespacedName()
-// 	dbConnectionDetails, err := o.Spec.Database.GetDbConnectionDetails(client, ctx, o.Namespace)
-// 	if err != nil {
-// 		return corev1.Secret{}, err
-// 	}
-
-// 	serializedOdooConfig := o.Spec.Config.GetSerializedOdooConfig(
-// 		"admin",
-// 		dbConnectionDetails.Host,
-// 		dbConnectionDetails.Port,
-// 		dbConnectionDetails.User,
-// 		dbConnectionDetails.Password,
-// 		dbConnectionDetails.MaxConn,
-// 		dbConnectionDetails.Name,
-// 	)
-
-// 	secret := o.GetOdooConfigSecretTemplate(serializedOdooConfig)
-
-// 	secret.Name = secretNamespacedName.Name
-// 	secret.Namespace = secretNamespacedName.Namespace
-
-// 	return secret, nil
-// }
 
 func (o *OdooConfig) GetOdooAdminPasswordSecretTemplate(
 	defaultSecretName string,
@@ -542,6 +519,7 @@ func (o *OdooDeployment) CreateOdooConfigSecretObj(
 		dbConnectionDetails.Password,
 		dbConnectionDetails.MaxConn,
 		dbConnectionDetails.Name,
+		o.Spec.Config.ExtraAddonsPaths,
 	)
 
 	return o.GetOdooConfigSecretTemplate(serializedOdooConfig), nil

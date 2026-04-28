@@ -83,6 +83,53 @@ func TestGetDbInitJobTemplate_AllInstalled(t *testing.T) {
 	}
 }
 
+func TestGetSerializedOdooConfig_ExtraAddonsPaths(t *testing.T) {
+	baseConfig := &OdooConfig{
+		DataDir:         "/var/lib/odoo",
+		Workers:         2,
+		LimitMemorySoft: 2147483648,
+		LimitMemoryHard: 2684354560,
+	}
+
+	tests := []struct {
+		name             string
+		extraAddonsPaths []string
+		wantContains     string
+		wantAbsent       string
+	}{
+		{
+			name:             "no paths omits addons_path line",
+			extraAddonsPaths: []string{},
+			wantAbsent:       "addons_path",
+		},
+		{
+			name:             "single path produces correct addons_path line",
+			extraAddonsPaths: []string{"/mnt/extra-addons"},
+			wantContains:     "addons_path = /mnt/extra-addons\n",
+		},
+		{
+			name:             "multiple paths are comma-joined with no trailing comma",
+			extraAddonsPaths: []string{"/mnt/addons-a", "/mnt/addons-b"},
+			wantContains:     "addons_path = /mnt/addons-a,/mnt/addons-b\n",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := baseConfig.GetSerializedOdooConfig(
+				"adminpass", "localhost", 5432, "odoo", "dbpass", 20, "odoo",
+				tc.extraAddonsPaths,
+			)
+			if tc.wantContains != "" && !strings.Contains(got, tc.wantContains) {
+				t.Errorf("config missing %q\ngot:\n%s", tc.wantContains, got)
+			}
+			if tc.wantAbsent != "" && strings.Contains(got, tc.wantAbsent) {
+				t.Errorf("config unexpectedly contains %q\ngot:\n%s", tc.wantAbsent, got)
+			}
+		})
+	}
+}
+
 func TestDeduplicateModules(t *testing.T) {
 	tests := []struct {
 		name  string

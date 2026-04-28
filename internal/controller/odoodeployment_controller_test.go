@@ -138,6 +138,56 @@ var _ = Describe("OdooDeployment Controller", func() {
 	})
 })
 
+var _ = Describe("ExtraAddonsPaths CRD validation", func() {
+	makeResource := func(name string, paths []string) *odoov1.OdooDeployment {
+		return &odoov1.OdooDeployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: "default",
+			},
+			Spec: odoov1.OdooDeploymentSpec{
+				Name:  name,
+				Image: "odoo:18",
+				Database: odoov1.OdooDatabaseConfig{
+					Host: "db-host",
+					Port: 5432,
+					User: "odoo",
+					PasswordFromSecret: corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "db-secret"},
+						Key:                  "password",
+					},
+				},
+				Config:  odoov1.OdooConfig{ExtraAddonsPaths: paths},
+				Modules: []string{"base"},
+			},
+		}
+	}
+
+	DescribeTable("admission validation",
+		func(name string, paths []string, expectAccepted bool) {
+			resource := makeResource(name, paths)
+			err := k8sClient.Create(ctx, resource)
+			if expectAccepted {
+				Expect(err).NotTo(HaveOccurred())
+				DeferCleanup(func() {
+					Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+				})
+			} else {
+				Expect(err).To(HaveOccurred())
+				Expect(errors.IsInvalid(err)).To(BeTrue())
+			}
+		},
+		Entry("valid absolute path is accepted", "addons-valid-1", []string{"/mnt/extra-addons"}, true),
+		Entry("multiple valid paths are accepted", "addons-valid-2", []string{"/mnt/addons-a", "/mnt/addons-b"}, true),
+		Entry("relative path is rejected", "addons-invalid-1", []string{"extra-addons"}, false),
+		Entry("path with comma is rejected", "addons-invalid-2", []string{"/mnt/ex,tra"}, false),
+		Entry("path with hash is rejected", "addons-invalid-3", []string{"/mnt/add#ons"}, false),
+		Entry("path with space is rejected", "addons-invalid-4", []string{"/mnt/extra addons"}, false),
+		Entry("path with newline is rejected", "addons-invalid-5", []string{"/mnt/add\nons"}, false),
+		Entry("duplicate paths are rejected", "addons-invalid-6", []string{"/mnt/a", "/mnt/a"}, false),
+	)
+})
+
 var _ = Describe("Filtering OdooDeployments by PVC", func() {
 	odooDeployment := odoov1.OdooDeployment{
 		ObjectMeta: metav1.ObjectMeta{
