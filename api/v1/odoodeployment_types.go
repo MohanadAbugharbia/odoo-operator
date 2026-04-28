@@ -183,6 +183,12 @@ type OdooConfig struct {
 	// The maximum memory in bytes that the process can take
 	// +kubebuilder:default=2684354560
 	LimitMemoryHard int64 `json:"limitMemoryHard,omitempty"`
+
+	// Extra addons paths for Odoo. Each entry must be an absolute path with no commas, spaces, newlines, or # characters.
+	// +kubebuilder:validation:Optional
+	// +listType=set
+	// +kubebuilder:validation:items:Pattern=`^/[^,\n\r# ]+$`
+	ExtraAddonsPaths []string `json:"extraAddonsPaths,omitempty"`
 }
 
 type PersistentVolumeClaimSpec struct {
