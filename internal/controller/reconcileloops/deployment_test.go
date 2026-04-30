@@ -297,7 +297,7 @@ var _ = Describe("Deployment Reconcile Loop", func() {
 	It("should use a custom OdooCommand in the Deployment container", func() {
 		err := k8sClient.Get(ctx, typeNamespacedName, odooDeployment)
 		Expect(err).NotTo(HaveOccurred())
-		odooDeployment.Spec.OdooCommand = "/entrypoint.sh"
+		odooDeployment.Spec.OdooCommand = []string{"/usr/bin/env", "odoo"}
 		err = k8sClient.Update(ctx, odooDeployment)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -314,6 +314,6 @@ var _ = Describe("Deployment Reconcile Loop", func() {
 		}
 		deployment, err := reconciler.Reconcile(ctx, req)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(deployment.Spec.Template.Spec.Containers[0].Command[0]).To(Equal("/entrypoint.sh"))
+		Expect(deployment.Spec.Template.Spec.Containers[0].Command[:2]).To(Equal([]string{"/usr/bin/env", "odoo"}))
 	})
 })

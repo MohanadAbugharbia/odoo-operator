@@ -151,11 +151,7 @@ func (o *OdooDeployment) GetPodSpec() corev1.PodSpec {
 				Image:           o.Spec.Image,
 				ImagePullPolicy: o.Spec.ImagePullPolicy,
 
-				Command: []string{
-					o.Spec.OdooCommand,
-					"-c",
-					"/opt/odoo/odoo.conf",
-				},
+				Command: append(o.Spec.OdooCommand, "-c", "/opt/odoo/odoo.conf"),
 				Ports: []corev1.ContainerPort{
 					{
 						Name:          "http",
@@ -260,15 +256,7 @@ func (o *OdooDeployment) GetDbInitJobTemplate() (batchv1.Job, []string) {
 	stringFormattedInitModules = stringFormattedInitModules[:len(stringFormattedInitModules)-1]
 
 	spec := o.GetPodSpec()
-	spec.Containers[0].Command = []string{
-		o.Spec.OdooCommand,
-		"-c",
-		"/opt/odoo/odoo.conf",
-		"--stop-after-init",
-		"--no-http",
-		"--init",
-		stringFormattedInitModules,
-	}
+	spec.Containers[0].Command = append(o.Spec.OdooCommand, "-c", "/opt/odoo/odoo.conf", "--stop-after-init", "--no-http", "--init", stringFormattedInitModules)
 	spec.Containers[0].Ports = []corev1.ContainerPort{}
 	spec.RestartPolicy = corev1.RestartPolicyNever
 
