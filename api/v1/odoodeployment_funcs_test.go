@@ -9,6 +9,8 @@ import (
 
 // minimalOdooDeployment returns an OdooDeployment with just enough fields
 // set to call GetDbInitJobTemplate without panicking.
+// OdooCommand is set to "odoo" to match the kubebuilder API-server default;
+// unit tests construct structs directly so the default is not applied automatically.
 func minimalOdooDeployment(specModules, installedModules []string) *OdooDeployment {
 	return &OdooDeployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -16,7 +18,8 @@ func minimalOdooDeployment(specModules, installedModules []string) *OdooDeployme
 			Namespace: "default",
 		},
 		Spec: OdooDeploymentSpec{
-			Image: "odoo:18",
+			Image:       "odoo:18",
+			OdooCommand: "odoo",
 			Config: OdooConfig{
 				DataDir: "/var/lib/odoo",
 			},
@@ -169,6 +172,88 @@ func TestDeduplicateModules(t *testing.T) {
 				if o.Spec.Modules[i] != tc.want[i] {
 					t.Errorf("Modules[%d] = %q, want %q", i, o.Spec.Modules[i], tc.want[i])
 				}
+			}
+		})
+	}
+}
+
+func TestGetPodSpec_OdooCommand(t *testing.T) {
+	tests := []struct {
+		name        string
+		odooCommand string
+		wantCmd     string
+	}{
+		{
+			name:        "default command",
+			odooCommand: "odoo",
+			wantCmd:     "odoo",
+		},
+		{
+			name:        "custom entrypoint script",
+			odooCommand: "/entrypoint.sh",
+			wantCmd:     "/entrypoint.sh",
+		},
+		{
+			name:        "alternate binary",
+			odooCommand: "odoo.bin",
+			wantCmd:     "odoo.bin",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			o := minimalOdooDeployment([]string{"base"}, []string{})
+			o.Spec.OdooCommand = tc.odooCommand
+
+			podSpec := o.GetPodSpec()
+
+			cmd := podSpec.Containers[0].Command
+			if len(cmd) == 0 {
+				t.Fatal("Command is empty")
+			}
+			if cmd[0] != tc.wantCmd {
+				t.Errorf("GetPodSpec Command[0] = %q, want %q", cmd[0], tc.wantCmd)
+			}
+		})
+	}
+}
+
+func TestGetDbInitJobTemplate_OdooCommand(t *testing.T) {
+	tests := []struct {
+		name        string
+		odooCommand string
+		wantCmd     string
+	}{
+		{
+			name:        "default command",
+			odooCommand: "odoo",
+			wantCmd:     "odoo",
+		},
+		{
+			name:        "custom entrypoint script",
+			odooCommand: "/entrypoint.sh",
+			wantCmd:     "/entrypoint.sh",
+		},
+		{
+			name:        "alternate binary",
+			odooCommand: "odoo.bin",
+			wantCmd:     "odoo.bin",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			o := minimalOdooDeployment([]string{"base"}, []string{})
+			o.Spec.OdooCommand = tc.odooCommand
+
+			job, _ := o.GetDbInitJobTemplate()
+
+			cmd := job.Spec.Template.Spec.Containers[0].Command
+			if len(cmd) == 0 {
+				t.Fatal("Command is empty")
+			}
+			if cmd[0] != tc.wantCmd {
+				t.Errorf("GetDbInitJobTemplate Command[0] = %q, want %q", cmd[0], tc.wantCmd)
 			}
 		})
 	}

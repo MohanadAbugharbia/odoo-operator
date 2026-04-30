@@ -214,6 +214,12 @@ type OdooDeploymentSpec struct {
 
 	// The name of the OdooDployment
 	Name string `json:"name"`
+
+	// The command that runs odoo inside the container, if not specified it will default to "odoo"
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default="odoo"
+	OdooCommand string `json:"odooCommand,omitempty"`
+
 	// The number of replicas to run for the OdooDployment
 	// +kubebuilder:default=1
 	// +kubebuilder:validation:Minimum=1

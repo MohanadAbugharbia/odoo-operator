@@ -355,6 +355,11 @@ spec:
               name:
                 description: The name of the OdooDployment
                 type: string
+              odooCommand:
+                default: odoo
+                description: The command that runs odoo inside the container, if not
+                  specified it will default to "odoo"
+                type: string
               odooFilestore:
                 description: PersistentVolumeClaim defines the replicated volume specs
                 properties:

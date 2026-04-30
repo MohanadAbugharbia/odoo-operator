@@ -152,7 +152,7 @@ func (o *OdooDeployment) GetPodSpec() corev1.PodSpec {
 				ImagePullPolicy: o.Spec.ImagePullPolicy,
 
 				Command: []string{
-					"/entrypoint.sh",
+					o.Spec.OdooCommand,
 					"-c",
 					"/opt/odoo/odoo.conf",
 				},
@@ -261,7 +261,7 @@ func (o *OdooDeployment) GetDbInitJobTemplate() (batchv1.Job, []string) {
 
 	spec := o.GetPodSpec()
 	spec.Containers[0].Command = []string{
-		"/entrypoint.sh",
+		o.Spec.OdooCommand,
 		"-c",
 		"/opt/odoo/odoo.conf",
 		"--stop-after-init",
