@@ -19,7 +19,7 @@ func minimalOdooDeployment(specModules, installedModules []string) *OdooDeployme
 		},
 		Spec: OdooDeploymentSpec{
 			Image:       "odoo:18",
-			OdooCommand: "odoo",
+			OdooCommand: []string{"odoo"},
 			Config: OdooConfig{
 				DataDir: "/var/lib/odoo",
 			},
@@ -180,23 +180,23 @@ func TestDeduplicateModules(t *testing.T) {
 func TestGetPodSpec_OdooCommand(t *testing.T) {
 	tests := []struct {
 		name        string
-		odooCommand string
-		wantCmd     string
+		odooCommand []string
+		wantPrefix  []string
 	}{
 		{
-			name:        "default command",
-			odooCommand: "odoo",
-			wantCmd:     "odoo",
+			name:        "default single binary",
+			odooCommand: []string{"odoo"},
+			wantPrefix:  []string{"odoo", "-c", "/opt/odoo/odoo.conf"},
 		},
 		{
-			name:        "custom entrypoint script",
-			odooCommand: "/entrypoint.sh",
-			wantCmd:     "/entrypoint.sh",
+			name:        "entrypoint script",
+			odooCommand: []string{"/entrypoint.sh"},
+			wantPrefix:  []string{"/entrypoint.sh", "-c", "/opt/odoo/odoo.conf"},
 		},
 		{
-			name:        "alternate binary",
-			odooCommand: "odoo.bin",
-			wantCmd:     "odoo.bin",
+			name:        "command with pre-arguments",
+			odooCommand: []string{"/usr/bin/env", "odoo"},
+			wantPrefix:  []string{"/usr/bin/env", "odoo", "-c", "/opt/odoo/odoo.conf"},
 		},
 	}
 
@@ -205,14 +205,15 @@ func TestGetPodSpec_OdooCommand(t *testing.T) {
 			o := minimalOdooDeployment([]string{"base"}, []string{})
 			o.Spec.OdooCommand = tc.odooCommand
 
-			podSpec := o.GetPodSpec()
+			cmd := o.GetPodSpec().Containers[0].Command
 
-			cmd := podSpec.Containers[0].Command
-			if len(cmd) == 0 {
-				t.Fatal("Command is empty")
+			if len(cmd) < len(tc.wantPrefix) {
+				t.Fatalf("Command too short: %v", cmd)
 			}
-			if cmd[0] != tc.wantCmd {
-				t.Errorf("GetPodSpec Command[0] = %q, want %q", cmd[0], tc.wantCmd)
+			for i, want := range tc.wantPrefix {
+				if cmd[i] != want {
+					t.Errorf("Command[%d] = %q, want %q (full: %v)", i, cmd[i], want, cmd)
+				}
 			}
 		})
 	}
@@ -221,23 +222,23 @@ func TestGetPodSpec_OdooCommand(t *testing.T) {
 func TestGetDbInitJobTemplate_OdooCommand(t *testing.T) {
 	tests := []struct {
 		name        string
-		odooCommand string
-		wantCmd     string
+		odooCommand []string
+		wantPrefix  []string
 	}{
 		{
-			name:        "default command",
-			odooCommand: "odoo",
-			wantCmd:     "odoo",
+			name:        "default single binary",
+			odooCommand: []string{"odoo"},
+			wantPrefix:  []string{"odoo", "-c", "/opt/odoo/odoo.conf"},
 		},
 		{
-			name:        "custom entrypoint script",
-			odooCommand: "/entrypoint.sh",
-			wantCmd:     "/entrypoint.sh",
+			name:        "entrypoint script",
+			odooCommand: []string{"/entrypoint.sh"},
+			wantPrefix:  []string{"/entrypoint.sh", "-c", "/opt/odoo/odoo.conf"},
 		},
 		{
-			name:        "alternate binary",
-			odooCommand: "odoo.bin",
-			wantCmd:     "odoo.bin",
+			name:        "command with pre-arguments",
+			odooCommand: []string{"/usr/bin/env", "odoo"},
+			wantPrefix:  []string{"/usr/bin/env", "odoo", "-c", "/opt/odoo/odoo.conf"},
 		},
 	}
 
@@ -247,13 +248,15 @@ func TestGetDbInitJobTemplate_OdooCommand(t *testing.T) {
 			o.Spec.OdooCommand = tc.odooCommand
 
 			job, _ := o.GetDbInitJobTemplate()
-
 			cmd := job.Spec.Template.Spec.Containers[0].Command
-			if len(cmd) == 0 {
-				t.Fatal("Command is empty")
+
+			if len(cmd) < len(tc.wantPrefix) {
+				t.Fatalf("Command too short: %v", cmd)
 			}
-			if cmd[0] != tc.wantCmd {
-				t.Errorf("GetDbInitJobTemplate Command[0] = %q, want %q", cmd[0], tc.wantCmd)
+			for i, want := range tc.wantPrefix {
+				if cmd[i] != want {
+					t.Errorf("Command[%d] = %q, want %q (full: %v)", i, cmd[i], want, cmd)
+				}
 			}
 		})
 	}
