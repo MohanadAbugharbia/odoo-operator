@@ -294,4 +294,26 @@ var _ = Describe("Deployment Reconcile Loop", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(*deployment.Spec.Replicas).To(Equal(newReplicas))
 	})
+	It("should use a custom OdooCommand in the Deployment container", func() {
+		err := k8sClient.Get(ctx, typeNamespacedName, odooDeployment)
+		Expect(err).NotTo(HaveOccurred())
+		odooDeployment.Spec.OdooCommand = "/entrypoint.sh"
+		err = k8sClient.Update(ctx, odooDeployment)
+		Expect(err).NotTo(HaveOccurred())
+
+		reconciler = &DeploymentReconciler{
+			Client:         k8sClient,
+			Scheme:         k8sClient.Scheme(),
+			OdooDeployment: odooDeployment,
+		}
+		req = ctrl.Request{
+			NamespacedName: client.ObjectKey{
+				Name:      "test-odoo-deployment",
+				Namespace: "default",
+			},
+		}
+		deployment, err := reconciler.Reconcile(ctx, req)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(deployment.Spec.Template.Spec.Containers[0].Command[0]).To(Equal("/entrypoint.sh"))
+	})
 })
