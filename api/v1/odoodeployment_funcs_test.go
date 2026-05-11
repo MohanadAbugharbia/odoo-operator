@@ -21,7 +21,8 @@ func minimalOdooDeployment(specModules, installedModules []string) *OdooDeployme
 			Image:       "odoo:18",
 			OdooCommand: []string{"odoo"},
 			Config: OdooConfig{
-				DataDir: "/var/lib/odoo",
+				DataDir:        "/var/lib/odoo",
+				MaxCronThreads: 1,
 			},
 			Modules: specModules,
 		},
@@ -128,6 +129,41 @@ func TestGetSerializedOdooConfig_ExtraAddonsPaths(t *testing.T) {
 			}
 			if tc.wantAbsent != "" && strings.Contains(got, tc.wantAbsent) {
 				t.Errorf("config unexpectedly contains %q\ngot:\n%s", tc.wantAbsent, got)
+			}
+		})
+	}
+}
+
+func TestGetSerializedOdooConfig_MaxCronThreads(t *testing.T) {
+	tests := []struct {
+		name           string
+		maxCronThreads int32
+		wantContains   string
+	}{
+		{
+			name:           "default 1 thread",
+			maxCronThreads: 1,
+			wantContains:   "max_cron_threads = 1\n",
+		},
+		{
+			name:           "custom 4 threads",
+			maxCronThreads: 4,
+			wantContains:   "max_cron_threads = 4\n",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &OdooConfig{
+				DataDir:        "/var/lib/odoo",
+				MaxCronThreads: tc.maxCronThreads,
+			}
+			got := cfg.GetSerializedOdooConfig(
+				"adminpass", "localhost", 5432, "odoo", "dbpass", 20, "odoo",
+				[]string{},
+			)
+			if !strings.Contains(got, tc.wantContains) {
+				t.Errorf("config missing %q\ngot:\n%s", tc.wantContains, got)
 			}
 		})
 	}

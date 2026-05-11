@@ -39,6 +39,7 @@ spec:
     limitTimeReal: 120
     limitMemorySoft: 2147483648
     limitMemoryHard: 2684354560
+    maxCronThreads: 1
   odooFilestore:
     storageClassName: standard
     accessModes:
