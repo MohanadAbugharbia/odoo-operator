@@ -184,6 +184,10 @@ type OdooConfig struct {
 	// +kubebuilder:default=2684354560
 	LimitMemoryHard int64 `json:"limitMemoryHard,omitempty"`
 
+	// The maximum number of cron threads to use for Odoo
+	// +kubebuilder:default=1
+	MaxCronThreads int32 `json:"maxCronThreads,omitempty"`
+
 	// Extra addons paths for Odoo. Each entry must be an absolute path with no commas, spaces, newlines, or # characters.
 	// +kubebuilder:validation:Optional
 	// +listType=set

@@ -288,7 +288,7 @@ func (o *OdooConfig) GetSerializedOdooConfig(
 ) string {
 
 	serializedConfig := fmt.Sprintf(
-		"[options]\nadmin_passwd = %s\ndata_dir=%s\n\ndb_host = %s\ndb_port = %d\ndb_user = %s\ndb_password = %s\ndb_maxconn = %d\ndb_name= %s\n\ndebug_mode = %t\nwithout_demo = %t\nproxy_mode = %t\nworkers = %d\nlimit_memory_soft = %d\nlimit_memory_hard = %d\nlimit_request = %d\nlimit_time_cpu = %d\nlimit_time_real = %d\n",
+		"[options]\nadmin_passwd = %s\ndata_dir=%s\n\ndb_host = %s\ndb_port = %d\ndb_user = %s\ndb_password = %s\ndb_maxconn = %d\ndb_name= %s\n\ndebug_mode = %t\nwithout_demo = %t\nproxy_mode = %t\nworkers = %d\nlimit_memory_soft = %d\nlimit_memory_hard = %d\nlimit_request = %d\nlimit_time_cpu = %d\nlimit_time_real = %d\nmax_cron_threads = %d\n",
 		adminPassword,
 		o.DataDir,
 		dbHost,
@@ -306,6 +306,7 @@ func (o *OdooConfig) GetSerializedOdooConfig(
 		o.LimitRequest,
 		o.LimitTimeCPU,
 		o.LimitTimeReal,
+		o.MaxCronThreads,
 	)
 	if len(extraAddonsPaths) > 0 {
 		serializedConfig += fmt.Sprintf("addons_path = %s\n", strings.Join(extraAddonsPaths, ","))

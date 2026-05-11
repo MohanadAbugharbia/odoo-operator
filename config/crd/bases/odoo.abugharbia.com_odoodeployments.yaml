@@ -95,6 +95,11 @@ spec:
                       can take
                     format: int32
                     type: integer
+                  maxCronThreads:
+                    default: 1
+                    description: The maximum number of cron threads to use for Odoo
+                    format: int32
+                    type: integer
                   proxyMode:
                     default: true
                     description: |-
