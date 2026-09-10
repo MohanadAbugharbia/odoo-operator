@@ -1,18 +1,25 @@
 package utils
 
 import (
-	"time"
-
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func UpdateStatus(conditions *[]metav1.Condition, statusType string, statusReason string, statusMessage string, condition metav1.ConditionStatus) {
+// SetCondition upserts a condition. LastTransitionTime only moves when the
+// status changes (meta.SetStatusCondition semantics).
+func SetCondition(
+	conditions *[]metav1.Condition,
+	conditionType string,
+	status metav1.ConditionStatus,
+	reason string,
+	message string,
+	observedGeneration int64,
+) {
 	meta.SetStatusCondition(conditions, metav1.Condition{
-		Type:               statusType,
-		Status:             condition,
-		Reason:             statusReason,
-		LastTransitionTime: metav1.NewTime(time.Now()),
-		Message:            statusMessage,
+		Type:               conditionType,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: observedGeneration,
 	})
 }

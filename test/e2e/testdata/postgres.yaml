@@ -1,0 +1,57 @@
+# A throw-away PostgreSQL for the kind e2e suite. Not for production.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: e2e-postgres
+  namespace: odoo-e2e
+type: Opaque
+stringData:
+  host: e2e-postgres.odoo-e2e.svc.cluster.local
+  port: "5432"
+  username: odoo
+  password: odoopassword
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: e2e-postgres
+  namespace: odoo-e2e
+spec:
+  selector:
+    app: e2e-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: e2e-postgres
+  namespace: odoo-e2e
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: e2e-postgres
+  template:
+    metadata:
+      labels:
+        app: e2e-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16
+          env:
+            - name: POSTGRES_USER
+              value: odoo
+            - name: POSTGRES_PASSWORD
+              value: odoopassword
+            - name: POSTGRES_DB
+              value: postgres
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "odoo", "-d", "postgres"]
+            periodSeconds: 5

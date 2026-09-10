@@ -5,56 +5,69 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
-
 	"k8s.io/apimachinery/pkg/api/errors"
-
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	utilerrors "k8s.io/apimachinery/pkg/util/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
-	"github.com/MohanadAbugharbia/odoo-operator/pkg/utils"
 )
 
-type OdooFilestoreReconciler struct {
-	client.Client
-	Scheme         *runtime.Scheme
-	OdooDeployment *odoov1.OdooDeployment
-}
-
-func (r *OdooFilestoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (corev1.PersistentVolumeClaim, error) {
+// EnsureFilestorePVC creates the filestore PVC when it is missing. The PVC
+// spec is immutable so it is never updated; only the owner reference follows
+// spec.odooFilestore.deletionPolicy (Delete → owned and garbage collected,
+// Retain → left behind).
+func EnsureFilestorePVC(
+	ctx context.Context,
+	c client.Client,
+	scheme *runtime.Scheme,
+	od *odoov1.OdooDeployment,
+) (*corev1.PersistentVolumeClaim, error) {
 	logger := log.FromContext(ctx)
+	wantOwned := od.Spec.OdooFilestore.DeletionPolicyValue() == odoov1.DeletionPolicyDelete
 
-	// Check if the PVC already exists, if not create a new one
-	pvc := corev1.PersistentVolumeClaim{}
-	createPvc := false
-	err := r.Get(ctx, req.NamespacedName, &pvc)
-	if err != nil && errors.IsNotFound(err) {
-		// Create a new PVC for the OdooDeployment if it does not exist
-		createPvc = true
-	} else if err != nil {
-		logger.Error(err, fmt.Sprintf("error creating %s pvc.", req.Name))
-		utils.UpdateStatus(&r.OdooDeployment.Status.Conditions, "OperatorDegraded", odoov1.ReasonPvcNotAvailable, fmt.Sprintf("error creating %s pvc: %v", req.Name, err), metav1.ConditionFalse)
-		return pvc, utilerrors.NewAggregate([]error{err, r.Status().Update(ctx, r.OdooDeployment)})
-	}
-
-	// Update the status of the OdooDeployment
-
-	pvc = r.OdooDeployment.GetPvcTemplate()
-	ctrl.SetControllerReference(r.OdooDeployment, &pvc, r.Scheme)
-
-	// Here we do not try to update the PVC, because the spec field is immutable
-	if createPvc {
-		logger.Info(fmt.Sprintf("Creating a new PVC for %s", req.Name))
-		err = r.Create(ctx, &pvc)
+	pvc := &corev1.PersistentVolumeClaim{}
+	err := c.Get(ctx, client.ObjectKey{Name: od.Name, Namespace: od.Namespace}, pvc)
+	if errors.IsNotFound(err) {
+		tmpl := od.GetPvcTemplate()
+		if wantOwned {
+			if err := controllerutil.SetControllerReference(od, &tmpl, scheme); err != nil {
+				return nil, err
+			}
+		}
+		logger.Info("Creating filestore PVC", "pvc", tmpl.Name, "owned", wantOwned)
+		if err := c.Create(ctx, &tmpl); err != nil {
+			return nil, fmt.Errorf("create pvc %s: %w", tmpl.Name, err)
+		}
+		return &tmpl, nil
 	}
 	if err != nil {
-		logger.Error(err, fmt.Sprintf("error creating or updating %s pvc.", pvc.Name))
-		utils.UpdateStatus(&r.OdooDeployment.Status.Conditions, "OperatorDegraded", odoov1.ReasonPvcCreationFailed, fmt.Sprintf("error creating or updating %s pvc: %v", req.Name, err), metav1.ConditionFalse)
-		return pvc, utilerrors.NewAggregate([]error{err, r.Status().Update(ctx, r.OdooDeployment)})
+		return nil, fmt.Errorf("get pvc %s: %w", od.Name, err)
+	}
+
+	controller := metav1.GetControllerOf(pvc)
+	ownedByUs := controller != nil && controller.UID == od.UID
+	switch {
+	case wantOwned && !ownedByUs:
+		patch := client.MergeFrom(pvc.DeepCopy())
+		if err := controllerutil.SetControllerReference(od, pvc, scheme); err != nil {
+			return nil, fmt.Errorf("own pvc %s: %w", pvc.Name, err)
+		}
+		logger.Info("Adding owner reference to filestore PVC (deletionPolicy Delete)", "pvc", pvc.Name)
+		if err := c.Patch(ctx, pvc, patch); err != nil {
+			return nil, fmt.Errorf("patch pvc %s: %w", pvc.Name, err)
+		}
+	case !wantOwned && ownedByUs:
+		patch := client.MergeFrom(pvc.DeepCopy())
+		if err := controllerutil.RemoveControllerReference(od, pvc, scheme); err != nil {
+			return nil, fmt.Errorf("disown pvc %s: %w", pvc.Name, err)
+		}
+		logger.Info("Removing owner reference from filestore PVC (deletionPolicy Retain)", "pvc", pvc.Name)
+		if err := c.Patch(ctx, pvc, patch); err != nil {
+			return nil, fmt.Errorf("patch pvc %s: %w", pvc.Name, err)
+		}
 	}
 	return pvc, nil
 }

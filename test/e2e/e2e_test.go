@@ -119,4 +119,6 @@ var _ = Describe("controller", Ordered, func() {
 
 		})
 	})
+
+	databaseLifecycleContext()
 })

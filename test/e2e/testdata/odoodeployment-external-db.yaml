@@ -1,0 +1,25 @@
+# Negative scenario: the database "keepme" pre-exists; even with
+# deletionPolicy Delete the operator must adopt it as external and never drop it.
+apiVersion: odoo.abugharbia.com/v1
+kind: OdooDeployment
+metadata:
+  name: e2e-external-db
+  namespace: odoo-e2e
+spec:
+  name: e2e-external-db
+  image: odoo:18
+  odooCommand: ["odoo"]
+  database:
+    hostFromSecret: { name: e2e-postgres, key: host }
+    portFromSecret: { name: e2e-postgres, key: port }
+    userFromSecret: { name: e2e-postgres, key: username }
+    passwordFromSecret: { name: e2e-postgres, key: password }
+    name: keepme
+    createPolicy: IfNotExists
+    deletionPolicy: Delete
+  modules: [base]
+  config:
+    workers: 0
+  odooFilestore:
+    size: 1Gi
+    storageClassName: standard

@@ -26,6 +26,51 @@ import (
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 const (
+	// DatabaseFinalizer is set on OdooDeployments whose database the operator
+	// created and is expected to drop (spec.database.deletionPolicy: Delete).
+	DatabaseFinalizer = "odoo.abugharbia.com/database"
+
+	// LabelOdooDeployment marks every pod (Deployment and Job) that belongs to an OdooDeployment.
+	LabelOdooDeployment = "odoo.abugharbia.com/odoodeployment"
+	// LabelJobKind marks maintenance Job pods with "init" or "upgrade".
+	LabelJobKind = "odoo.abugharbia.com/job-kind"
+	// AnnotationConfigHash carries the sha256 of the rendered odoo.conf on the
+	// Deployment pod template so that config changes roll the pods.
+	AnnotationConfigHash = "odoo.abugharbia.com/config-hash"
+
+	JobKindInit    = "init"
+	JobKindUpgrade = "upgrade"
+)
+
+// Condition types.
+const (
+	ConditionReady         = "Ready"
+	ConditionDatabaseReady = "DatabaseReady"
+	ConditionInitialized   = "Initialized"
+	// ConditionDegraded is True only when something is wrong.
+	ConditionDegraded = "Degraded"
+)
+
+// Phases.
+const (
+	PhasePending      = "Pending"
+	PhaseInitializing = "Initializing"
+	PhaseUpgrading    = "Upgrading"
+	PhaseRunning      = "Running"
+	PhaseFailed       = "Failed"
+)
+
+// Database provenance and states.
+const (
+	DatabaseProvisionedByOperator = "operator"
+	DatabaseProvisionedByExternal = "external"
+
+	DatabaseStateProvisioning = "Provisioning"
+	DatabaseStateReady        = "Ready"
+)
+
+// Condition reasons.
+const (
 	ReasonDbConnectionDetailsFailed = "DbConnectionDetailsFailed"
 
 	ReasonOdooConfigSecretNotAvailable      = "OdooConfigSecretNotAvailable"
@@ -51,6 +96,40 @@ const (
 	ReasonFailedGetPollService    = "FailedGetPollService"
 	ReasonFailedCreatePollService = "FailedCreatePollService"
 	ReasonFailedUpdatePollService = "FailedUpdatePollService"
+
+	ReasonDatabaseConnectionFailed = "DatabaseConnectionFailed"
+	ReasonDatabaseCreated          = "DatabaseCreated"
+	ReasonDatabaseAdopted          = "DatabaseAdopted"
+	ReasonDatabaseMissing          = "DatabaseMissing"
+	ReasonDatabaseProvisioning     = "DatabaseProvisioning"
+	ReasonDatabaseCreateFailed     = "DatabaseCreateFailed"
+	ReasonDatabaseDropFailed       = "DatabaseDropFailed"
+	ReasonDatabaseDropped          = "DatabaseDropped"
+	ReasonDatabaseDropRefused      = "DatabaseDropRefused"
+	ReasonDatabaseNotDropped       = "DatabaseNotDropped"
+	ReasonDatabaseNameChanged      = "DatabaseNameChanged"
+	ReasonDatabaseReady            = "DatabaseReady"
+
+	ReasonInitJobCreated        = "InitJobCreated"
+	ReasonInitJobRunning        = "InitJobRunning"
+	ReasonInitJobSucceeded      = "InitJobSucceeded"
+	ReasonInitJobFailed         = "InitJobFailed"
+	ReasonUpgradeJobCreated     = "UpgradeJobCreated"
+	ReasonUpgradeJobRunning     = "UpgradeJobRunning"
+	ReasonUpgradeJobSucceeded   = "UpgradeJobSucceeded"
+	ReasonUpgradeJobFailed      = "UpgradeJobFailed"
+	ReasonJobCreationFailed     = "JobCreationFailed"
+	ReasonWaitingForPodsToStop  = "WaitingForPodsToStop"
+	ReasonQuotaExceeded         = "QuotaExceeded"
+	ReasonScaledToZero          = "ScaledToZero"
+	ReasonDeploymentAvailable   = "DeploymentAvailable"
+	ReasonDeploymentProgressing = "DeploymentProgressing"
+	ReasonDeploymentFailed      = "DeploymentFailed"
+	ReasonNotInitialized        = "NotInitialized"
+	ReasonReconcileSucceeded    = "ReconcileSucceeded"
+	ReasonReconcileFailed       = "ReconcileFailed"
+	ReasonInvalidSpec           = "InvalidSpec"
+	ReasonDeleting              = "Deleting"
 )
 
 type DatabaseConnectionDetails struct {
@@ -63,37 +142,28 @@ type DatabaseConnectionDetails struct {
 	MaxConn  int32
 }
 
-// type S3Config struct {
-// 	// The S3 endpoint to use for backups
-// 	Endpoint string `json:"endpoint,omitempty"`
-// 	// The S3 bucket to use for backups
-// 	Bucket string `json:"bucket"`
-// 	// Prefix to use for backups
-// 	Prefix string `json:"prefix,omitempty"`
-// 	// The S3 region to use for backups
-// 	Region string `json:"region"`
-// 	// The S3 access key to use for backups
-// 	AccessKeyFromSecret corev1.SecretKeySelector `json:"accessKeyFromSecret"`
-// 	// The S3 secret key to use for backups
-// 	SecretKeyFromSecret corev1.SecretKeySelector `json:"secretKeyFromSecret"`
-// }
+// DatabaseCreatePolicy tells the operator what to do when the database named in
+// spec.database does not exist.
+// +kubebuilder:validation:Enum=IfNotExists;Never
+type DatabaseCreatePolicy string
 
-// type OdooBackupConfig struct {
-// 	// Whether or not to enable backups
-// 	// +kubebuilder:default=false
-// 	Enabled bool `json:"enabled"`
-// 	// The number of daily backups to keep at all times
-// 	// +kubebuilder:default=7
-// 	KeepDailyBackups int32 `json:"keepDailyBackups,omitempty"`
-// 	// The number of weekly backups to keep at all times
-// 	// +kubebuilder:default=4
-// 	KeepWeeklyBackups int32 `json:"keepWeeklyBackups,omitempty"`
-// 	// The number of monthly backups to keep at all times
-// 	// +kubebuilder:default=12
-// 	KeepMonthlyBackups int32 `json:"keepMonthlyBackups,omitempty"`
-// 	// The S3 configuration for the OdooDployment
-// 	S3 S3Config `json:"s3,omitempty"`
-// }
+const (
+	// DatabaseCreatePolicyIfNotExists creates the database when it is missing and
+	// adopts it as an external database when it already exists.
+	DatabaseCreatePolicyIfNotExists DatabaseCreatePolicy = "IfNotExists"
+	// DatabaseCreatePolicyNever never creates a database; a missing database is reported as Degraded.
+	DatabaseCreatePolicyNever DatabaseCreatePolicy = "Never"
+)
+
+// DeletionPolicy tells the operator what to do with an owned resource when the
+// OdooDeployment is deleted.
+// +kubebuilder:validation:Enum=Retain;Delete
+type DeletionPolicy string
+
+const (
+	DeletionPolicyRetain DeletionPolicy = "Retain"
+	DeletionPolicyDelete DeletionPolicy = "Delete"
+)
 
 // OdooDatabaseConfig defines the database connection configuration for Odoo
 type OdooDatabaseConfig struct {
@@ -118,13 +188,20 @@ type OdooDatabaseConfig struct {
 	// The database password to use for Odoo
 	PasswordFromSecret corev1.SecretKeySelector `json:"passwordFromSecret"`
 
-	// The database name to use for Odoo
+	// The database name to use for Odoo. Immutable: the operator only ever
+	// drops the database it recorded in status.database, so renaming would
+	// silently orphan it.
 	// +kubebuilder:default="odoo"
+	// +kubebuilder:validation:Pattern=`^[A-Za-z_][A-Za-z0-9_-]*$`
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec.database.name is immutable"
 	Name string `json:"name,omitempty"`
-	// The database name to use for Odoo from a secret
+	// The database name to use for Odoo from a secret. Immutable for the same reason as name.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec.database.nameFromSecret is immutable"
 	NameFromSecret corev1.SecretKeySelector `json:"nameFromSecret,omitempty"`
 
-	// Whether or not to enable SSL for the database connection
+	// Whether or not to enable SSL for the database connection.
+	// Rendered as db_sslmode = require (true) or disable (false).
 	// +kubebuilder:default=false
 	SSL bool `json:"ssl,omitempty"`
 	// Whether or not to enable SSL for the database connection from a secret
@@ -135,6 +212,23 @@ type OdooDatabaseConfig struct {
 	MaxConn int32 `json:"maxConn,omitempty"`
 	// The database max connections to use for Odoo from a secret
 	MaxConnFromSecret corev1.SecretKeySelector `json:"maxConnFromSecret,omitempty"`
+
+	// CreatePolicy controls whether the operator creates the database when it
+	// does not exist. A database that already exists is adopted as "external"
+	// and is never dropped by the operator.
+	// +kubebuilder:default=IfNotExists
+	CreatePolicy DatabaseCreatePolicy `json:"createPolicy,omitempty"`
+
+	// DeletionPolicy controls whether a database the operator created is
+	// dropped when the OdooDeployment is deleted. Databases the operator did
+	// not create (status.database.provisionedBy: external) are always retained.
+	// +kubebuilder:default=Retain
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
+
+	// MaintenanceDatabase is the database the operator connects to in order to
+	// create or drop the Odoo database.
+	// +kubebuilder:default="postgres"
+	MaintenanceDatabase string `json:"maintenanceDatabase,omitempty"`
 }
 
 type OdooConfig struct {
@@ -153,16 +247,17 @@ type OdooConfig struct {
 
 	// Install modules without demo data
 	// +kubebuilder:default=true
-	WithoutDemo bool `json:"withoutDemo,omitempty"`
+	WithoutDemo *bool `json:"withoutDemo,omitempty"`
 
 	// Proxy Mode for Odoo
 	// This instructs Odoo to use the X-Forwarded-For header for the remote IP address
 	// +kubebuilder:default=true
-	ProxyMode bool `json:"proxyMode,omitempty"`
+	ProxyMode *bool `json:"proxyMode,omitempty"`
 
-	// Numer of process workers to use for Odoo
+	// Numer of process workers to use for Odoo. 0 runs the threaded server.
 	// +kubebuilder:default=2
-	Workers int32 `json:"workers,omitempty"`
+	// +kubebuilder:validation:Minimum=0
+	Workers *int32 `json:"workers,omitempty"`
 
 	// The maximum number of requests that the process can take
 	// +kubebuilder:default=8192
@@ -186,14 +281,49 @@ type OdooConfig struct {
 
 	// The maximum number of cron threads to use for Odoo
 	// +kubebuilder:default=1
-	MaxCronThreads int32 `json:"maxCronThreads,omitempty"`
+	// +kubebuilder:validation:Minimum=0
+	MaxCronThreads *int32 `json:"maxCronThreads,omitempty"`
 
 	// Extra addons paths for Odoo. Each entry must be an absolute path with no commas, spaces, newlines, or # characters.
 	// +kubebuilder:validation:Optional
 	// +listType=set
 	// +kubebuilder:validation:items:Pattern=`^/[^,\n\r# ]+$`
 	ExtraAddonsPaths []string `json:"extraAddonsPaths,omitempty"`
+
+	// ListDb controls the database manager. When false (the default) the
+	// rendered odoo.conf carries list_db = False and dbfilter = ^<db_name>$ so
+	// the instance can only ever see its own database.
+	// +kubebuilder:default=false
+	ListDb *bool `json:"listDb,omitempty"`
+
+	// DbFilter is written verbatim as dbfilter and replaces the derived
+	// ^<db_name>$ filter. Single line.
+	// +kubebuilder:validation:Pattern=`^[^\n\r]*$`
+	DbFilter string `json:"dbFilter,omitempty"`
+
+	// ServerWideModules is rendered as server_wide_modules (Odoo's default is base,web).
+	// +listType=atomic
+	// +kubebuilder:validation:items:Pattern=`^[A-Za-z0-9_]+$`
+	ServerWideModules []string `json:"serverWideModules,omitempty"`
+
+	// LoadLanguages is passed as --load-language to maintenance Jobs that
+	// install modules (-i), so translations are loaded at first boot.
+	// +listType=atomic
+	// +kubebuilder:validation:items:Pattern=`^[a-z]{2,3}(_[A-Za-z0-9]{2,4})?$`
+	LoadLanguages []string `json:"loadLanguages,omitempty"`
+
+	// ExtraOptions are appended verbatim to the [options] section, sorted by
+	// key. Keys must be odoo.conf option names (^[a-z_][a-z0-9_]*$, checked by
+	// the operator, which reports Degraded/InvalidSpec otherwise); values must
+	// be single line (enforced by the schema).
+	// +kubebuilder:validation:MaxProperties=64
+	ExtraOptions map[string]OdooOptionValue `json:"extraOptions,omitempty"`
 }
+
+// OdooOptionValue is one odoo.conf value: a single line of at most 4096 characters.
+// +kubebuilder:validation:MaxLength=4096
+// +kubebuilder:validation:Pattern=`^[^\n\r]*$`
+type OdooOptionValue string
 
 type PersistentVolumeClaimSpec struct {
 	// StorageSize defines the size of the new persistent volume claim
@@ -209,6 +339,54 @@ type PersistentVolumeClaimSpec struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default={"ReadWriteOnce"}
 	AccessModes []corev1.PersistentVolumeAccessMode `json:"accessModes,omitempty"`
+
+	// DeletionPolicy controls whether the filestore PVC is garbage collected
+	// with the OdooDeployment (Delete) or left behind (Retain, the default).
+	// +kubebuilder:default=Retain
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
+}
+
+// OdooUpgradeConfig describes how module upgrades (-u) are triggered.
+type OdooUpgradeConfig struct {
+	// Modules to upgrade (-u) when an upgrade is triggered. Empty means the new
+	// image is rolled out without running a maintenance Job.
+	// +listType=atomic
+	// +kubebuilder:validation:items:Pattern=`^[A-Za-z0-9_]+$`
+	Modules []string `json:"modules,omitempty"`
+
+	// OnImageChange triggers an upgrade whenever spec.image changes.
+	// +kubebuilder:default=true
+	OnImageChange *bool `json:"onImageChange,omitempty"`
+
+	// Token triggers an upgrade whenever its value changes; use it to run
+	// upgrades on demand (e.g. for production, together with onImageChange: false).
+	Token string `json:"token,omitempty"`
+}
+
+// OdooJobConfig tunes the maintenance Jobs (init and upgrade).
+type OdooJobConfig struct {
+	// +kubebuilder:default=3600
+	// +kubebuilder:validation:Minimum=1
+	ActiveDeadlineSeconds *int64 `json:"activeDeadlineSeconds,omitempty"`
+	// +kubebuilder:default=86400
+	// +kubebuilder:validation:Minimum=0
+	TTLSecondsAfterFinished *int32 `json:"ttlSecondsAfterFinished,omitempty"`
+	// +kubebuilder:default=2
+	// +kubebuilder:validation:Minimum=0
+	BackoffLimit *int32 `json:"backoffLimit,omitempty"`
+}
+
+// OdooProbesConfig controls the HTTP probes on the Odoo container.
+type OdooProbesConfig struct {
+	// Enabled turns the default /web/health probes on or off.
+	// +kubebuilder:default=true
+	Enabled *bool `json:"enabled,omitempty"`
+	// Readiness replaces the default readiness probe when set.
+	Readiness *corev1.Probe `json:"readiness,omitempty"`
+	// Liveness replaces the default liveness probe when set.
+	Liveness *corev1.Probe `json:"liveness,omitempty"`
+	// Startup replaces the default startup probe when set.
+	Startup *corev1.Probe `json:"startup,omitempty"`
 }
 
 // OdooDeploymentSpec defines the desired state of OdooDeployment
@@ -219,19 +397,20 @@ type OdooDeploymentSpec struct {
 	// The name of the OdooDployment
 	Name string `json:"name"`
 
-	// The command that runs odoo inside the container, if not specified it will default to "odoo"
+	// The command that runs odoo inside the container, if not specified it will default to "odoo".
+	// It replaces the image ENTRYPOINT.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default={"odoo"}
 	OdooCommand []string `json:"odooCommand,omitempty"`
 
-	// The number of replicas to run for the OdooDployment
+	// The number of replicas to run for the OdooDployment. 0 keeps the
+	// database and filestore but runs no pods.
 	// +kubebuilder:default=1
-	// +kubebuilder:validation:Minimum=1
-	Replicas int32 `json:"replicas,omitempty"`
+	// +kubebuilder:validation:Minimum=0
+	Replicas *int32 `json:"replicas,omitempty"`
 	// The image to run for the OdooDployment
 	// +kubebuilder:default="odoo:18"
 	Image string `json:"image,omitempty"`
-	// The backup configuration for the OdooDployment
 
 	// Image pull policy for the OdooDployment
 	// +kubebuilder:validation:Optional
@@ -243,36 +422,116 @@ type OdooDeploymentSpec struct {
 	// +kubebuilder:validation:Optional
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 
-	// Backup OdooBackupConfig `json:"backup,omitempty"`
 	// The database configuration for the OdooDployment
 	Database OdooDatabaseConfig `json:"database"`
 	// The configuration for the Odoo
+	// +kubebuilder:default={}
 	Config OdooConfig `json:"config,omitempty"`
 
 	// A list of modules to initialise the database with
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:default={"base"}
+	// +kubebuilder:validation:items:Pattern=`^[A-Za-z0-9_]+$`
 	Modules []string `json:"modules,omitempty"`
 
 	// PersistentVolumeClaim defines the replicated volume specs
 	// +kubebuilder:validation:Optional
+	// +kubebuilder:default={}
 	OdooFilestore PersistentVolumeClaimSpec `json:"odooFilestore,omitempty"`
+
+	// Upgrade controls module upgrades on image or token changes.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default={}
+	Upgrade OdooUpgradeConfig `json:"upgrade,omitempty"`
+
+	// Jobs tunes the init and upgrade maintenance Jobs.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default={}
+	Jobs OdooJobConfig `json:"jobs,omitempty"`
+
+	// Probes controls the HTTP health probes of the Odoo container.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default={}
+	Probes OdooProbesConfig `json:"probes,omitempty"`
+
+	// Env is added to the Odoo container (Deployment and Jobs).
+	// +kubebuilder:validation:Optional
+	// +listType=atomic
+	Env []corev1.EnvVar `json:"env,omitempty"`
+
+	// EnvFrom is added to the Odoo container (Deployment and Jobs).
+	// +kubebuilder:validation:Optional
+	// +listType=atomic
+	EnvFrom []corev1.EnvFromSource `json:"envFrom,omitempty"`
+
+	// Resources of the Odoo container (Deployment and Jobs).
+	// +kubebuilder:validation:Optional
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// PodSecurityContext of the Odoo pods (Deployment and Jobs). When unset the
+	// operator uses runAsUser 100, runAsGroup 101, fsGroup 101, runAsNonRoot.
+	// +kubebuilder:validation:Optional
+	PodSecurityContext *corev1.PodSecurityContext `json:"podSecurityContext,omitempty"`
 }
 
-type DBInitjob struct {
-	// The name of the InitJob
-	Name string `json:"name"`
-	// The name of the InitJob
-	Namespace string `json:"jobNamespace"`
-
-	// The list of modules that are being installed
+// MaintenanceJobStatus records the maintenance Job (init or upgrade) the
+// operator is waiting for. The JSON keys keep the 0.2.x names.
+type MaintenanceJobStatus struct {
+	// The name of the Job
+	Name string `json:"name,omitempty"`
+	// The namespace of the Job
+	Namespace string `json:"jobNamespace,omitempty"`
+	// Kind is "init" or "upgrade"
+	Kind string `json:"kind,omitempty"`
+	// Image the Job runs; becomes status.appliedImage on success
+	Image string `json:"image,omitempty"`
+	// Token is the spec.upgrade.token the Job was created for; becomes status.appliedUpgradeToken on success
+	Token string `json:"token,omitempty"`
+	// The list of modules that are being installed (-i)
 	Modules []string `json:"modules,omitempty"`
+	// The list of modules that are being upgraded (-u)
+	UpgradeModules []string `json:"upgradeModules,omitempty"`
+}
+
+// OdooDatabaseStatus records the database the operator resolved for this OdooDeployment.
+type OdooDatabaseStatus struct {
+	// Name of the database
+	Name string `json:"name,omitempty"`
+	// Host the database was resolved on
+	Host string `json:"host,omitempty"`
+	// ProvisionedBy is "operator" when the operator created the database and
+	// "external" when it adopted a pre-existing one. Only operator-provisioned
+	// databases are ever dropped.
+	// +kubebuilder:validation:Enum=operator;external
+	ProvisionedBy string `json:"provisionedBy,omitempty"`
+	// State is Provisioning while CREATE DATABASE is in flight and Ready afterwards.
+	// +kubebuilder:validation:Enum=Provisioning;Ready
+	State string `json:"state,omitempty"`
+	// CreatedAt is set when the operator created the database.
+	CreatedAt *metav1.Time `json:"createdAt,omitempty"`
 }
 
 // OdooDeploymentStatus defines the observed state of OdooDeployment
-type OdooDeploymentStatus struct { // INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+type OdooDeploymentStatus struct {
+	// ObservedGeneration is the spec generation the status reflects.
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// Phase summarises the lifecycle: Pending, Initializing, Upgrading, Running, Failed.
+	// +kubebuilder:validation:Enum=Pending;Initializing;Upgrading;Running;Failed
+	Phase string `json:"phase,omitempty"`
+
+	// AppliedImage is the image the Deployment runs (the last image a
+	// maintenance Job succeeded with, or spec.image for a plain roll-out).
+	AppliedImage string `json:"appliedImage,omitempty"`
+
+	// AppliedUpgradeToken is the spec.upgrade.token the last upgrade ran with.
+	AppliedUpgradeToken string `json:"appliedUpgradeToken,omitempty"`
+
+	// Database records the resolved database and who provisioned it.
+	Database OdooDatabaseStatus `json:"database,omitempty"`
+
+	// ReadyReplicas mirrors the Deployment's available replicas.
+	ReadyReplicas int32 `json:"readyReplicas,omitempty"`
 
 	// The name of the Secret used to store the Odoo configuration file
 	// +kubebuilder:validation:Optional
@@ -288,20 +547,27 @@ type OdooDeploymentStatus struct { // INSERT ADDITIONAL SPEC FIELDS - desired st
 	// +kubebuilder:default={}
 	InitModulesInstalled []string `json:"initModulesInstalled"`
 
-	// The name of the current running InitJob
+	// The maintenance Job (init or upgrade) currently running
 	// +kubebuilder:validation:Optional
-	CurrentInitJob DBInitjob `json:"currentInitJob,omitempty"`
+	CurrentInitJob MaintenanceJobStatus `json:"currentInitJob,omitempty"`
 
 	// The secret name for the Odoo admin password
 	// +kubebuilder:validation:Optional
 	OdooAdminSecretName string `json:"odooAdminSecretName,omitempty"`
 
 	// +kubebuilder:validation:Optional
-	Conditions []metav1.Condition `json:"conditions"`
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Image",type=string,JSONPath=`.status.appliedImage`
+// +kubebuilder:printcolumn:name="Database",type=string,JSONPath=`.status.database.name`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // OdooDeployment is the Schema for the odoodeployments API
 type OdooDeployment struct {

@@ -1,0 +1,135 @@
+---
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Unit and envtest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write   # the sticky test-results comment
+
+    services:
+      # internal/database talks to this one. Everything it asserts (the DDL,
+      # the COMMENT that marks operator-owned databases, and the refusal to
+      # drop a database carrying somebody else's comment) needs a real server;
+      # the fake provisioner the controller suites use cannot show any of it.
+      # Without TEST_PG_HOST those tests skip, so `make test` still works
+      # offline.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      TEST_PG_HOST: 127.0.0.1
+      TEST_PG_PORT: 5432
+      TEST_PG_USER: postgres
+      TEST_PG_PASSWORD: postgres
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # -json makes `go test` emit the machine-readable event stream the
+      # summary is rendered from (go doc cmd/test2json). It is piped through
+      # tee so the human-readable job log still shows the run as it happens;
+      # SHELL in the Makefile already sets pipefail, and the step's own shell
+      # gets it here, so a failing suite still fails the step.
+      #
+      # The stream also carries make's recipe echo and the tool-install
+      # progress lines. That is expected: the summary script skips every line
+      # that is not a JSON object, exactly as `go test -json` documents.
+      - name: Run tests
+        run: |
+          set -o pipefail
+          make test GO_TEST_FLAGS=-json | tee go-test.json
+
+      - name: Generated files are up to date
+        run: git diff --exit-code -- api/v1/zz_generated.deepcopy.go config/crd config/rbac
+
+      - name: Build the installer bundle
+        run: make build-installer VERSION=ci
+
+      # Both artifacts are what the summary links to, so they are uploaded
+      # even when the suite is red — that is when they are read.
+      - name: Upload test stream
+        id: upload-stream
+        if: ${{ !cancelled() && hashFiles('go-test.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-test-json
+          path: go-test.json
+          retention-days: 7
+
+      - name: Render coverage report
+        id: coverage
+        if: ${{ !cancelled() && hashFiles('cover.out') != '' }}
+        run: go tool cover -html=cover.out -o coverage.html
+
+      - name: Upload coverage report
+        id: upload-coverage
+        if: ${{ !cancelled() && hashFiles('cover.out') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            cover.out
+            coverage.html
+          retention-days: 7
+
+      # Overview of the run: the job summary always, plus one sticky PR
+      # comment updated in place on every run.
+      - name: Write test summary
+        if: ${{ !cancelled() }}
+        run: |
+          python3 hack/test-summary.py go-test.json \
+            --coverage-profile cover.out \
+            --module "$(go list -m)" \
+            --artifact-url "${{ steps.upload-stream.outputs.artifact-url }}" \
+            --coverage-url "${{ steps.upload-coverage.outputs.artifact-url }}" \
+            > test-summary.md
+          cat test-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment test summary on PR
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        # Fork PRs get a read-only token; a denied comment must not fail the job.
+        continue-on-error: true
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: go-test-results
+          path: test-summary.md
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: golangci-lint
+        run: make lint

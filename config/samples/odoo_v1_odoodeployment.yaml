@@ -6,6 +6,9 @@ spec:
   name: odoo-sample
   replicas: 1
   image: mohanadabugharbia/odoo:18
+  # odooCommand replaces the image ENTRYPOINT; keep it to the odoo binary so
+  # the operator's odoo.conf is the only configuration source.
+  odooCommand: ["odoo"]
   database:
     # host: postgresql
     hostFromSecret:
@@ -15,10 +18,8 @@ spec:
     portFromSecret:
       name: cluster-1-app
       key: port
-    # name: odoo
-    nameFromSecret:
-      name: cluster-1-app
-      key: dbname
+    # The database name is immutable once set.
+    name: odoo
     # user: odoo
     userFromSecret:
       name: cluster-1-app
@@ -28,6 +29,29 @@ spec:
       key: password
     ssl: false
     maxConn: 64
+    # IfNotExists (default) creates the database when it is missing and adopts
+    # it as "external" when it already exists; Never only adopts.
+    createPolicy: IfNotExists
+    # Delete drops the database with the OdooDeployment, but only when the
+    # operator created it (status.database.provisionedBy: operator).
+    deletionPolicy: Delete
+    maintenanceDatabase: postgres
+  modules:
+    - base
+    - web
+  upgrade:
+    # Modules passed to -u by the upgrade Job; empty rolls the new image without a Job.
+    modules:
+      - base
+      - web
+    # Upgrade whenever spec.image changes (default). For production set this to
+    # false and bump token to run upgrades on demand.
+    onImageChange: true
+    token: ""
+  jobs:
+    activeDeadlineSeconds: 3600
+    ttlSecondsAfterFinished: 86400
+    backoffLimit: 2
   config:
     debugMode: false
     dataDir: /var/lib/odoo
@@ -40,10 +64,40 @@ spec:
     limitMemorySoft: 2147483648
     limitMemoryHard: 2684354560
     maxCronThreads: 1
+    # false (default) renders list_db = False and dbfilter = ^odoo$ so the
+    # instance can only see its own database.
+    listDb: false
+    serverWideModules:
+      - base
+      - web
+    # Loaded with --load-language by Jobs that install modules.
+    loadLanguages:
+      - en_US
+    # extraAddonsPaths:
+    #   - /mnt/extra-addons
+    # extraOptions:
+    #   smtp_server: mail.example.com
+  env:
+    - name: OTEL_SDK_DISABLED
+      value: "true"
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  # probes:
+  #   enabled: true
+  # podSecurityContext:
+  #   runAsUser: 101
+  #   runAsGroup: 101
+  #   fsGroup: 101
+  #   runAsNonRoot: true
   odooFilestore:
     storageClassName: standard
     accessModes:
       - ReadWriteOnce
     size: 10Gi
-  modules:
-    - base
+    # Retain (default) leaves the PVC behind; Delete garbage collects it.
+    deletionPolicy: Retain

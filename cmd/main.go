@@ -38,6 +38,7 @@ import (
 
 	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/controller"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/database"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -151,8 +152,11 @@ func main() {
 	}
 
 	if err = (&controller.OdooDeploymentReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		APIReader: mgr.GetAPIReader(),
+		DB:        database.NewPgx(),
+		Recorder:  mgr.GetEventRecorderFor("odoodeployment-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "OdooDeployment")
 		os.Exit(1)

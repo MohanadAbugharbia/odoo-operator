@@ -3,6 +3,7 @@ package utils
 import (
 	"context"
 	"strconv"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -11,7 +12,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-func GetSecretValue(client client.Client, ctx context.Context, namespace string, secretName string, secretKey string) (string, error) {
+// GetSecretValue returns the value of a Secret key with surrounding
+// whitespace (typically a trailing newline from `echo | base64`) removed.
+func GetSecretValue(
+	client client.Client, ctx context.Context, namespace string, secretName string, secretKey string,
+) (string, error) {
 	secret := &corev1.Secret{}
 
 	err := client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: secretName}, secret)
@@ -26,10 +31,12 @@ func GetSecretValue(client client.Client, ctx context.Context, namespace string,
 	if !ok {
 		return "", ErrSecretKeyNotFound
 	}
-	return string(value), nil
+	return strings.TrimSpace(string(value)), nil
 }
 
-func GetInt32SecretValue(client client.Client, ctx context.Context, namespace string, secretName string, secretKey string) (int32, error) {
+func GetInt32SecretValue(
+	client client.Client, ctx context.Context, namespace string, secretName string, secretKey string,
+) (int32, error) {
 	valueStr, err := GetSecretValue(client, ctx, namespace, secretName, secretKey)
 	if err != nil {
 		return 0, err
@@ -41,7 +48,9 @@ func GetInt32SecretValue(client client.Client, ctx context.Context, namespace st
 	return int32(value), nil
 }
 
-func GetBoolSecretValue(client client.Client, ctx context.Context, namespace string, secretName string, secretKey string) (bool, error) {
+func GetBoolSecretValue(
+	client client.Client, ctx context.Context, namespace string, secretName string, secretKey string,
+) (bool, error) {
 	valueStr, err := GetSecretValue(client, ctx, namespace, secretName, secretKey)
 	if err != nil {
 		return false, err

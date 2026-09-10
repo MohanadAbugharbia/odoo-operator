@@ -5,77 +5,52 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
-
-	"k8s.io/apimachinery/pkg/api/errors"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	utilerrors "k8s.io/apimachinery/pkg/util/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
 	"github.com/MohanadAbugharbia/odoo-operator/pkg/utils"
 )
 
-type OdooAdminPasswordSecretReconciler struct {
-	client.Client
-	Scheme         *runtime.Scheme
-	OdooDeployment *odoov1.OdooDeployment
-}
-
-func (r *OdooAdminPasswordSecretReconciler) Reconcile(ctx context.Context, req ctrl.Request) (corev1.Secret, error) {
+// EnsureAdminPasswordSecret creates the Odoo admin password Secret when it is
+// missing and fills in a random password when the "password" key is absent.
+// An existing password is never rotated. Secrets named by the user
+// (spec.config.adminPasswordSecretName) are not owned by the OdooDeployment.
+func EnsureAdminPasswordSecret(
+	ctx context.Context,
+	c client.Client,
+	scheme *runtime.Scheme,
+	od *odoov1.OdooDeployment,
+) (*corev1.Secret, error) {
 	logger := log.FromContext(ctx)
+	name := od.CreateOdooAdminPasswordSecretNamespacedName()
+	secret := &corev1.Secret{}
+	secret.Name = name.Name
+	secret.Namespace = name.Namespace
 
-	logger.V(1).Info("Reconciling Odoo Admin Password Secret")
-
-	// Check if odoo admin password secret already exists, if not create a new one
-	adminSecret := corev1.Secret{}
-	adminSecretNamespacedName := r.OdooDeployment.CreateOdooAdminPasswordSecretNamespacedName()
-	createAdminSecret := false
-	err := r.Get(ctx, adminSecretNamespacedName, &adminSecret)
-	if err != nil && errors.IsNotFound(err) {
-		createAdminSecret = true
-	} else if err != nil {
-		logger.Error(err, fmt.Sprintf("error creating %s secret.", adminSecretNamespacedName.Name))
-		utils.UpdateStatus(&r.OdooDeployment.Status.Conditions, "OperatorDegraded", odoov1.ReasonOdooAdminSecretNotAvailable, fmt.Sprintf("error creating %s secret: %v", adminSecretNamespacedName.Name, err), metav1.ConditionFalse)
-		return adminSecret, utilerrors.NewAggregate([]error{err, r.Status().Update(ctx, r.OdooDeployment)})
-	}
-
-	newAdminSecret, err := r.OdooDeployment.Spec.Config.GetOdooAdminPasswordSecretTemplate(
-		adminSecretNamespacedName.Name,
-		adminSecretNamespacedName.Namespace,
-	)
+	result, err := controllerutil.CreateOrUpdate(ctx, c, secret, func() error {
+		if len(secret.Data["password"]) == 0 {
+			password, err := utils.GenerateSecurePassword()
+			if err != nil {
+				return err
+			}
+			if secret.Data == nil {
+				secret.Data = map[string][]byte{}
+			}
+			secret.Data["password"] = []byte(password)
+		}
+		if od.AdminPasswordSecretIsUserNamed() {
+			return nil
+		}
+		return controllerutil.SetControllerReference(od, secret, scheme)
+	})
 	if err != nil {
-		logger.Error(err, fmt.Sprintf("error creating %s secret.", adminSecretNamespacedName.Name))
-		utils.UpdateStatus(&r.OdooDeployment.Status.Conditions, "OperatorDegraded", odoov1.ReasonOdooAdminSecretCreationFailed, fmt.Sprintf("error creating %s secret: %v", adminSecretNamespacedName.Name, err), metav1.ConditionFalse)
-		return adminSecret, utilerrors.NewAggregate([]error{err, r.Status().Update(ctx, r.OdooDeployment)})
+		return nil, fmt.Errorf("admin password secret %s: %w", name.Name, err)
 	}
-
-	ctrl.SetControllerReference(r.OdooDeployment, &adminSecret, r.Scheme)
-	if createAdminSecret {
-		logger.Info(fmt.Sprintf("Creating a new secret for %s", adminSecretNamespacedName.Name))
-		adminSecret.Data = newAdminSecret.Data
-		adminSecret.Name = adminSecretNamespacedName.Name
-		adminSecret.Namespace = adminSecretNamespacedName.Namespace
-		err = r.Create(ctx, &adminSecret)
-		if err != nil {
-			logger.Error(err, fmt.Sprintf("error creating %s secret.", adminSecret.Name))
-			utils.UpdateStatus(&r.OdooDeployment.Status.Conditions, "OperatorDegraded", odoov1.ReasonOdooAdminSecretCreationFailed, fmt.Sprintf("error creating %s secret: %v", adminSecret.Name, err), metav1.ConditionFalse)
-			return adminSecret, utilerrors.NewAggregate([]error{err, r.Status().Update(ctx, r.OdooDeployment)})
-		}
-	} else if adminSecret.Data["password"] == nil {
-		// Update only if there is no "password" key in the adminSecret
-		logger.Info(fmt.Sprintf("Updating existing secret for %s", adminSecretNamespacedName.Name))
-		adminSecret.Data = newAdminSecret.Data
-		err = r.Update(ctx, &adminSecret)
-		if err != nil {
-			logger.Error(err, fmt.Sprintf("error updating %s secret.", adminSecret.Name))
-			utils.UpdateStatus(&r.OdooDeployment.Status.Conditions, "OperatorDegraded", odoov1.ReasonOdooAdminSecretUpdateFailed, fmt.Sprintf("error updating %s secret: %v", adminSecret.Name, err), metav1.ConditionFalse)
-			return adminSecret, utilerrors.NewAggregate([]error{err, r.Status().Update(ctx, r.OdooDeployment)})
-		}
+	if result != controllerutil.OperationResultNone {
+		logger.Info("Reconciled admin password secret", "secret", name.Name, "result", result)
 	}
-
-	return adminSecret, nil
+	return secret, nil
 }
