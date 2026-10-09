@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -678,6 +679,71 @@ func (o *OdooDeployment) GetMaintenanceJobTemplate(initModules, upgradeModules [
 		},
 	}
 	return job
+}
+
+// ImageCheckJobName is "<name>-image-<hash>" where the hash covers
+// spec.image, so a new image gets a new check and a retried reconcile adopts
+// the one it already created.
+func (o *OdooDeployment) ImageCheckJobName() string {
+	h := sha256.Sum256([]byte(o.Spec.Image))
+	return fmt.Sprintf("%s-image-%s", o.Name, hex.EncodeToString(h[:])[:8])
+}
+
+// GetImageCheckJobTemplate renders the Job that pulls spec.image and runs
+// `<odooCommand> --version` on it. It mounts neither the filestore nor the
+// config, so it can run beside the live pod (the filestore is usually
+// ReadWriteOnce), and asks for little enough that it fits a namespace quota
+// sized for the Odoo pods alone.
+func (o *OdooDeployment) GetImageCheckJobTemplate() batchv1.Job {
+	command := make([]string, 0, len(o.Spec.OdooCommand)+1)
+	command = append(command, o.Spec.OdooCommand...)
+	command = append(command, "--version")
+	labels := map[string]string{
+		LabelOdooDeployment: o.Name,
+		LabelJobKind:        JobKindImageCheck,
+	}
+	return batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      o.ImageCheckJobName(),
+			Namespace: o.Namespace,
+			Labels:    labels,
+		},
+		Spec: batchv1.JobSpec{
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name:            "image-check",
+						Image:           o.Spec.Image,
+						ImagePullPolicy: o.imagePullPolicy(),
+						Command:         command,
+						Resources: corev1.ResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("10m"),
+								corev1.ResourceMemory: resource.MustParse("64Mi"),
+							},
+							Limits: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("500m"),
+								corev1.ResourceMemory: resource.MustParse("512Mi"),
+							},
+						},
+						TerminationMessagePath:   "/dev/termination-log",
+						TerminationMessagePolicy: corev1.TerminationMessageFallbackToLogsOnError,
+					}},
+					SecurityContext:  o.podSecurityContext(),
+					ImagePullSecrets: o.Spec.ImagePullSecrets,
+					RestartPolicy:    corev1.RestartPolicyNever,
+				},
+			},
+			Parallelism:  ptrTo(int32(1)),
+			Completions:  ptrTo(int32(1)),
+			BackoffLimit: ptrTo(int32(0)),
+			// No deadline: a missing image is retried by the kubelet until it
+			// is pushed or spec.image moves on, and the old image keeps
+			// serving meanwhile.
+			TTLSecondsAfterFinished: ptrTo(o.Spec.Jobs.TTLSecondsAfterFinishedValue()),
+		},
+	}
 }
 
 func (o *OdooDeployment) GetPvcTemplate() corev1.PersistentVolumeClaim {

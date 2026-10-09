@@ -32,7 +32,8 @@ const (
 
 	// LabelOdooDeployment marks every pod (Deployment and Job) that belongs to an OdooDeployment.
 	LabelOdooDeployment = "odoo.abugharbia.com/odoodeployment"
-	// LabelJobKind marks maintenance Job pods with "init" or "upgrade".
+	// LabelJobKind marks maintenance Job pods with "init" or "upgrade", and
+	// image check Job pods with "image-check".
 	LabelJobKind = "odoo.abugharbia.com/job-kind"
 	// AnnotationConfigHash carries the sha256 of the rendered odoo.conf on the
 	// Deployment pod template so that config changes roll the pods.
@@ -40,6 +41,9 @@ const (
 
 	JobKindInit    = "init"
 	JobKindUpgrade = "upgrade"
+	// JobKindImageCheck is the short Job that proves a new spec.image can be
+	// pulled before the running Deployment is scaled down for it.
+	JobKindImageCheck = "image-check"
 )
 
 // Condition types.
@@ -130,6 +134,18 @@ const (
 	ReasonReconcileFailed       = "ReconcileFailed"
 	ReasonInvalidSpec           = "InvalidSpec"
 	ReasonDeleting              = "Deleting"
+)
+
+// Image pull reasons.
+const (
+	// ReasonImagePullFailed: a Job's pod cannot pull spec.image (ErrImagePull,
+	// ImagePullBackOff, …). Before an upgrade this keeps the old image serving.
+	ReasonImagePullFailed = "ImagePullFailed"
+	// ReasonImageCheckFailed: the image pulled but `<odooCommand> --version` failed.
+	ReasonImageCheckFailed = "ImageCheckFailed"
+	// ReasonJobSuperseded: a Job stuck pulling an image was replaced because
+	// spec.image moved on.
+	ReasonJobSuperseded = "JobSuperseded"
 )
 
 type DatabaseConnectionDetails struct {

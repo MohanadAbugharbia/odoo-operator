@@ -2,6 +2,7 @@ package reconcileloops
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"strings"
 
@@ -40,7 +41,13 @@ type JobObservation struct {
 	// QuotaMessage carries the "exceeded quota" event message when the Job
 	// cannot create its pod because of a ResourceQuota.
 	QuotaMessage string
+	// ImagePullMessage is set when the Job's pod is stuck pulling its image.
+	ImagePullMessage string
 }
+
+// ErrJobTerminating is returned by EnsureMaintenanceJob while a Job with the
+// same name is still being deleted.
+var ErrJobTerminating = stderrors.New("a previous job with the same name is still terminating")
 
 func jobCondition(job *batchv1.Job, t batchv1.JobConditionType) *batchv1.JobCondition {
 	for i := range job.Status.Conditions {
@@ -89,6 +96,9 @@ func ObserveMaintenanceJob(
 	if job.Status.Active == 0 {
 		// No pod yet: the only interesting reason is a ResourceQuota rejection.
 		obs.QuotaMessage = quotaMessage(ctx, reader, job)
+	}
+	if obs.QuotaMessage == "" {
+		obs.ImagePullMessage = imagePullMessage(ctx, reader, job)
 	}
 	return obs, nil
 }
@@ -148,6 +158,11 @@ func EnsureMaintenanceJob(
 		existing := &batchv1.Job{}
 		if err := c.Get(ctx, client.ObjectKeyFromObject(&job), existing); err != nil {
 			return nil, fmt.Errorf("get existing job %s: %w", job.Name, err)
+		}
+		if !existing.DeletionTimestamp.IsZero() {
+			// A superseded Job (same name on first boot) is on its way out;
+			// adopting it would bring its old image back.
+			return nil, ErrJobTerminating
 		}
 		logger.Info("Adopting existing maintenance job", "job", job.Name)
 		return existing, nil
