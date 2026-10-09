@@ -274,6 +274,14 @@ func (r *OdooDeploymentReconciler) reconcileNormal(ctx context.Context, s *recon
 	}
 	od.Status.OdooDataPvcName = pvc.Name
 
+	// The Services only select pods, so they exist from the first reconcile:
+	// whatever routes to them (an Ingress) can be created alongside the CR
+	// instead of waiting for the init Job, and simply has no endpoints until
+	// the Deployment is up.
+	if reason, err := r.ensureServices(ctx, od); err != nil {
+		return s.fail(reason, err)
+	}
+
 	// Database.
 	if result, ready, err := r.settleDatabase(ctx, s, conn); err != nil || !ready {
 		return result, err
@@ -304,6 +312,17 @@ func (r *OdooDeploymentReconciler) reconcileNormal(ctx context.Context, s *recon
 
 	s.initialized()
 
+	// A new image is pulled once before the running pods are stopped for it,
+	// so an image that does not exist (yet) leaves the old one serving
+	// instead of a Deployment at zero and a Job stuck in ImagePullBackOff.
+	imageWait, err := r.gateNewImage(ctx, s, (needJob || plainRoll) && !firstBoot)
+	if err != nil {
+		return s.fail(odoov1.ReasonReconcileFailed, err)
+	}
+	if imageWait != "" {
+		needJob, plainRoll = false, false
+	}
+
 	if needJob {
 		return r.startMaintenanceJob(ctx, s, configHash, initModules, upgradeModules, firstBoot)
 	}
@@ -313,22 +332,24 @@ func (r *OdooDeploymentReconciler) reconcileNormal(ctx context.Context, s *recon
 		od.Status.AppliedUpgradeToken = od.Spec.Upgrade.Token
 	}
 
-	// Steady state.
+	return r.reconcileSteadyState(ctx, s, configHash, imageWait)
+}
+
+// reconcileSteadyState runs status.appliedImage. imageWait is the note from
+// gateNewImage when a new spec.image is held back.
+func (r *OdooDeploymentReconciler) reconcileSteadyState(ctx context.Context, s *reconcileState, configHash, imageWait string) (ctrl.Result, error) {
+	od := s.od
 	replicas := od.Spec.ReplicasValue()
 	deployment, err := reconcileloops.EnsureDeployment(ctx, r.Client, r.Scheme, od, od.Status.AppliedImage, replicas, configHash)
 	if err != nil {
 		return s.fail(odoov1.ReasonDeploymentFailed, err)
 	}
-	if _, err := reconcileloops.EnsureHttpService(ctx, r.Client, r.Scheme, od); err != nil {
-		return s.fail(odoov1.ReasonFailedCreateHttpService, err)
-	}
-	if _, err := reconcileloops.EnsurePollService(ctx, r.Client, r.Scheme, od); err != nil {
-		return s.fail(odoov1.ReasonFailedCreatePollService, err)
-	}
 
 	od.Status.Phase = odoov1.PhaseRunning
 	od.Status.ReadyReplicas = deployment.Status.AvailableReplicas
-	s.healthy()
+	if imageWait == "" {
+		s.healthy()
+	}
 
 	observed := deployment.Status.ObservedGeneration >= deployment.Generation
 	switch {
@@ -342,7 +363,67 @@ func (r *OdooDeploymentReconciler) reconcileNormal(ctx context.Context, s *recon
 			fmt.Sprintf("%d/%d replicas available", deployment.Status.AvailableReplicas, replicas))
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
+	if imageWait != "" {
+		// Pod status changes are not watched; poll the image check.
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	}
 	return ctrl.Result{}, nil
+}
+
+// ensureServices creates or updates the HTTP and poll Services and returns
+// the failure reason with the error.
+func (r *OdooDeploymentReconciler) ensureServices(ctx context.Context, od *odoov1.OdooDeployment) (string, error) {
+	if _, err := reconcileloops.EnsureHttpService(ctx, r.Client, r.Scheme, od); err != nil {
+		return odoov1.ReasonFailedCreateHttpService, err
+	}
+	if _, err := reconcileloops.EnsurePollService(ctx, r.Client, r.Scheme, od); err != nil {
+		return odoov1.ReasonFailedCreatePollService, err
+	}
+	return "", nil
+}
+
+// gateNewImage holds a rollout back until spec.image has been pulled once.
+// rollout says whether this reconcile would stop the running pods for (or
+// roll them to) spec.image. It returns a non-empty note while status.appliedImage
+// must keep serving, and prunes image checks that are no longer needed.
+func (r *OdooDeploymentReconciler) gateNewImage(ctx context.Context, s *reconcileState, rollout bool) (string, error) {
+	od := s.od
+	if !rollout || od.Spec.Image == od.Status.AppliedImage {
+		return "", reconcileloops.PruneImageCheckJobs(ctx, r.Client, od, "")
+	}
+	check, err := reconcileloops.CheckImage(ctx, r.Client, r.reader(), r.Scheme, od)
+	if err != nil || check.Pulled {
+		return "", err
+	}
+	return r.awaitImage(ctx, s, check), nil
+}
+
+// awaitImage records why the reconcile keeps serving status.appliedImage
+// while spec.image is being checked, and returns a non-empty note.
+func (r *OdooDeploymentReconciler) awaitImage(ctx context.Context, s *reconcileState, check reconcileloops.ImageCheck) string {
+	od := s.od
+	switch {
+	case check.FailureMessage != "":
+		msg := fmt.Sprintf("image %s failed its check (%s); still serving %s — inspect with: kubectl -n %s logs job/%s, delete the Job to retry",
+			od.Spec.Image, check.FailureMessage, od.Status.AppliedImage, od.Namespace, check.JobName)
+		s.degraded(odoov1.ReasonImageCheckFailed, msg)
+		r.event(od, corev1.EventTypeWarning, odoov1.ReasonImageCheckFailed, msg)
+		return msg
+	case check.PullMessage != "":
+		msg := fmt.Sprintf("cannot pull image %s (%s); still serving %s until it can be pulled or spec.image changes",
+			od.Spec.Image, check.PullMessage, od.Status.AppliedImage)
+		s.degraded(odoov1.ReasonImagePullFailed, msg)
+		r.event(od, corev1.EventTypeWarning, odoov1.ReasonImagePullFailed, msg)
+		return msg
+	case check.QuotaMessage != "":
+		msg := fmt.Sprintf("cannot start the check of image %s (%s); still serving %s", od.Spec.Image, check.QuotaMessage, od.Status.AppliedImage)
+		s.degraded(odoov1.ReasonQuotaExceeded, msg)
+		return msg
+	default:
+		log.FromContext(ctx).Info("Waiting for the image check before rolling out", "image", od.Spec.Image, "job", check.JobName)
+		s.healthy()
+		return "pulling " + od.Spec.Image
+	}
 }
 
 // settleDatabase runs the provisioning switch and maps its outcome onto the
@@ -456,11 +537,32 @@ func (r *OdooDeploymentReconciler) observeCurrentJob(ctx context.Context, s *rec
 		return ctrl.Result{RequeueAfter: 2 * time.Minute}, false, nil
 
 	default: // active
-		if obs.QuotaMessage != "" {
+		if obs.ImagePullMessage != "" && od.Spec.Image != current.Image {
+			// The pod never started, so nothing touched the database: replace
+			// the Job with one for the image spec.image now names.
+			msg := fmt.Sprintf("job %s cannot pull %s (%s); replacing it for %s",
+				current.Name, current.Image, obs.ImagePullMessage, od.Spec.Image)
+			logger.Info(msg)
+			if err := reconcileloops.DeleteMaintenanceJob(ctx, r.Client, obs.Job); err != nil {
+				result, err := s.fail(odoov1.ReasonReconcileFailed, err)
+				return result, false, err
+			}
+			od.Status.CurrentInitJob = odoov1.MaintenanceJobStatus{}
+			r.event(od, corev1.EventTypeNormal, odoov1.ReasonJobSuperseded, msg)
+			return ctrl.Result{RequeueAfter: time.Second}, false, nil
+		}
+		switch {
+		case obs.ImagePullMessage != "":
+			msg := fmt.Sprintf("job %s cannot pull %s (%s); it starts once the image can be pulled or spec.image changes",
+				current.Name, current.Image, obs.ImagePullMessage)
+			od.Status.Phase = runningPhase
+			s.degraded(odoov1.ReasonImagePullFailed, msg)
+			s.ready(metav1.ConditionFalse, odoov1.ReasonImagePullFailed, msg)
+		case obs.QuotaMessage != "":
 			od.Status.Phase = odoov1.PhasePending
 			s.degraded(odoov1.ReasonQuotaExceeded, obs.QuotaMessage)
 			s.ready(metav1.ConditionFalse, odoov1.ReasonQuotaExceeded, obs.QuotaMessage)
-		} else {
+		default:
 			od.Status.Phase = runningPhase
 			s.healthy()
 			s.ready(metav1.ConditionFalse, runningReason, fmt.Sprintf("waiting for job %s", current.Name))
@@ -502,6 +604,11 @@ func (r *OdooDeploymentReconciler) startMaintenanceJob(
 	}
 
 	job, err := reconcileloops.EnsureMaintenanceJob(ctx, r.Client, r.Scheme, od, initModules, upgradeModules, firstBoot)
+	if errors.Is(err, reconcileloops.ErrJobTerminating) {
+		od.Status.Phase = phase
+		s.ready(metav1.ConditionFalse, createdReason, "waiting for the replaced job to be deleted")
+		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+	}
 	if err != nil {
 		return s.fail(odoov1.ReasonJobCreationFailed, err)
 	}

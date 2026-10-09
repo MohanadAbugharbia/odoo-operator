@@ -190,6 +190,36 @@ func (h *harness) bootToRunning() *odoov1.OdooDeployment {
 	return od
 }
 
+// passImageCheck lets the image check Job for spec.image succeed and reconciles again.
+func (h *harness) passImageCheck() (ctrl.Result, *odoov1.OdooDeployment) {
+	h.succeedJob(h.get().ImageCheckJobName())
+	return h.reconcile()
+}
+
+// podStuckPulling creates a pod for the Job, as the Job controller would,
+// whose container is waiting on an image it cannot pull.
+func (h *harness) podStuckPulling(jobName, image string) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: jobName + "-pod", Namespace: ns,
+			Labels: map[string]string{"batch.kubernetes.io/job-name": jobName, odoov1.LabelOdooDeployment: h.name},
+		},
+		Spec: corev1.PodSpec{RestartPolicy: corev1.RestartPolicyNever, Containers: []corev1.Container{{Name: "odoo", Image: image}}},
+	}
+	Expect(k8sClient.Create(ctx, pod)).To(Succeed())
+	DeferCleanup(func() { _ = k8sClient.Delete(ctx, pod, client.GracePeriodSeconds(0)) })
+	pod.Status.Phase = corev1.PodPending
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name:  "odoo",
+		Image: image,
+		State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+			Reason:  "ImagePullBackOff",
+			Message: `Back-off pulling image "` + image + `"`,
+		}},
+	}}
+	Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
+}
+
 func condition(od *odoov1.OdooDeployment, t string) *metav1.Condition {
 	return meta.FindStatusCondition(od.Status.Conditions, t)
 }
@@ -260,6 +290,11 @@ var _ = Describe("OdooDeployment lifecycle", func() {
 		Expect(job.Spec.Template.Labels).NotTo(HaveKey("app"))
 		Expect(h.deployment()).To(BeNil(), "no Deployment before the init job succeeds")
 
+		By("the services exist before the init job finishes, so an Ingress can be created with the CR")
+		for _, svc := range []string{h.name + "-http", h.name + "-poll"} {
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: svc, Namespace: ns}, &corev1.Service{})).To(Succeed(), svc)
+		}
+
 		By("the config secret locks the instance to its database")
 		config := &corev1.Secret{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: h.name + "-config", Namespace: ns}, config)).To(Succeed())
@@ -320,10 +355,23 @@ var _ = Describe("OdooDeployment lifecycle", func() {
 		h.create()
 		od := h.bootToRunning()
 
-		By("changing the image")
+		By("changing the image: the new image is pulled first, the old one keeps serving")
 		od.Spec.Image = "odoo:b"
 		Expect(k8sClient.Update(ctx, od)).To(Succeed())
 		res, od := h.reconcile()
+		Expect(res.RequeueAfter).To(Equal(30*time.Second), "the Deployment is still progressing in envtest")
+		Expect(od.Status.Phase).To(Equal(odoov1.PhaseRunning))
+		Expect(od.Status.CurrentInitJob.Name).To(BeEmpty())
+		Expect(*h.deployment().Spec.Replicas).To(Equal(int32(1)))
+		check := h.job(od.ImageCheckJobName())
+		Expect(check).NotTo(BeNil())
+		Expect(check.Labels[odoov1.LabelJobKind]).To(Equal(odoov1.JobKindImageCheck))
+		Expect(check.Spec.Template.Spec.Containers[0].Image).To(Equal("odoo:b"))
+		Expect(strings.Join(check.Spec.Template.Spec.Containers[0].Command, " ")).To(Equal("odoo --version"))
+		Expect(check.Spec.Template.Spec.Volumes).To(BeEmpty(), "the check must not need the RWO filestore")
+
+		By("the image pulled: scale to zero and upgrade")
+		res, od = h.passImageCheck()
 		Expect(res.RequeueAfter).To(Equal(15 * time.Second))
 		Expect(od.Status.Phase).To(Equal(odoov1.PhaseUpgrading))
 		Expect(od.Status.AppliedImage).To(Equal("odoo:a"), "the applied image only moves after the job succeeds")
@@ -350,6 +398,7 @@ var _ = Describe("OdooDeployment lifecycle", func() {
 		d = h.deployment()
 		Expect(*d.Spec.Replicas).To(Equal(int32(1)))
 		Expect(d.Spec.Template.Spec.Containers[0].Image).To(Equal("odoo:b"))
+		Eventually(func() *batchv1.Job { return h.job(check.Name) }).Should(BeNil(), "the check is pruned once its image is applied")
 	})
 
 	It("waits for the old pods to stop before starting the upgrade job", func() {
@@ -365,7 +414,8 @@ var _ = Describe("OdooDeployment lifecycle", func() {
 
 		od.Spec.Image = "odoo:b"
 		Expect(k8sClient.Update(ctx, od)).To(Succeed())
-		res, od := h.reconcile()
+		h.reconcile()
+		res, od := h.passImageCheck()
 		Expect(res.RequeueAfter).To(Equal(10 * time.Second))
 		Expect(condition(od, odoov1.ConditionReady).Reason).To(Equal(odoov1.ReasonWaitingForPodsToStop))
 		Expect(od.Status.CurrentInitJob.Name).To(BeEmpty())
@@ -387,7 +437,8 @@ var _ = Describe("OdooDeployment lifecycle", func() {
 		od.Spec.Modules = []string{"base", "web", "sale"}
 		od.Spec.Image = "odoo:b"
 		Expect(k8sClient.Update(ctx, od)).To(Succeed())
-		_, od = h.reconcile()
+		h.reconcile()
+		_, od = h.passImageCheck()
 		job := h.job(od.Status.CurrentInitJob.Name)
 		Expect(job).NotTo(BeNil())
 		Expect(strings.Join(job.Spec.Template.Spec.Containers[0].Command, " ")).To(Equal(
@@ -402,6 +453,8 @@ var _ = Describe("OdooDeployment lifecycle", func() {
 		od.Spec.Image = "odoo:c"
 		Expect(k8sClient.Update(ctx, od)).To(Succeed())
 		_, od = h.reconcile()
+		Expect(od.Status.AppliedImage).To(Equal("odoo:b"), "a plain roll waits for the image check too")
+		_, od = h.passImageCheck()
 		Expect(od.Status.CurrentInitJob.Name).To(BeEmpty())
 		Expect(od.Status.AppliedImage).To(Equal("odoo:c"))
 		Expect(h.deployment().Spec.Template.Spec.Containers[0].Image).To(Equal("odoo:c"))
@@ -422,7 +475,8 @@ var _ = Describe("OdooDeployment lifecycle", func() {
 
 		od.Spec.Upgrade.Token = "release-2"
 		Expect(k8sClient.Update(ctx, od)).To(Succeed())
-		_, od = h.reconcile()
+		h.reconcile()
+		_, od = h.passImageCheck()
 		Expect(od.Status.CurrentInitJob.Kind).To(Equal("upgrade"))
 		Expect(od.Status.CurrentInitJob.Token).To(Equal("release-2"))
 		Expect(h.job(od.Status.CurrentInitJob.Name).Spec.Template.Spec.Containers[0].Image).To(Equal("odoo:b"))
@@ -430,6 +484,67 @@ var _ = Describe("OdooDeployment lifecycle", func() {
 		_, od = h.reconcile()
 		Expect(od.Status.AppliedImage).To(Equal("odoo:b"))
 		Expect(od.Status.AppliedUpgradeToken).To(Equal("release-2"))
+	})
+
+	It("keeps serving the old image while the new one cannot be pulled", func() {
+		h.create()
+		od := h.bootToRunning()
+
+		By("a build that never pushed odoo:b")
+		od.Spec.Image = "odoo:b"
+		Expect(k8sClient.Update(ctx, od)).To(Succeed())
+		_, od = h.reconcile()
+		stuck := od.ImageCheckJobName()
+		h.podStuckPulling(stuck, "odoo:b")
+
+		res, od := h.reconcile()
+		Expect(res.RequeueAfter).NotTo(BeZero())
+		Expect(od.Status.Phase).To(Equal(odoov1.PhaseRunning))
+		Expect(od.Status.AppliedImage).To(Equal("odoo:a"))
+		Expect(od.Status.CurrentInitJob.Name).To(BeEmpty(), "no upgrade job for an image that cannot be pulled")
+		Expect(condition(od, odoov1.ConditionDegraded).Status).To(Equal(metav1.ConditionTrue))
+		Expect(condition(od, odoov1.ConditionDegraded).Reason).To(Equal(odoov1.ReasonImagePullFailed))
+		Expect(condition(od, odoov1.ConditionDegraded).Message).To(ContainSubstring("ImagePullBackOff"))
+		Expect(condition(od, odoov1.ConditionDegraded).Message).To(ContainSubstring("still serving odoo:a"))
+		d := h.deployment()
+		Expect(*d.Spec.Replicas).To(Equal(int32(1)), "the running pods are never stopped for it")
+		Expect(d.Spec.Template.Spec.Containers[0].Image).To(Equal("odoo:a"))
+
+		By("the next push names odoo:c, which did build")
+		od.Spec.Image = "odoo:c"
+		Expect(k8sClient.Update(ctx, od)).To(Succeed())
+		_, od = h.reconcile()
+		Eventually(func() *batchv1.Job { return h.job(stuck) }).Should(BeNil(), "the check for odoo:b is dropped")
+		Expect(h.job(od.ImageCheckJobName()).Spec.Template.Spec.Containers[0].Image).To(Equal("odoo:c"))
+		_, od = h.passImageCheck()
+		Expect(od.Status.Phase).To(Equal(odoov1.PhaseUpgrading))
+		Expect(condition(od, odoov1.ConditionDegraded).Status).To(Equal(metav1.ConditionFalse))
+		Expect(h.job(od.Status.CurrentInitJob.Name).Spec.Template.Spec.Containers[0].Image).To(Equal("odoo:c"))
+	})
+
+	It("replaces an init job stuck pulling its image once spec.image moves on", func() {
+		h.create()
+		h.reconcile()
+		h.podStuckPulling(h.name+"-init", "odoo:a")
+
+		By("stuck on the same image: reported, kept")
+		res, od := h.reconcile()
+		Expect(res.RequeueAfter).To(Equal(15 * time.Second))
+		Expect(od.Status.Phase).To(Equal(odoov1.PhaseInitializing))
+		Expect(condition(od, odoov1.ConditionDegraded).Reason).To(Equal(odoov1.ReasonImagePullFailed))
+		Expect(condition(od, odoov1.ConditionReady).Reason).To(Equal(odoov1.ReasonImagePullFailed))
+		Expect(h.job(h.name + "-init")).NotTo(BeNil())
+
+		By("a new image: the stuck job is replaced")
+		od.Spec.Image = "odoo:b"
+		Expect(k8sClient.Update(ctx, od)).To(Succeed())
+		res, od = h.reconcile()
+		Expect(res.RequeueAfter).To(Equal(time.Second))
+		Expect(od.Status.CurrentInitJob.Name).To(BeEmpty())
+		Eventually(func() *batchv1.Job { return h.job(h.name + "-init") }).Should(BeNil())
+		_, od = h.reconcile()
+		Expect(od.Status.CurrentInitJob.Image).To(Equal("odoo:b"))
+		Expect(h.job(h.name + "-init").Spec.Template.Spec.Containers[0].Image).To(Equal("odoo:b"))
 	})
 
 	It("adopts a pre-existing database as external and never drops it", func() {

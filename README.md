@@ -36,13 +36,18 @@ An `OdooDeployment` moves through `status.phase`:
 |---|---|
 | `Pending` | The database connection or the database itself is not settled yet (see the `Degraded` condition for the reason). |
 | `Initializing` | The `<name>-init` Job installs `spec.modules` (`-i`, with `--load-language` from `spec.config.loadLanguages`) on `spec.image`. No Deployment exists yet. |
-| `Upgrading` | The Deployment is scaled to zero and a `<name>-upgrade-<hash>` Job runs `-i <new modules>` / `-u <spec.upgrade.modules>` on the new image. |
+| `Upgrading` | The new image has been pulled once (see [Upgrades](#upgrades)); the Deployment is scaled to zero and a `<name>-upgrade-<hash>` Job runs `-i <new modules>` / `-u <spec.upgrade.modules>` on it. |
 | `Running` | The Deployment runs `status.appliedImage`; `Ready` is True once the requested replicas are available (or `spec.replicas` is 0). |
 | `Failed` | A maintenance Job failed. Inspect it with `kubectl logs job/<name>`; deleting the Job retries it. |
 
 Conditions: `Ready`, `DatabaseReady`, `Initialized` and `Degraded` (True only when
 something is wrong; its reason names the problem, e.g. `DatabaseMissing`,
-`InitJobFailed`, `QuotaExceeded`, `DatabaseDropFailed`).
+`InitJobFailed`, `QuotaExceeded`, `ImagePullFailed`, `DatabaseDropFailed`).
+
+The `<name>-http` and `<name>-poll` Services are created on the first
+reconcile, before the database and the init Job, so an Ingress pointing at
+them can be applied together with the CR. They have no endpoints until the
+Deployment's pods are ready.
 
 ### Database provenance
 
@@ -68,6 +73,18 @@ something is wrong; its reason names the problem, e.g. `DatabaseMissing`,
   an upgrade Job with `-u <spec.upgrade.modules>` before the Deployment rolls
   to the new image. New entries in `spec.modules` are installed in the same Job.
 - Empty `spec.upgrade.modules` rolls the new image without a Job.
+- **A new image is pulled before anything stops.** When `spec.image` changes on
+  a running instance, a short `<name>-image-<hash>` Job runs
+  `<odooCommand> --version` on it first, without the filestore or the config.
+  Only once it succeeds is the Deployment scaled down (or rolled). Until then
+  the old image keeps serving; if the image cannot be pulled `Degraded` is
+  `ImagePullFailed` (or `ImageCheckFailed` when it pulled but did not run), and
+  a later `spec.image` replaces the check. This is what keeps an instance up
+  when its image tag is published before the image is pushed, or never is.
+- An init or upgrade Job whose pod cannot pull its image is reported as
+  `ImagePullFailed`. If `spec.image` changes meanwhile, the Job is replaced
+  by one for the new image: its container never started, so nothing touched
+  the database.
 - For production set `onImageChange: false` and bump `spec.upgrade.token` to
   run the upgrade on demand.
 - `spec.jobs` bounds the Jobs (`activeDeadlineSeconds`, `ttlSecondsAfterFinished`,
