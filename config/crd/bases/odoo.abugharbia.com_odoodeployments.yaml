@@ -678,6 +678,59 @@ spec:
                     minimum: 0
                     type: integer
                 type: object
+              maintenancePage:
+                default: {}
+                description: |-
+                  MaintenancePage serves a status page instead of an empty Service while
+                  Odoo is being installed, upgraded or started.
+                properties:
+                  accentColor:
+                    default: '#714b67'
+                    description: 'AccentColor is the page''s accent, as #rrggbb.'
+                    pattern: ^#[0-9A-Fa-f]{6}$
+                    type: string
+                  enabled:
+                    default: false
+                    description: |-
+                      Enabled runs a small <name>-maintenance Deployment from the operator's
+                      own image and points the http Service at it whenever Odoo has no
+                      available replica (and spec.replicas is not 0). The poll Service always
+                      stays on Odoo.
+                    type: boolean
+                  logo:
+                    description: |-
+                      Logo is shown instead of the title's initial. It must be a base64 data
+                      URI: Odoo is not answering while the page is up, so the page cannot
+                      load images from it.
+                    maxLength: 65536
+                    pattern: ^data:image/(png|jpeg|gif|webp|svg\+xml);base64,[A-Za-z0-9+/]+=*$
+                    type: string
+                  title:
+                    default: Odoo
+                    description: Title is the product name the page shows ("Updating
+                      <title>").
+                    maxLength: 64
+                    minLength: 1
+                    pattern: ^[^\n\r<>]*$
+                    type: string
+                  titleTranslations:
+                    additionalProperties:
+                      description: MaintenancePageText is one line of text shown on
+                        the maintenance page.
+                      maxLength: 64
+                      minLength: 1
+                      pattern: ^[^\n\r<>]*$
+                      type: string
+                    description: |-
+                      TitleTranslations replaces the title for a page language. The page is
+                      shown in English or Arabic, picked from the browser's Accept-Language,
+                      so the only key it reads today is "ar".
+                    maxProperties: 8
+                    type: object
+                    x-kubernetes-validations:
+                    - message: keys must be language codes such as ar
+                      rule: self.all(k, k.matches('^[a-z]{2,3}$'))
+                type: object
               modules:
                 default:
                 - base
@@ -1621,6 +1674,10 @@ spec:
                   name:
                     description: The name of the Job
                     type: string
+                  startedAt:
+                    description: StartedAt is when the operator created the Job.
+                    format: date-time
+                    type: string
                   token:
                     description: Token is the spec.upgrade.token the Job was created
                       for; becomes status.appliedUpgradeToken on success
@@ -1667,6 +1724,13 @@ spec:
                 items:
                   type: string
                 type: array
+              lastMaintenanceDuration:
+                description: |-
+                  LastMaintenanceDuration is how long the last successful upgrade Job
+                  took, from its creation to its completion. The maintenance page uses it
+                  to estimate the next one. Init Jobs are not counted: they run once and
+                  take far longer than an upgrade.
+                type: string
               observedGeneration:
                 description: ObservedGeneration is the spec generation the status
                   reflects.

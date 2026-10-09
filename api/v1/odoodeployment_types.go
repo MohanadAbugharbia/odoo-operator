@@ -44,6 +44,11 @@ const (
 	// JobKindImageCheck is the short Job that proves a new spec.image can be
 	// pulled before the running Deployment is scaled down for it.
 	JobKindImageCheck = "image-check"
+
+	// LabelMaintenancePage selects the maintenance page pods of an
+	// OdooDeployment. They never carry the Odoo selector or
+	// LabelOdooDeployment, so they are not counted as Odoo pods.
+	LabelMaintenancePage = "odoo.abugharbia.com/maintenance-page"
 )
 
 // Condition types.
@@ -134,6 +139,8 @@ const (
 	ReasonReconcileFailed       = "ReconcileFailed"
 	ReasonInvalidSpec           = "InvalidSpec"
 	ReasonDeleting              = "Deleting"
+
+	ReasonMaintenancePageFailed = "MaintenancePageFailed"
 )
 
 // Image pull reasons.
@@ -405,6 +412,47 @@ type OdooProbesConfig struct {
 	Startup *corev1.Probe `json:"startup,omitempty"`
 }
 
+// MaintenancePageText is one line of text shown on the maintenance page.
+// +kubebuilder:validation:MinLength=1
+// +kubebuilder:validation:MaxLength=64
+// +kubebuilder:validation:Pattern=`^[^\n\r<>]*$`
+type MaintenancePageText string
+
+// MaintenancePageConfig controls the page the http Service serves while Odoo
+// itself cannot answer: during the init and upgrade Jobs and until the
+// Deployment has an available replica again.
+type MaintenancePageConfig struct {
+	// Enabled runs a small <name>-maintenance Deployment from the operator's
+	// own image and points the http Service at it whenever Odoo has no
+	// available replica (and spec.replicas is not 0). The poll Service always
+	// stays on Odoo.
+	// +kubebuilder:default=false
+	Enabled bool `json:"enabled,omitempty"`
+
+	// Title is the product name the page shows ("Updating <title>").
+	// +kubebuilder:default="Odoo"
+	Title MaintenancePageText `json:"title,omitempty"`
+
+	// TitleTranslations replaces the title for a page language. The page is
+	// shown in English or Arabic, picked from the browser's Accept-Language,
+	// so the only key it reads today is "ar".
+	// +kubebuilder:validation:MaxProperties=8
+	// +kubebuilder:validation:XValidation:rule="self.all(k, k.matches('^[a-z]{2,3}$'))",message="keys must be language codes such as ar"
+	TitleTranslations map[string]MaintenancePageText `json:"titleTranslations,omitempty"`
+
+	// AccentColor is the page's accent, as #rrggbb.
+	// +kubebuilder:default="#714b67"
+	// +kubebuilder:validation:Pattern=`^#[0-9A-Fa-f]{6}$`
+	AccentColor string `json:"accentColor,omitempty"`
+
+	// Logo is shown instead of the title's initial. It must be a base64 data
+	// URI: Odoo is not answering while the page is up, so the page cannot
+	// load images from it.
+	// +kubebuilder:validation:MaxLength=65536
+	// +kubebuilder:validation:Pattern=`^data:image/(png|jpeg|gif|webp|svg\+xml);base64,[A-Za-z0-9+/]+=*$`
+	Logo string `json:"logo,omitempty"`
+}
+
 // OdooDeploymentSpec defines the desired state of OdooDeployment
 type OdooDeploymentSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
@@ -488,6 +536,12 @@ type OdooDeploymentSpec struct {
 	// operator uses runAsUser 100, runAsGroup 101, fsGroup 101, runAsNonRoot.
 	// +kubebuilder:validation:Optional
 	PodSecurityContext *corev1.PodSecurityContext `json:"podSecurityContext,omitempty"`
+
+	// MaintenancePage serves a status page instead of an empty Service while
+	// Odoo is being installed, upgraded or started.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default={}
+	MaintenancePage MaintenancePageConfig `json:"maintenancePage,omitempty"`
 }
 
 // MaintenanceJobStatus records the maintenance Job (init or upgrade) the
@@ -507,6 +561,8 @@ type MaintenanceJobStatus struct {
 	Modules []string `json:"modules,omitempty"`
 	// The list of modules that are being upgraded (-u)
 	UpgradeModules []string `json:"upgradeModules,omitempty"`
+	// StartedAt is when the operator created the Job.
+	StartedAt *metav1.Time `json:"startedAt,omitempty"`
 }
 
 // OdooDatabaseStatus records the database the operator resolved for this OdooDeployment.
@@ -566,6 +622,13 @@ type OdooDeploymentStatus struct {
 	// The maintenance Job (init or upgrade) currently running
 	// +kubebuilder:validation:Optional
 	CurrentInitJob MaintenanceJobStatus `json:"currentInitJob,omitempty"`
+
+	// LastMaintenanceDuration is how long the last successful upgrade Job
+	// took, from its creation to its completion. The maintenance page uses it
+	// to estimate the next one. Init Jobs are not counted: they run once and
+	// take far longer than an upgrade.
+	// +kubebuilder:validation:Optional
+	LastMaintenanceDuration *metav1.Duration `json:"lastMaintenanceDuration,omitempty"`
 
 	// The secret name for the Odoo admin password
 	// +kubebuilder:validation:Optional

@@ -58,6 +58,9 @@ type OdooDeploymentReconciler struct {
 	DB database.Provisioner
 	// Recorder emits Kubernetes events on the OdooDeployment.
 	Recorder record.EventRecorder
+	// MaintenancePageImage is the operator's own image, which also serves
+	// spec.maintenancePage. Empty disables the page.
+	MaintenancePageImage string
 }
 
 var apiSGVString = odoov1.GroupVersion.String()
@@ -91,6 +94,7 @@ func IsOwnedByOdooDeployment(obj client.Object) (string, bool) {
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=events,verbs=get;list;watch;create;patch
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 
 // reconcileState carries one reconcile's working copy of the OdooDeployment
 // and the snapshot the deferred status patch is computed against.
@@ -218,6 +222,10 @@ func (r *OdooDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	defer func() {
 		if patchErr := s.patchStatus(ctx); patchErr != nil {
 			err = utilerrors.NewAggregate([]error{err, patchErr})
+		}
+		// After the status patch, so the page shows what this reconcile decided.
+		if pubErr := r.publishMaintenancePage(ctx, s.od); pubErr != nil {
+			err = utilerrors.NewAggregate([]error{err, pubErr})
 		}
 	}()
 
@@ -370,16 +378,63 @@ func (r *OdooDeploymentReconciler) reconcileSteadyState(ctx context.Context, s *
 	return ctrl.Result{}, nil
 }
 
-// ensureServices creates or updates the HTTP and poll Services and returns
-// the failure reason with the error.
+// ensureServices creates or updates the maintenance page and the HTTP and
+// poll Services, and returns the failure reason with the error.
 func (r *OdooDeploymentReconciler) ensureServices(ctx context.Context, od *odoov1.OdooDeployment) (string, error) {
-	if _, err := reconcileloops.EnsureHttpService(ctx, r.Client, r.Scheme, od); err != nil {
+	maintenance, err := r.ensureMaintenancePage(ctx, od)
+	if err != nil {
+		return odoov1.ReasonMaintenancePageFailed, err
+	}
+	if _, err := reconcileloops.EnsureHttpService(ctx, r.Client, r.Scheme, od, maintenance); err != nil {
 		return odoov1.ReasonFailedCreateHttpService, err
 	}
 	if _, err := reconcileloops.EnsurePollService(ctx, r.Client, r.Scheme, od); err != nil {
 		return odoov1.ReasonFailedCreatePollService, err
 	}
 	return "", nil
+}
+
+// ensureMaintenancePage runs the maintenance page while Odoo has no available
+// replica, and reports whether the http Service should point at it. The poll
+// Service never moves: only Odoo answers the longpolling port.
+func (r *OdooDeploymentReconciler) ensureMaintenancePage(ctx context.Context, od *odoov1.OdooDeployment) (bool, error) {
+	if !od.Spec.MaintenancePage.Enabled || r.MaintenancePageImage == "" {
+		if od.Spec.MaintenancePage.Enabled {
+			log.FromContext(ctx).Info("spec.maintenancePage is enabled but the operator does not know its own image; serving no page")
+		}
+		return false, reconcileloops.RemoveMaintenancePage(ctx, r.Client, od)
+	}
+	serve := false
+	// At spec.replicas 0 nobody is meant to be served, so there is nothing
+	// to wait for either.
+	if od.Spec.ReplicasValue() > 0 {
+		odoo := &appsv1.Deployment{}
+		err := r.Get(ctx, client.ObjectKey{Name: od.Name, Namespace: od.Namespace}, odoo)
+		switch {
+		case apierrors.IsNotFound(err):
+			serve = true
+		case err != nil:
+			return false, fmt.Errorf("get deployment: %w", err)
+		default:
+			serve = odoo.Status.AvailableReplicas == 0
+		}
+	}
+	replicas := int32(0)
+	if serve {
+		replicas = 1
+	}
+	if _, err := reconcileloops.EnsureMaintenancePage(ctx, r.Client, r.Scheme, od, r.MaintenancePageImage, replicas); err != nil {
+		return false, err
+	}
+	return serve, nil
+}
+
+// publishMaintenancePage writes the page's status for a page that is enabled.
+func (r *OdooDeploymentReconciler) publishMaintenancePage(ctx context.Context, od *odoov1.OdooDeployment) error {
+	if !od.Spec.MaintenancePage.Enabled || r.MaintenancePageImage == "" || !od.DeletionTimestamp.IsZero() {
+		return nil
+	}
+	return reconcileloops.PublishMaintenancePageStatus(ctx, r.Client, r.Scheme, od)
 }
 
 // gateNewImage holds a rollout back until spec.image has been pulled once.
@@ -513,6 +568,11 @@ func (r *OdooDeploymentReconciler) observeCurrentJob(ctx context.Context, s *rec
 			od.Status.AppliedImage = current.Image
 		}
 		od.Status.AppliedUpgradeToken = current.Token
+		if current.Kind == odoov1.JobKindUpgrade {
+			if took := jobDuration(current, obs.Job); took > 0 {
+				od.Status.LastMaintenanceDuration = &metav1.Duration{Duration: took}
+			}
+		}
 		if err := reconcileloops.DeleteMaintenanceJob(ctx, r.Client, obs.Job); err != nil {
 			result, err := s.fail(odoov1.ReasonReconcileFailed, err)
 			return result, false, err
@@ -612,7 +672,12 @@ func (r *OdooDeploymentReconciler) startMaintenanceJob(
 	if err != nil {
 		return s.fail(odoov1.ReasonJobCreationFailed, err)
 	}
+	startedAt := job.CreationTimestamp
+	if startedAt.IsZero() {
+		startedAt = metav1.Now()
+	}
 	od.Status.CurrentInitJob = odoov1.MaintenanceJobStatus{
+		StartedAt:      &startedAt,
 		Name:           job.Name,
 		Namespace:      job.Namespace,
 		Kind:           kind,
@@ -698,6 +763,23 @@ func (r *OdooDeploymentReconciler) reconcileDelete(ctx context.Context, s *recon
 	}
 
 	return ctrl.Result{}, s.setFinalizer(ctx, false)
+}
+
+// jobDuration is how long a finished maintenance Job took, from its creation
+// (status.currentInitJob.startedAt) to its completion, rounded to the second.
+func jobDuration(current odoov1.MaintenanceJobStatus, job *batchv1.Job) time.Duration {
+	start := current.StartedAt
+	if start == nil && job != nil {
+		start = job.Status.StartTime
+	}
+	if start == nil {
+		return 0
+	}
+	end := time.Now()
+	if job != nil && job.Status.CompletionTime != nil {
+		end = job.Status.CompletionTime.Time
+	}
+	return end.Sub(start.Time).Round(time.Second)
 }
 
 func dedupe(in []string) []string {

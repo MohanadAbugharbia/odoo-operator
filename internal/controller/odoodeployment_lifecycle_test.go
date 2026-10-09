@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -25,6 +26,7 @@ import (
 
 	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/database"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/maintenancepage"
 )
 
 var lifecycleCounter int64
@@ -61,6 +63,8 @@ func newHarness() *harness {
 		APIReader: k8sClient,
 		DB:        h.fake,
 		Recorder:  h.recorder,
+
+		MaintenancePageImage: "operator:test",
 	}
 	h.dbSecret = &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: name + "-db", Namespace: ns},
@@ -220,6 +224,43 @@ func (h *harness) podStuckPulling(jobName, image string) {
 	Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
 }
 
+// service returns the <name><suffix> Service.
+func (h *harness) service(suffix string) *corev1.Service {
+	svc := &corev1.Service{}
+	Expect(k8sClient.Get(ctx, types.NamespacedName{Name: h.name + suffix, Namespace: ns}, svc)).To(Succeed())
+	return svc
+}
+
+// maintenancePage returns the maintenance page Deployment, nil when absent.
+func (h *harness) maintenancePage() *appsv1.Deployment {
+	d := &appsv1.Deployment{}
+	err := k8sClient.Get(ctx, types.NamespacedName{Name: h.name + "-maintenance", Namespace: ns}, d)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	Expect(err).NotTo(HaveOccurred())
+	return d
+}
+
+// maintenanceStatus returns the page's status from its ConfigMap.
+func (h *harness) maintenanceStatus() maintenancepage.Snapshot {
+	cm := &corev1.ConfigMap{}
+	Expect(k8sClient.Get(ctx, types.NamespacedName{Name: h.name + "-maintenance", Namespace: ns}, cm)).To(Succeed())
+	var snap maintenancepage.Snapshot
+	Expect(json.Unmarshal([]byte(cm.Data["status.json"]), &snap)).To(Succeed())
+	return snap
+}
+
+// setAvailable sets the Odoo Deployment's available replicas, as the
+// Deployment controller would.
+func (h *harness) setAvailable(n int32) {
+	d := h.deployment()
+	Expect(d).NotTo(BeNil())
+	d.Status.ObservedGeneration = d.Generation
+	d.Status.Replicas, d.Status.AvailableReplicas, d.Status.ReadyReplicas = n, n, n
+	Expect(k8sClient.Status().Update(ctx, d)).To(Succeed())
+}
+
 func condition(od *odoov1.OdooDeployment, t string) *metav1.Condition {
 	return meta.FindStatusCondition(od.Status.Conditions, t)
 }
@@ -233,6 +274,8 @@ func (h *harness) cleanup() {
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: h.name + "-config", Namespace: ns}},
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: h.name + "-admin-password", Namespace: ns}},
 		&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: h.name, Namespace: ns}},
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: h.name + "-maintenance", Namespace: ns}},
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: h.name + "-maintenance", Namespace: ns}},
 		h.dbSecret,
 	} {
 		if err := k8sClient.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
@@ -547,6 +590,108 @@ var _ = Describe("OdooDeployment lifecycle", func() {
 		Expect(h.job(h.name + "-init").Spec.Template.Spec.Containers[0].Image).To(Equal("odoo:b"))
 	})
 
+	It("serves the maintenance page on the http Service while Odoo has no available replica", func() {
+		h.create(func(od *odoov1.OdooDeployment) {
+			od.Spec.MaintenancePage = odoov1.MaintenancePageConfig{Enabled: true, Title: "Ababiel", AccentColor: "#f2800d"}
+		})
+		odooSelector := map[string]string{"app": h.name}
+		pageSelector := map[string]string{odoov1.LabelMaintenancePage: h.name}
+
+		By("first boot: the page runs and the http Service selects it, the poll Service stays on Odoo")
+		_, od := h.reconcile()
+		Expect(od.Status.Phase).To(Equal(odoov1.PhaseInitializing))
+		Expect(od.Status.CurrentInitJob.StartedAt).NotTo(BeNil())
+		Expect(h.service("-http").Spec.Selector).To(Equal(pageSelector))
+		Expect(h.service("-poll").Spec.Selector).To(Equal(odooSelector))
+		page := h.maintenancePage()
+		Expect(page).NotTo(BeNil())
+		Expect(*page.Spec.Replicas).To(Equal(int32(1)))
+		Expect(metav1.GetControllerOf(page).UID).To(Equal(od.UID))
+		pod := page.Spec.Template
+		Expect(pod.Labels).To(Equal(pageSelector), "never counted as an Odoo pod")
+		Expect(pod.Spec.AutomountServiceAccountToken).To(HaveValue(BeFalse()), "the page needs no API access")
+		Expect(pod.Spec.Containers[0].Image).To(Equal("operator:test"))
+		Expect(pod.Spec.Containers[0].Command).To(Equal([]string{"/odoo-operator", "maintenance-page"}))
+		Expect(pod.Spec.Containers[0].Ports[0].ContainerPort).To(Equal(int32(8069)))
+		Expect(pod.Spec.Volumes[0].ConfigMap.Name).To(Equal(h.name + "-maintenance"))
+
+		By("the page's status is published in its ConfigMap")
+		snap := h.maintenanceStatus()
+		Expect(snap.Page.Title).To(BeEquivalentTo("Ababiel"))
+		Expect(snap.Status.State).To(Equal(maintenancepage.StateInstalling))
+		Expect(snap.Status.StartedAt).NotTo(BeNil())
+		h.reconcile()
+		Expect(h.maintenancePage().ResourceVersion).To(Equal(page.ResourceVersion), "an unchanged page is not rewritten")
+
+		By("the init job is done but Odoo is still starting: the page stays")
+		h.succeedJob(h.name + "-init")
+		h.reconcile()
+		_, od = h.reconcile()
+		Expect(od.Status.Phase).To(Equal(odoov1.PhaseRunning))
+		Expect(h.service("-http").Spec.Selector).To(Equal(pageSelector))
+		Expect(h.maintenanceStatus().Status.State).To(Equal(maintenancepage.StateStarting))
+
+		By("Odoo is available: the Service is back on Odoo and the page scales to zero")
+		h.setAvailable(1)
+		h.reconcile()
+		Expect(h.service("-http").Spec.Selector).To(Equal(odooSelector))
+		Expect(*h.maintenancePage().Spec.Replicas).To(BeZero())
+
+		By("an upgrade: the page is back once Odoo's pods are gone")
+		od = h.get()
+		od.Spec.Image = "odoo:b"
+		Expect(k8sClient.Update(ctx, od)).To(Succeed())
+		h.reconcile()
+		_, od = h.passImageCheck()
+		Expect(od.Status.Phase).To(Equal(odoov1.PhaseUpgrading))
+		Expect(h.service("-http").Spec.Selector).To(Equal(odooSelector), "the old pods still answer while they stop")
+		h.setAvailable(0)
+		_, od = h.reconcile()
+		Expect(h.service("-http").Spec.Selector).To(Equal(pageSelector))
+		Expect(*h.maintenancePage().Spec.Replicas).To(Equal(int32(1)))
+		Expect(h.maintenanceStatus().Status).To(MatchFields(IgnoreExtras, Fields{
+			"State": Equal(maintenancepage.StateUpdating), "Version": Equal("b"),
+		}))
+
+		By("the upgrade's duration is kept for the next one")
+		started := od.Status.CurrentInitJob.StartedAt
+		Expect(started).NotTo(BeNil())
+		job := h.job(od.Status.CurrentInitJob.Name)
+		markJobSucceeded(job)
+		finished := metav1.NewTime(started.Add(170 * time.Second))
+		job.Status.StartTime, job.Status.CompletionTime = started, &finished
+		Expect(k8sClient.Status().Update(ctx, job)).To(Succeed())
+		_, od = h.reconcile()
+		Expect(od.Status.AppliedImage).To(Equal("odoo:b"))
+		Expect(od.Status.LastMaintenanceDuration).NotTo(BeNil())
+		Expect(od.Status.LastMaintenanceDuration.Duration).To(Equal(170 * time.Second))
+		Expect(h.maintenanceStatus().Status.State).To(Equal(maintenancepage.StateStarting))
+
+		By("turning the page off removes it and points the Service at Odoo")
+		od.Spec.MaintenancePage.Enabled = false
+		Expect(k8sClient.Update(ctx, od)).To(Succeed())
+		h.reconcile()
+		Expect(h.service("-http").Spec.Selector).To(Equal(odooSelector))
+		Expect(h.maintenancePage()).To(BeNil())
+		err := k8sClient.Get(ctx, types.NamespacedName{Name: h.name + "-maintenance", Namespace: ns}, &corev1.ConfigMap{})
+		Expect(apierrors.IsNotFound(err)).To(BeTrue())
+	})
+
+	It("serves no maintenance page at replicas 0 or without the operator image", func() {
+		zero := int32(0)
+		h.create(func(od *odoov1.OdooDeployment) {
+			od.Spec.Replicas = &zero
+			od.Spec.MaintenancePage.Enabled = true
+		})
+		h.bootToRunning()
+		Expect(h.service("-http").Spec.Selector).To(Equal(map[string]string{"app": h.name}))
+		Expect(*h.maintenancePage().Spec.Replicas).To(BeZero())
+
+		h.r.MaintenancePageImage = ""
+		h.reconcile()
+		Expect(h.maintenancePage()).To(BeNil())
+	})
+
 	It("adopts a pre-existing database as external and never drops it", func() {
 		h.fake.Seed(h.dbName(), "")
 		h.create()
@@ -757,6 +902,9 @@ var _ = Describe("CRD admission", func() {
 		Expect(od.Spec.Database.CreatePolicy).To(Equal(odoov1.DatabaseCreatePolicyIfNotExists))
 		Expect(od.Spec.Database.MaintenanceDatabase).To(Equal("postgres"))
 		Expect(od.Spec.OdooFilestore.DeletionPolicy).To(Equal(odoov1.DeletionPolicyDelete))
+		Expect(od.Spec.MaintenancePage.Enabled).To(BeFalse())
+		Expect(od.Spec.MaintenancePage.Title).To(BeEquivalentTo("Odoo"))
+		Expect(od.Spec.MaintenancePage.AccentColor).To(Equal("#714b67"))
 	})
 
 	DescribeTable("rejects invalid specs",
@@ -777,5 +925,11 @@ var _ = Describe("CRD admission", func() {
 		}, "extraOptions"),
 		Entry("bad language code", func(od *odoov1.OdooDeployment) { od.Spec.Config.LoadLanguages = []string{"english"} }, "spec.config.loadLanguages"),
 		Entry("bad createPolicy", func(od *odoov1.OdooDeployment) { od.Spec.Database.CreatePolicy = "Always" }, "spec.database.createPolicy"),
+		Entry("named accent colour", func(od *odoov1.OdooDeployment) { od.Spec.MaintenancePage.AccentColor = "orange" }, "spec.maintenancePage.accentColor"),
+		Entry("logo URL", func(od *odoov1.OdooDeployment) { od.Spec.MaintenancePage.Logo = "https://example.com/logo.png" }, "spec.maintenancePage.logo"),
+		Entry("markup in the title", func(od *odoov1.OdooDeployment) { od.Spec.MaintenancePage.Title = "<b>Odoo</b>" }, "spec.maintenancePage.title"),
+		Entry("bad title language", func(od *odoov1.OdooDeployment) {
+			od.Spec.MaintenancePage.TitleTranslations = map[string]odoov1.MaintenancePageText{"Arabic": "أبابيل"}
+		}, "spec.maintenancePage.titleTranslations"),
 	)
 })
