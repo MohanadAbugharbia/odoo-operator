@@ -81,9 +81,10 @@ spec:
   its own pod; `--maintenance-page-image` overrides it.
 - The page needs no access to the API server: after every reconcile the
   operator writes what the page shows into the `<name>-maintenance`
-  ConfigMap, which the pod mounts (no ServiceAccount token). The kubelet
-  refreshes the mount within about a minute, so a step change can show up
-  that late; the elapsed time and the return to Odoo do not depend on it.
+  ConfigMap, which the pod mounts (no ServiceAccount token). On each change
+  it also stamps the status hash on the page pods
+  (`odoo.abugharbia.com/maintenance-status`), which makes the kubelet refresh
+  the mount at once instead of on its next periodic sync, up to a minute later.
 - It answers like a server that is down, so Odoo's own clients keep their
   offline behaviour: a page navigation (`Sec-Fetch-Mode: navigate`) gets the
   page with status 503, and every other request (RPC, assets, `/web/health`,

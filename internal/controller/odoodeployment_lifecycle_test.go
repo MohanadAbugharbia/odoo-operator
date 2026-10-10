@@ -623,6 +623,16 @@ var _ = Describe("OdooDeployment lifecycle", func() {
 		h.reconcile()
 		Expect(h.maintenancePage().ResourceVersion).To(Equal(page.ResourceVersion), "an unchanged page is not rewritten")
 
+		pagePod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: h.name + "-maintenance-pod", Namespace: ns, Labels: pageSelector},
+			Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "maintenance-page", Image: "operator:test"}}},
+		}
+		Expect(k8sClient.Create(ctx, pagePod)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, pagePod, client.GracePeriodSeconds(0)) })
+		h.reconcile()
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(pagePod), pagePod)).To(Succeed())
+		Expect(pagePod.Annotations).NotTo(HaveKey(odoov1.AnnotationMaintenanceStatus), "an unchanged status leaves the pod alone")
+
 		By("the init job is done but Odoo is still starting: the page stays")
 		h.succeedJob(h.name + "-init")
 		h.reconcile()
@@ -630,6 +640,10 @@ var _ = Describe("OdooDeployment lifecycle", func() {
 		Expect(od.Status.Phase).To(Equal(odoov1.PhaseRunning))
 		Expect(h.service("-http").Spec.Selector).To(Equal(pageSelector))
 		Expect(h.maintenanceStatus().Status.State).To(Equal(maintenancepage.StateStarting))
+
+		By("the running page pod is nudged so the kubelet refreshes its mount at once")
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(pagePod), pagePod)).To(Succeed())
+		Expect(pagePod.Annotations).To(HaveKeyWithValue(odoov1.AnnotationMaintenanceStatus, HaveLen(16)))
 
 		By("Odoo is available: the Service is back on Odoo and the page scales to zero")
 		h.setAvailable(1)

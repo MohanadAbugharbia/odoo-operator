@@ -2,6 +2,8 @@ package reconcileloops
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 
@@ -59,19 +61,59 @@ func EnsureMaintenancePage(
 // PublishMaintenancePageStatus writes what the page shows into the
 // <name>-maintenance ConfigMap the page mounts. The snapshot carries no clock,
 // so the ConfigMap only changes when the page has something new to show.
-func PublishMaintenancePageStatus(ctx context.Context, c client.Client, scheme *runtime.Scheme, od *odoov1.OdooDeployment) error {
+//
+// The kubelet refreshes a mounted ConfigMap only when it syncs the pod, which
+// it does once a minute on its own. A change to the pod object makes it sync
+// at once, so on every change the running page pods get the snapshot's hash
+// as an annotation and pick it up within a second or two.
+func PublishMaintenancePageStatus(
+	ctx context.Context,
+	c client.Client,
+	reader client.Reader,
+	scheme *runtime.Scheme,
+	od *odoov1.OdooDeployment,
+) error {
 	data, err := json.Marshal(maintenancepage.SnapshotOf(od))
 	if err != nil {
 		return fmt.Errorf("encode maintenance page status: %w", err)
 	}
 	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: od.MaintenancePageName(), Namespace: od.Namespace}}
-	_, err = controllerutil.CreateOrUpdate(ctx, c, cm, func() error {
+	result, err := controllerutil.CreateOrUpdate(ctx, c, cm, func() error {
 		cm.Labels = mergeMaps(cm.Labels, od.GetMaintenancePageSelectorLabels())
 		cm.Data = map[string]string{odoov1.MaintenancePageStatusKey: string(data)}
 		return controllerutil.SetControllerReference(od, cm, scheme)
 	})
 	if err != nil {
 		return fmt.Errorf("maintenance page configmap %s: %w", cm.Name, err)
+	}
+	if result != controllerutil.OperationResultUpdated {
+		// Unchanged, or just created: a pod that starts reads it as it is.
+		return nil
+	}
+	sum := sha256.Sum256(data)
+	return nudgeMaintenancePods(ctx, c, reader, od, hex.EncodeToString(sum[:])[:16])
+}
+
+// nudgeMaintenancePods sets AnnotationMaintenanceStatus on the running page
+// pods (best effort: a pod that misses it still refreshes within a minute).
+func nudgeMaintenancePods(ctx context.Context, c client.Client, reader client.Reader, od *odoov1.OdooDeployment, hash string) error {
+	pods := &corev1.PodList{}
+	if err := reader.List(ctx, pods, client.InNamespace(od.Namespace), client.MatchingLabels(od.GetMaintenancePageSelectorLabels())); err != nil {
+		return fmt.Errorf("list maintenance page pods: %w", err)
+	}
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if !pod.DeletionTimestamp.IsZero() || pod.Annotations[odoov1.AnnotationMaintenanceStatus] == hash {
+			continue
+		}
+		patch := client.MergeFrom(pod.DeepCopy())
+		if pod.Annotations == nil {
+			pod.Annotations = map[string]string{}
+		}
+		pod.Annotations[odoov1.AnnotationMaintenanceStatus] = hash
+		if err := c.Patch(ctx, pod, patch); err != nil && !errors.IsNotFound(err) {
+			return fmt.Errorf("annotate maintenance page pod %s: %w", pod.Name, err)
+		}
 	}
 	return nil
 }

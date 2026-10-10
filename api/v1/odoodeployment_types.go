@@ -38,6 +38,10 @@ const (
 	// AnnotationConfigHash carries the sha256 of the rendered odoo.conf on the
 	// Deployment pod template so that config changes roll the pods.
 	AnnotationConfigHash = "odoo.abugharbia.com/config-hash"
+	// AnnotationMaintenanceStatus carries the hash of the maintenance page's
+	// status on its pods; changing it makes the kubelet refresh the mounted
+	// status at once instead of on its next periodic sync.
+	AnnotationMaintenanceStatus = "odoo.abugharbia.com/maintenance-status"
 
 	JobKindInit    = "init"
 	JobKindUpgrade = "upgrade"

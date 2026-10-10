@@ -88,7 +88,7 @@ func IsOwnedByOdooDeployment(obj client.Object) (string, bool) {
 // +kubebuilder:rbac:groups=odoo.abugharbia.com,resources=odoodeployments/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=odoo.abugharbia.com,resources=odoodeployments/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;delete
+// +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;patch;delete
 // +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch;delete
@@ -434,7 +434,7 @@ func (r *OdooDeploymentReconciler) publishMaintenancePage(ctx context.Context, o
 	if !od.Spec.MaintenancePage.Enabled || r.MaintenancePageImage == "" || !od.DeletionTimestamp.IsZero() {
 		return nil
 	}
-	return reconcileloops.PublishMaintenancePageStatus(ctx, r.Client, r.Scheme, od)
+	return reconcileloops.PublishMaintenancePageStatus(ctx, r.Client, r.reader(), r.Scheme, od)
 }
 
 // gateNewImage holds a rollout back until spec.image has been pulled once.
