@@ -59,6 +59,17 @@ spec:
           - --health-probe-bind-address=:8081
         image: operator:latest
         name: manager
+        env:
+          # The operator reads its own pod to learn its image, which also
+          # serves spec.maintenancePage.
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          - name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:

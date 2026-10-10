@@ -43,12 +43,19 @@ func ensureService(
 	return service, nil
 }
 
-// EnsureHttpService reconciles the <name>-http Service (port 8069).
+// EnsureHttpService reconciles the <name>-http Service (port 8069). It
+// selects the Odoo pods, or the maintenance page pods when maintenancePage is
+// true.
 func EnsureHttpService(
 	ctx context.Context,
 	c client.Client,
 	scheme *runtime.Scheme,
 	od *odoov1.OdooDeployment,
+	maintenancePage bool,
 ) (*corev1.Service, error) {
-	return ensureService(ctx, c, scheme, od, od.GetHttpServiceTemplate())
+	desired := od.GetHttpServiceTemplate()
+	if maintenancePage {
+		desired.Spec.Selector = od.GetMaintenancePageSelectorLabels()
+	}
+	return ensureService(ctx, c, scheme, od, desired)
 }

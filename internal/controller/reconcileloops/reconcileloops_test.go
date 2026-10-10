@@ -167,7 +167,7 @@ var _ = Describe("Reconcile loops", func() {
 
 	Context("Services", func() {
 		It("creates both services owned by the CR and keeps the ClusterIP", func() {
-			http, err := EnsureHttpService(ctx, k8sClient, k8sClient.Scheme(), od)
+			http, err := EnsureHttpService(ctx, k8sClient, k8sClient.Scheme(), od, false)
 			Expect(err).NotTo(HaveOccurred())
 			poll, err := EnsurePollService(ctx, k8sClient, k8sClient.Scheme(), od)
 			Expect(err).NotTo(HaveOccurred())
@@ -177,7 +177,7 @@ var _ = Describe("Reconcile loops", func() {
 			Expect(poll.Spec.Ports[0].Port).To(Equal(int32(8072)))
 			Expect(http.Spec.ClusterIP).NotTo(BeEmpty())
 
-			again, err := EnsureHttpService(ctx, k8sClient, k8sClient.Scheme(), od)
+			again, err := EnsureHttpService(ctx, k8sClient, k8sClient.Scheme(), od, false)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(again.Spec.ClusterIP).To(Equal(http.Spec.ClusterIP))
 			Expect(again.ResourceVersion).To(Equal(http.ResourceVersion))

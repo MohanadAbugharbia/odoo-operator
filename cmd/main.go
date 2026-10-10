@@ -17,8 +17,11 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
+	"errors"
 	"flag"
+	"fmt"
 	"os"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -26,10 +29,13 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	"go.uber.org/zap/zapcore"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -39,6 +45,7 @@ import (
 	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/controller"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/database"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/maintenancepage"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -54,7 +61,38 @@ func init() {
 	// +kubebuilder:scaffold:scheme
 }
 
+// managerContainer is the operator's container in config/manager/manager.yaml.
+const managerContainer = "manager"
+
+// ownImage returns the image the operator runs, read from its own pod
+// (POD_NAME and POD_NAMESPACE come from the downward API). The maintenance
+// page runs from the same image.
+func ownImage(ctx context.Context, reader client.Reader) (string, error) {
+	name, namespace := os.Getenv("POD_NAME"), os.Getenv("POD_NAMESPACE")
+	if name == "" || namespace == "" {
+		return "", errors.New("POD_NAME and POD_NAMESPACE are not set")
+	}
+	pod := &corev1.Pod{}
+	if err := reader.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, pod); err != nil {
+		return "", fmt.Errorf("get own pod: %w", err)
+	}
+	for _, c := range pod.Spec.Containers {
+		if c.Name == managerContainer {
+			return c.Image, nil
+		}
+	}
+	return "", fmt.Errorf("pod %s/%s has no %q container", namespace, name, managerContainer)
+}
+
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == maintenancepage.Command {
+		if err := maintenancepage.Run(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	var metricsAddr string
 	var enableLeaderElection bool
 	var probeAddr string
@@ -62,6 +100,7 @@ func main() {
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
 	var logLevel string
+	var maintenancePageImage string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -73,6 +112,8 @@ func main() {
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
+	flag.StringVar(&maintenancePageImage, "maintenance-page-image", "",
+		"Image that serves spec.maintenancePage. Defaults to the operator's own image, read from its pod.")
 	flag.Parse()
 
 	var zapLevel zapcore.Level
@@ -151,12 +192,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	if maintenancePageImage == "" {
+		image, err := ownImage(context.Background(), mgr.GetAPIReader())
+		if err != nil {
+			setupLog.Error(err, "cannot tell the operator's own image; spec.maintenancePage is disabled "+
+				"(set --maintenance-page-image to enable it)")
+		}
+		maintenancePageImage = image
+	}
+	setupLog.Info("maintenance page image", "image", maintenancePageImage)
+
 	if err = (&controller.OdooDeploymentReconciler{
-		Client:    mgr.GetClient(),
-		Scheme:    mgr.GetScheme(),
-		APIReader: mgr.GetAPIReader(),
-		DB:        database.NewPgx(),
-		Recorder:  mgr.GetEventRecorderFor("odoodeployment-controller"),
+		Client:               mgr.GetClient(),
+		Scheme:               mgr.GetScheme(),
+		APIReader:            mgr.GetAPIReader(),
+		DB:                   database.NewPgx(),
+		Recorder:             mgr.GetEventRecorderFor("odoodeployment-controller"),
+		MaintenancePageImage: maintenancePageImage,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "OdooDeployment")
 		os.Exit(1)

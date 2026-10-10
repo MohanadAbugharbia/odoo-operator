@@ -14,6 +14,7 @@ Check out the [Odoo](https://www.odoo.com/) website for more information on Odoo
 | Configure Odoo | available | Manage `odoo.conf` settings dynamically via the CR spec (`listDb`, `dbFilter`, `serverWideModules`, `loadLanguages`, `extraOptions`, …) |
 | Database provisioning | available | Create the PostgreSQL database when it is missing (`createPolicy`), adopt it when it exists, and drop it on deletion only when the operator created it (`deletionPolicy`) |
 | Upgrades | available | Run `-u` maintenance Jobs automatically on image changes or on demand through `spec.upgrade.token`; the Deployment is scaled to zero while the Job runs |
+| Maintenance page | available | Serve an "updating" page in English or Arabic on the http Service while Odoo is installed, upgraded or started, instead of an empty Service (`spec.maintenancePage`) |
 | Safety defaults | available | `list_db = False` + `dbfilter` lockdown, retained filestore and database by default, HTTP probes, resources, env, pod security context, Job deadlines/TTL, CEL-validated spec, `Ready`/`Degraded` conditions and `kubectl get` columns |
 | Backup | planned | Snapshot Odoo filestore and database |
 | Restore | planned | Restore from a snapshot |
@@ -40,6 +41,9 @@ An `OdooDeployment` moves through `status.phase`:
 | `Running` | The Deployment runs `status.appliedImage`; `Ready` is True once the requested replicas are available (or `spec.replicas` is 0). |
 | `Failed` | A maintenance Job failed. Inspect it with `kubectl logs job/<name>`; deleting the Job retries it. |
 
+`status.currentInitJob.startedAt` records when the running Job was created and
+`status.lastMaintenanceDuration` how long the last successful upgrade took.
+
 Conditions: `Ready`, `DatabaseReady`, `Initialized` and `Degraded` (True only when
 something is wrong; its reason names the problem, e.g. `DatabaseMissing`,
 `InitJobFailed`, `QuotaExceeded`, `ImagePullFailed`, `DatabaseDropFailed`).
@@ -47,7 +51,53 @@ something is wrong; its reason names the problem, e.g. `DatabaseMissing`,
 The `<name>-http` and `<name>-poll` Services are created on the first
 reconcile, before the database and the init Job, so an Ingress pointing at
 them can be applied together with the CR. They have no endpoints until the
-Deployment's pods are ready.
+Deployment's pods are ready, unless the [maintenance page](#maintenance-page)
+is enabled.
+
+### Maintenance page
+
+With `spec.maintenancePage.enabled: true`, a browser opening the instance
+while Odoo cannot answer gets a status page instead of a blank screen:
+
+```yaml
+spec:
+  maintenancePage:
+    enabled: true
+    title: Ababiel            # default "Odoo"
+    titleTranslations:
+      ar: أبابيل
+    accentColor: "#f2800d"    # default "#714b67"
+    logo: data:image/svg+xml;base64,…   # optional, data URIs only
+```
+
+- Whenever Odoo's Deployment has no available replica (first setup, an
+  upgrade, a restart) and `spec.replicas` is not 0, the operator runs a
+  `<name>-maintenance` Deployment (one pod, 10m CPU / 32Mi) and points the
+  `<name>-http` Service's selector at it. Once Odoo has an available replica
+  the selector moves back and the page scales to zero. The `<name>-poll`
+  Service always stays on Odoo.
+- The pod runs the operator's own image (`odoo-operator maintenance-page`), so
+  there is nothing extra to build or pin. The operator reads its image from
+  its own pod; `--maintenance-page-image` overrides it.
+- The page needs no access to the API server: after every reconcile the
+  operator writes what the page shows into the `<name>-maintenance`
+  ConfigMap, which the pod mounts (no ServiceAccount token). On each change
+  it also stamps the status hash on the page pods
+  (`odoo.abugharbia.com/maintenance-status`), which makes the kubelet refresh
+  the mount at once instead of on its next periodic sync, up to a minute later.
+- It answers like a server that is down, so Odoo's own clients keep their
+  offline behaviour: a page navigation (`Sec-Fetch-Mode: navigate`) gets the
+  page with status 503, and every other request (RPC, assets, `/web/health`,
+  service worker fetches) gets an empty 503. Nothing is cacheable.
+- The page shows the phase as steps (preparing the database, installing,
+  updating, starting), the elapsed time and, for upgrades, an estimate from
+  `status.lastMaintenanceDuration`. It polls `/__maintenance/status.json` and
+  `/web/health` every 3 seconds, and reopens the URL that was asked for as soon
+  as Odoo answers. A failed Job shows only "Please contact your
+  administrator"; the reason stays in the CR's conditions and events.
+- English or Arabic (right to left) is picked from the browser's
+  `Accept-Language`; it follows the device's light or dark mode, and loads no
+  external fonts or scripts.
 
 ### Database provenance
 
