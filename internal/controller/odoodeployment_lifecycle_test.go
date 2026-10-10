@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -704,6 +705,37 @@ var _ = Describe("OdooDeployment lifecycle", func() {
 		h.r.MaintenancePageImage = ""
 		h.reconcile()
 		Expect(h.maintenancePage()).To(BeNil())
+	})
+
+	It("looks the operator image up again on later reconciles when the lookup fails", func() {
+		lookups := 0
+		h.r.MaintenancePageImage = ""
+		h.r.OwnImage = func(context.Context) (string, error) {
+			lookups++
+			if lookups == 1 {
+				return "", fmt.Errorf("the API server timed out")
+			}
+			return "operator:own", nil
+		}
+		h.create(func(od *odoov1.OdooDeployment) { od.Spec.MaintenancePage.Enabled = true })
+
+		By("a failed lookup serves no page and does not stop the install")
+		_, od := h.reconcile()
+		Expect(od.Status.Phase).To(Equal(odoov1.PhaseInitializing))
+		Expect(h.maintenancePage()).To(BeNil())
+		Expect(h.service("-http").Spec.Selector).To(Equal(map[string]string{"app": h.name}))
+
+		By("the next reconcile finds the image and serves the page")
+		h.reconcile()
+		page := h.maintenancePage()
+		Expect(page).NotTo(BeNil())
+		Expect(*page.Spec.Replicas).To(Equal(int32(1)))
+		Expect(page.Spec.Template.Spec.Containers[0].Image).To(Equal("operator:own"))
+		Expect(h.service("-http").Spec.Selector).To(Equal(map[string]string{odoov1.LabelMaintenancePage: h.name}))
+
+		By("a found image is kept")
+		h.reconcile()
+		Expect(lookups).To(Equal(2))
 	})
 
 	It("adopts a pre-existing database as external and never drops it", func() {

@@ -192,15 +192,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Without the flag the page runs from the operator's own image, looked up
+	// on the first reconcile that needs it and retried until it is found.
+	var lookupOwnImage func(context.Context) (string, error)
 	if maintenancePageImage == "" {
-		image, err := ownImage(context.Background(), mgr.GetAPIReader())
-		if err != nil {
-			setupLog.Error(err, "cannot tell the operator's own image; spec.maintenancePage is disabled "+
-				"(set --maintenance-page-image to enable it)")
-		}
-		maintenancePageImage = image
+		reader := mgr.GetAPIReader()
+		lookupOwnImage = func(ctx context.Context) (string, error) { return ownImage(ctx, reader) }
+	} else {
+		setupLog.Info("maintenance page image", "image", maintenancePageImage)
 	}
-	setupLog.Info("maintenance page image", "image", maintenancePageImage)
 
 	if err = (&controller.OdooDeploymentReconciler{
 		Client:               mgr.GetClient(),
@@ -209,6 +209,7 @@ func main() {
 		DB:                   database.NewPgx(),
 		Recorder:             mgr.GetEventRecorderFor("odoodeployment-controller"),
 		MaintenancePageImage: maintenancePageImage,
+		OwnImage:             lookupOwnImage,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "OdooDeployment")
 		os.Exit(1)
