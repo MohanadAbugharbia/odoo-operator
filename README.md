@@ -78,7 +78,9 @@ spec:
   Service always stays on Odoo.
 - The pod runs the operator's own image (`odoo-operator maintenance-page`), so
   there is nothing extra to build or pin. The operator reads its image from
-  its own pod; `--maintenance-page-image` overrides it.
+  its own pod, retrying on each reconcile until it succeeds (a failure shows
+  as a `MaintenancePageImageUnknown` warning event on the OdooDeployment);
+  `--maintenance-page-image` overrides it.
 - The page needs no access to the API server: after every reconcile the
   operator writes what the page shows into the `<name>-maintenance`
   ConfigMap, which the pod mounts (no ServiceAccount token). On each change

@@ -145,6 +145,9 @@ const (
 	ReasonDeleting              = "Deleting"
 
 	ReasonMaintenancePageFailed = "MaintenancePageFailed"
+	// ReasonMaintenancePageImageUnknown is the warning event while the
+	// operator cannot tell its own image, so it serves no maintenance page.
+	ReasonMaintenancePageImageUnknown = "MaintenancePageImageUnknown"
 )
 
 // Image pull reasons.

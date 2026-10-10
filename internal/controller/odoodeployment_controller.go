@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -58,9 +59,16 @@ type OdooDeploymentReconciler struct {
 	DB database.Provisioner
 	// Recorder emits Kubernetes events on the OdooDeployment.
 	Recorder record.EventRecorder
-	// MaintenancePageImage is the operator's own image, which also serves
-	// spec.maintenancePage. Empty disables the page.
+	// MaintenancePageImage is the image that serves spec.maintenancePage:
+	// the operator's own. When empty it is looked up with OwnImage.
 	MaintenancePageImage string
+	// OwnImage returns the operator's own image. It is tried on every
+	// reconcile that needs the page until it succeeds, so a lookup that fails
+	// once (a slow API server at startup) does not disable the page for the
+	// operator's lifetime. Nil, with no MaintenancePageImage, disables the page.
+	OwnImage func(context.Context) (string, error)
+
+	imageMu sync.Mutex
 }
 
 var apiSGVString = odoov1.GroupVersion.String()
@@ -398,10 +406,19 @@ func (r *OdooDeploymentReconciler) ensureServices(ctx context.Context, od *odoov
 // replica, and reports whether the http Service should point at it. The poll
 // Service never moves: only Odoo answers the longpolling port.
 func (r *OdooDeploymentReconciler) ensureMaintenancePage(ctx context.Context, od *odoov1.OdooDeployment) (bool, error) {
-	if !od.Spec.MaintenancePage.Enabled || r.MaintenancePageImage == "" {
-		if od.Spec.MaintenancePage.Enabled {
-			log.FromContext(ctx).Info("spec.maintenancePage is enabled but the operator does not know its own image; serving no page")
-		}
+	if !od.Spec.MaintenancePage.Enabled {
+		return false, reconcileloops.RemoveMaintenancePage(ctx, r.Client, od)
+	}
+	image, err := r.maintenancePageImage(ctx)
+	if err != nil {
+		// Leave any page as it is: the next reconcile tries again.
+		log.FromContext(ctx).Error(err, "cannot tell the operator's own image; serving no maintenance page yet")
+		r.event(od, corev1.EventTypeWarning, odoov1.ReasonMaintenancePageImageUnknown,
+			fmt.Sprintf("cannot tell the operator's own image, so no maintenance page is served yet: %v", err))
+		return false, nil
+	}
+	if image == "" {
+		log.FromContext(ctx).Info("spec.maintenancePage is enabled but the operator has no maintenance page image; serving no page")
 		return false, reconcileloops.RemoveMaintenancePage(ctx, r.Client, od)
 	}
 	serve := false
@@ -423,15 +440,35 @@ func (r *OdooDeploymentReconciler) ensureMaintenancePage(ctx context.Context, od
 	if serve {
 		replicas = 1
 	}
-	if _, err := reconcileloops.EnsureMaintenancePage(ctx, r.Client, r.Scheme, od, r.MaintenancePageImage, replicas); err != nil {
+	if _, err := reconcileloops.EnsureMaintenancePage(ctx, r.Client, r.Scheme, od, image, replicas); err != nil {
 		return false, err
 	}
 	return serve, nil
 }
 
+// maintenancePageImage returns MaintenancePageImage, looking it up with
+// OwnImage (and keeping it) while it is empty.
+func (r *OdooDeploymentReconciler) maintenancePageImage(ctx context.Context) (string, error) {
+	r.imageMu.Lock()
+	defer r.imageMu.Unlock()
+	if r.MaintenancePageImage != "" || r.OwnImage == nil {
+		return r.MaintenancePageImage, nil
+	}
+	image, err := r.OwnImage(ctx)
+	if err != nil {
+		return "", err
+	}
+	r.MaintenancePageImage = image
+	log.FromContext(ctx).Info("maintenance page image", "image", image)
+	return image, nil
+}
+
 // publishMaintenancePage writes the page's status for a page that is enabled.
 func (r *OdooDeploymentReconciler) publishMaintenancePage(ctx context.Context, od *odoov1.OdooDeployment) error {
-	if !od.Spec.MaintenancePage.Enabled || r.MaintenancePageImage == "" || !od.DeletionTimestamp.IsZero() {
+	if !od.Spec.MaintenancePage.Enabled || !od.DeletionTimestamp.IsZero() {
+		return nil
+	}
+	if image, err := r.maintenancePageImage(ctx); err != nil || image == "" {
 		return nil
 	}
 	return reconcileloops.PublishMaintenancePageStatus(ctx, r.Client, r.reader(), r.Scheme, od)
