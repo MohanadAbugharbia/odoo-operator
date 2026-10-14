@@ -38,6 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -46,12 +47,16 @@ import (
 	"github.com/MohanadAbugharbia/odoo-operator/internal/controller"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/database"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/maintenancepage"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/metrics"
 	// +kubebuilder:scaffold:imports
 )
 
 var (
 	scheme   = runtime.NewScheme()
 	setupLog = ctrl.Log.WithName("setup")
+
+	// version is set by goreleaser's default ldflags (-X main.version=...).
+	version = "dev"
 )
 
 func init() {
@@ -215,6 +220,15 @@ func main() {
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
+
+	metrics.SetBuildInfo(version)
+	if err := ctrlmetrics.Registry.Register(&metrics.Collector{
+		Reader:  mgr.GetClient(),
+		Elected: mgr.Elected(),
+	}); err != nil {
+		setupLog.Error(err, "unable to register the OdooDeployment metrics collector")
+		os.Exit(1)
+	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
