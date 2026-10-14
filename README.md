@@ -15,6 +15,7 @@ Check out the [Odoo](https://www.odoo.com/) website for more information on Odoo
 | Database provisioning | available | Create the PostgreSQL database when it is missing (`createPolicy`), adopt it when it exists, and drop it on deletion only when the operator created it (`deletionPolicy`) |
 | Upgrades | available | Run `-u` maintenance Jobs automatically on image changes or on demand through `spec.upgrade.token`; the Deployment is scaled to zero while the Job runs |
 | Maintenance page | available | Serve an "updating" page in English or Arabic on the http Service while Odoo is installed, upgraded or started, instead of an empty Service (`spec.maintenancePage`) |
+| Metrics | available | Prometheus metrics for every OdooDeployment's phase, conditions and Jobs, next to the controller-runtime defaults (see [Metrics](#metrics)) |
 | Safety defaults | available | `list_db = False` + `dbfilter` lockdown, retained filestore and database by default, HTTP probes, resources, env, pod security context, Job deadlines/TTL, CEL-validated spec, `Ready`/`Degraded` conditions and `kubectl get` columns |
 | Backup | planned | Snapshot Odoo filestore and database |
 | Restore | planned | Restore from a snapshot |
@@ -151,6 +152,45 @@ entrypoint script injects database flags (e.g. the official image's
 is the only configuration source. The image's own `addons_path` and
 `server_wide_modules` must therefore be re-expressed in
 `spec.config.extraAddonsPaths` and `spec.config.serverWideModules`.
+
+## Metrics
+
+The manager serves `/metrics` (by default on `:8443`, HTTPS, with Kubernetes
+authentication and authorization; `--metrics-bind-address=:8080
+--metrics-secure=false` serves plain HTTP instead). Besides the
+controller-runtime defaults (`controller_runtime_reconcile_*`, `workqueue_*`,
+`rest_client_*`, Go and process metrics) it exports:
+
+**State, read from every OdooDeployment's status at scrape time.** Only the
+elected leader reports these, and a deleted OdooDeployment disappears on the
+next scrape. Every series has `namespace` and `name` labels.
+
+| Metric | Labels | Value |
+|---|---|---|
+| `odoo_operator_deployment_info` | `image`, `applied_image`, `database` | 1 |
+| `odoo_operator_deployment_phase` | `phase` | 1 for the current `status.phase`, 0 for the other four |
+| `odoo_operator_deployment_condition` | `type`, `status` (`true`/`false`/`unknown`), `reason` | 1, one series per condition |
+| `odoo_operator_deployment_condition_last_transition_timestamp_seconds` | `type` | when the condition last changed status |
+| `odoo_operator_deployment_replicas_desired` | | `spec.replicas` |
+| `odoo_operator_deployment_image_pending` | | 1 while `spec.image` ≠ `status.appliedImage` |
+| `odoo_operator_deployment_job_start_timestamp_seconds` | `kind` (`init`/`upgrade`) | creation time of the running Job; absent while none runs |
+| `odoo_operator_deployment_last_upgrade_duration_seconds` | | `status.lastMaintenanceDuration` |
+| `odoo_operator_deployment_database_ready` | `provisioned_by` | 1 while `DatabaseReady` is true |
+
+**Events, counted by the reconciler.** Each event is counted once, on the
+reconcile that causes it: a Job that stays failed, an image that keeps failing
+to pull or a drop that keeps failing is not counted again on every requeue.
+The per-OdooDeployment counters start at 0 and are removed once the
+OdooDeployment is gone.
+
+| Metric | Labels | Counts |
+|---|---|---|
+| `odoo_operator_jobs_total` | `namespace`, `name`, `kind`, `result` (`succeeded`/`failed`/`superseded`) | finished init and upgrade Jobs |
+| `odoo_operator_job_duration_seconds` (histogram) | `kind`, `result` | creation to completion or failure of succeeded and failed Jobs |
+| `odoo_operator_image_pull_failures_total` | `namespace`, `name` | times an OdooDeployment became Degraded with `ImagePullFailed` |
+| `odoo_operator_database_operations_total` | `operation` (`create`/`adopt`/`drop`), `result` (`succeeded`/`failed`/`refused`) | database operations |
+| `odoo_operator_maintenance_page_publish_errors_total` | `namespace`, `name` | failed maintenance page updates |
+| `odoo_operator_build_info` | `version` | 1 |
 
 ## Upgrading to 0.3.0
 

@@ -28,6 +28,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -45,6 +46,7 @@ import (
 	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/controller/reconcileloops"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/database"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/metrics"
 	"github.com/MohanadAbugharbia/odoo-operator/pkg/utils"
 )
 
@@ -105,11 +107,15 @@ func IsOwnedByOdooDeployment(obj client.Object) (string, bool) {
 // +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 
 // reconcileState carries one reconcile's working copy of the OdooDeployment
-// and the snapshot the deferred status patch is computed against.
+// and the snapshot the deferred status patch is computed against. start is
+// the status as this reconcile found it (base is re-baselined by mid-reconcile
+// patches); metrics compare against it so an event is counted once, on the
+// reconcile that causes it, not again on every requeue.
 type reconcileState struct {
-	r    *OdooDeploymentReconciler
-	od   *odoov1.OdooDeployment
-	base *odoov1.OdooDeployment
+	r     *OdooDeploymentReconciler
+	od    *odoov1.OdooDeployment
+	base  *odoov1.OdooDeployment
+	start odoov1.OdooDeploymentStatus
 }
 
 // patchStatus writes status changes made so far as a merge patch on the
@@ -153,6 +159,31 @@ func (s *reconcileState) setFinalizer(ctx context.Context, want bool) error {
 	s.base.ObjectMeta = *patched.ObjectMeta.DeepCopy()
 	log.FromContext(ctx).Info("Updated database finalizer", "present", want)
 	return nil
+}
+
+// enteredDegraded is true when this reconcile left the OdooDeployment
+// Degraded with reason and it was not already Degraded with that reason.
+func (s *reconcileState) enteredDegraded(reason string) bool {
+	isNow := func(conds []metav1.Condition) bool {
+		c := meta.FindStatusCondition(conds, odoov1.ConditionDegraded)
+		return c != nil && c.Status == metav1.ConditionTrue && c.Reason == reason
+	}
+	return isNow(s.od.Status.Conditions) && !isNow(s.start.Conditions)
+}
+
+// countDegradedTransitions counts the failures that the reconcile retries
+// (and so would otherwise count on every requeue) once, when they start.
+func (s *reconcileState) countDegradedTransitions() {
+	od := s.od
+	if s.enteredDegraded(odoov1.ReasonImagePullFailed) {
+		metrics.ImagePullFailed(od.Namespace, od.Name)
+	}
+	if s.enteredDegraded(odoov1.ReasonDatabaseCreateFailed) {
+		metrics.DatabaseOperation(metrics.DatabaseCreate, metrics.DatabaseFailed)
+	}
+	if s.enteredDegraded(odoov1.ReasonDatabaseDropFailed) {
+		metrics.DatabaseOperation(metrics.DatabaseDrop, metrics.DatabaseFailed)
+	}
 }
 
 func (s *reconcileState) condition(conditionType string, status metav1.ConditionStatus, reason, message string) {
@@ -219,6 +250,7 @@ func (r *OdooDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if err := r.Get(ctx, req.NamespacedName, od); err != nil {
 		if apierrors.IsNotFound(err) {
 			logger.V(1).Info("OdooDeployment resource object not found.")
+			metrics.Forget(req.Namespace, req.Name)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("get OdooDeployment: %w", err)
@@ -226,15 +258,17 @@ func (r *OdooDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	logger.V(1).Info("Reconciling OdooDeployment", "resourceVersion", od.ResourceVersion, "generation", od.Generation)
 
 	od.DeduplicateModules()
-	s := &reconcileState{r: r, od: od, base: od.DeepCopy()}
+	s := &reconcileState{r: r, od: od, base: od.DeepCopy(), start: *od.Status.DeepCopy()}
 	defer func() {
 		if patchErr := s.patchStatus(ctx); patchErr != nil {
 			err = utilerrors.NewAggregate([]error{err, patchErr})
 		}
 		// After the status patch, so the page shows what this reconcile decided.
 		if pubErr := r.publishMaintenancePage(ctx, s.od); pubErr != nil {
+			metrics.MaintenancePagePublishFailed(s.od.Namespace, s.od.Name)
 			err = utilerrors.NewAggregate([]error{err, pubErr})
 		}
+		s.countDegradedTransitions()
 	}()
 
 	if !od.DeletionTimestamp.IsZero() {
@@ -246,6 +280,7 @@ func (r *OdooDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 func (r *OdooDeploymentReconciler) reconcileNormal(ctx context.Context, s *reconcileState) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	od := s.od
+	metrics.Track(od.Namespace, od.Name)
 
 	// The finalizer is only needed while the operator may own the database:
 	// deletionPolicy Delete and provisionedBy not yet known or "operator".
@@ -549,6 +584,12 @@ func (r *OdooDeploymentReconciler) settleDatabase(
 	}
 	if dbResult.Event != "" {
 		r.event(od, corev1.EventTypeNormal, dbResult.Event, dbResult.Message)
+		switch dbResult.Event {
+		case odoov1.ReasonDatabaseCreated:
+			metrics.DatabaseOperation(metrics.DatabaseCreate, metrics.DatabaseSucceeded)
+		case odoov1.ReasonDatabaseAdopted:
+			metrics.DatabaseOperation(metrics.DatabaseAdopt, metrics.DatabaseSucceeded)
+		}
 	}
 	s.condition(odoov1.ConditionDatabaseReady, metav1.ConditionTrue, dbResult.Reason, dbResult.Message)
 	// An adopted (external) database releases the finalizer.
@@ -605,11 +646,11 @@ func (r *OdooDeploymentReconciler) observeCurrentJob(ctx context.Context, s *rec
 			od.Status.AppliedImage = current.Image
 		}
 		od.Status.AppliedUpgradeToken = current.Token
-		if current.Kind == odoov1.JobKindUpgrade {
-			if took := jobDuration(current, obs.Job); took > 0 {
-				od.Status.LastMaintenanceDuration = &metav1.Duration{Duration: took}
-			}
+		took := jobDuration(current, obs.Job)
+		if current.Kind == odoov1.JobKindUpgrade && took > 0 {
+			od.Status.LastMaintenanceDuration = &metav1.Duration{Duration: took}
 		}
+		metrics.JobFinished(od.Namespace, od.Name, current.Kind, metrics.JobSucceeded, took)
 		if err := reconcileloops.DeleteMaintenanceJob(ctx, r.Client, obs.Job); err != nil {
 			result, err := s.fail(odoov1.ReasonReconcileFailed, err)
 			return result, false, err
@@ -627,6 +668,11 @@ func (r *OdooDeploymentReconciler) observeCurrentJob(ctx context.Context, s *rec
 		}
 		msg := fmt.Sprintf("job %s failed (%s); inspect with: kubectl -n %s logs job/%s — delete the Job to retry",
 			current.Name, detail, od.Namespace, current.Name)
+		// This branch runs again on every requeue until the Job is deleted;
+		// the Job is counted on the reconcile that first saw it fail.
+		if s.start.Phase != odoov1.PhaseFailed {
+			metrics.JobFinished(od.Namespace, od.Name, current.Kind, metrics.JobFailed, jobDuration(current, obs.Job))
+		}
 		od.Status.Phase = odoov1.PhaseFailed
 		s.degraded(reason, msg)
 		s.ready(metav1.ConditionFalse, reason, msg)
@@ -646,6 +692,7 @@ func (r *OdooDeploymentReconciler) observeCurrentJob(ctx context.Context, s *rec
 			}
 			od.Status.CurrentInitJob = odoov1.MaintenanceJobStatus{}
 			r.event(od, corev1.EventTypeNormal, odoov1.ReasonJobSuperseded, msg)
+			metrics.JobWasSuperseded(od.Namespace, od.Name, current.Kind)
 			return ctrl.Result{RequeueAfter: time.Second}, false, nil
 		}
 		switch {
@@ -781,6 +828,7 @@ func (r *OdooDeploymentReconciler) reconcileDelete(ctx context.Context, s *recon
 			msg := fmt.Sprintf("refusing to drop database %q: %v", db.Name, err)
 			logger.Info(msg)
 			r.event(od, corev1.EventTypeWarning, odoov1.ReasonDatabaseDropRefused, msg)
+			metrics.DatabaseOperation(metrics.DatabaseDrop, metrics.DatabaseRefused)
 		case err != nil:
 			msg := fmt.Sprintf("could not drop database %q: %v", db.Name, err)
 			logger.Error(err, "database drop failed", "database", db.Name)
@@ -791,6 +839,7 @@ func (r *OdooDeploymentReconciler) reconcileDelete(ctx context.Context, s *recon
 			msg := fmt.Sprintf("dropped database %q on %s", db.Name, conn.Host)
 			logger.Info(msg)
 			r.event(od, corev1.EventTypeNormal, odoov1.ReasonDatabaseDropped, msg)
+			metrics.DatabaseOperation(metrics.DatabaseDrop, metrics.DatabaseSucceeded)
 		}
 	case connErr != nil && db.ProvisionedBy == odoov1.DatabaseProvisionedByOperator:
 		// Leaking a database is the safe direction.
@@ -804,6 +853,7 @@ func (r *OdooDeploymentReconciler) reconcileDelete(ctx context.Context, s *recon
 
 // jobDuration is how long a finished maintenance Job took, from its creation
 // (status.currentInitJob.startedAt) to its completion, rounded to the second.
+// A failed Job has no completionTime; its Failed condition marks the end.
 func jobDuration(current odoov1.MaintenanceJobStatus, job *batchv1.Job) time.Duration {
 	start := current.StartedAt
 	if start == nil && job != nil {
@@ -813,8 +863,16 @@ func jobDuration(current odoov1.MaintenanceJobStatus, job *batchv1.Job) time.Dur
 		return 0
 	}
 	end := time.Now()
-	if job != nil && job.Status.CompletionTime != nil {
-		end = job.Status.CompletionTime.Time
+	if job != nil {
+		if job.Status.CompletionTime != nil {
+			end = job.Status.CompletionTime.Time
+		} else {
+			for _, c := range job.Status.Conditions {
+				if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue && !c.LastTransitionTime.IsZero() {
+					end = c.LastTransitionTime.Time
+				}
+			}
+		}
 	}
 	return end.Sub(start.Time).Round(time.Second)
 }
