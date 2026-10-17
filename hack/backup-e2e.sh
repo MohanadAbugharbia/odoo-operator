@@ -60,8 +60,8 @@ kubectl apply -f test/e2e/testdata/postgres.yaml
 k rollout status deploy/e2e-postgres --timeout=3m
 kubectl apply -f test/e2e/testdata/backup/stores.yaml
 k rollout status deploy/e2e-s3 --timeout=3m
-wait_for odoobackupstore/s3 .status.ready true 180
-wait_for odoobackupstore/pvc .status.ready true 180
+wait_for odoobackupstore/s3 .status.ready true 420
+wait_for odoobackupstore/pvc .status.ready true 420
 kubectl apply -f test/e2e/testdata/backup/odoodeployment.yaml
 wait_for odoodeployment/"$OD" .status.phase Running 900
 k rollout status deploy/"$OD" --timeout=5m

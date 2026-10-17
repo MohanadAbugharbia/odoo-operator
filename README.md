@@ -204,7 +204,9 @@ backup can be read). The kinds:
 The operator probes each store with a short Job that writes, reads and deletes
 a file (`.odoo-operator-probe-<random>`), on every change to the store or its
 Secrets and every six hours. `kubectl get odoobackupstore` shows `Ready`; a
-store that fails says why in its `Ready` condition and in an event.
+store that fails says why in its `Ready` condition and in an event, and is
+probed again every two minutes until it passes. The last failed probe's Job is
+kept for its log.
 
 **A backup** is one restic snapshot holding `dump.sql` (a plain `pg_dump`
 taken with a `pg_dump` of the server's major), `manifest.json` (Odoo's own

@@ -333,6 +333,11 @@ var _ = Describe("OdooBackupStore reconciler", func() {
 	})
 
 	It("reports a failed probe with its error and warns once", func() {
+		// Start ten minutes into a probe period, so no step of this spec
+		// crosses a period boundary by accident.
+		base := time.Now()
+		period := int64(StoreProbeInterval / time.Second)
+		s.clock = time.Unix((base.Unix()/period+1)*period, 0).Add(10 * time.Minute).Sub(base)
 		s.createPVCStore()
 		s.reconcile()
 		jobName := s.get().Status.ProbeJob
@@ -341,7 +346,7 @@ var _ = Describe("OdooBackupStore reconciler", func() {
 
 		res := s.reconcile()
 		Expect(res.RequeueAfter).To(BeNumerically(">", 0))
-		Expect(res.RequeueAfter).To(BeNumerically("<=", StoreProbeInterval))
+		Expect(res.RequeueAfter).To(BeNumerically("<=", StoreRetryInterval), "a failed probe is retried soon")
 		store := s.get()
 		Expect(store.Status.Ready).To(BeFalse())
 		Expect(store.Status.ProbeJob).To(BeEmpty())
@@ -363,16 +368,56 @@ var _ = Describe("OdooBackupStore reconciler", func() {
 		Expect(s.events()).To(BeEmpty())
 		Expect(s.jobs()).To(HaveLen(1))
 
-		By("re-probing with the same spec and Secrets, which observes the same failed Job")
-		base := s.get()
-		patched := base.DeepCopy()
-		patched.Status.ProbedHash = ""
-		Expect(k8sClient.Status().Patch(ctx, patched, client.MergeFrom(base))).To(Succeed())
+		By("retrying after StoreRetryInterval, which replaces the failed Job")
+		s.clock += StoreRetryInterval
 		s.reconcile()
+		retry := s.get().Status.ProbeJob
+		Expect(retry).NotTo(BeEmpty())
+		Expect(retry).NotTo(Equal(jobName))
+		Eventually(func() *batchv1.Job { return s.job(jobName) }).Should(BeNil())
+		Expect(s.jobs()).To(HaveLen(1))
+
+		By("failing the same way again, which is not reported twice")
+		s.finishJob(retry, false)
+		s.podReporting(retry, `{"ok":false,"step":"probe","error":"cannot write"}`, 1)
+		res = s.reconcile()
+		Expect(res.RequeueAfter).To(BeNumerically("<=", StoreRetryInterval))
 		store = s.get()
-		Expect(store.Status.ProbeJob).To(BeEmpty())
-		Expect(meta.FindStatusCondition(store.Status.Conditions, odoov1.ConditionReady).Message).To(Equal(cond.Message))
-		Expect(s.events()).To(BeEmpty(), "an identical failure is not reported twice")
+		Expect(store.Status.Ready).To(BeFalse())
+		Expect(s.ready().Message).To(ContainSubstring("logs job/" + retry))
+		Expect(s.events()).To(BeEmpty())
+
+		By("failing differently, which is reported")
+		s.clock += StoreRetryInterval
+		s.reconcile()
+		third := s.get().Status.ProbeJob
+		Expect(third).NotTo(BeEmpty())
+		s.finishJob(third, false)
+		s.podReporting(third, `{"ok":false,"step":"probe","error":"cannot read"}`, 1)
+		s.reconcile()
+		events = s.events()
+		Expect(events).To(HaveLen(1))
+		Expect(events[0]).To(ContainSubstring("cannot read"))
+
+		By("succeeding on a later retry, which goes back to the long period")
+		s.clock += StoreRetryInterval
+		s.reconcile()
+		fourth := s.get().Status.ProbeJob
+		Expect(fourth).NotTo(BeEmpty())
+		s.finishJob(fourth, true)
+		s.podReporting(fourth, `{"ok":true}`, 0)
+		res = s.reconcile()
+		Expect(s.get().Status.Ready).To(BeTrue())
+		Expect(res.RequeueAfter).To(BeNumerically(">", StoreRetryInterval))
+		Eventually(func() []batchv1.Job { return s.jobs() }).Should(BeEmpty(), "the failed Jobs and the passing one are gone")
+
+		By("not probing again at once now that the interval changed")
+		res = s.reconcile()
+		Expect(s.get().Status.ProbeJob).To(BeEmpty())
+		Expect(res.RequeueAfter).To(BeNumerically(">", StoreRetryInterval))
+		s.clock += StoreRetryInterval
+		s.reconcile()
+		Expect(s.get().Status.ProbeJob).To(BeEmpty(), "a reachable store waits for StoreProbeInterval")
 	})
 
 	It("falls back to the Job's own failure when no pod reported", func() {

@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -59,6 +60,10 @@ const (
 // StoreProbeInterval is how often a store is probed again.
 const StoreProbeInterval = 6 * time.Hour
 
+// StoreRetryInterval is how soon a store whose last probe failed is probed
+// again, so a store that was down for a moment does not stay unready.
+const StoreRetryInterval = 2 * time.Minute
+
 // OdooBackupStoreReconciler probes stores: a short Job writes, reads and
 // deletes a file in the store and the result becomes status.ready.
 type OdooBackupStoreReconciler struct {
@@ -89,6 +94,23 @@ func (r *OdooBackupStoreReconciler) reader() client.Reader {
 	return r.Client
 }
 
+// probeInterval is StoreRetryInterval after a failed probe, else
+// StoreProbeInterval.
+func probeInterval(store *odoov1.OdooBackupStore) time.Duration {
+	if c := findCondition(store.Status.Conditions, odoov1.ConditionReady); c != nil &&
+		c.Status == metav1.ConditionFalse && c.Reason == ReasonStoreUnreachable {
+		return StoreRetryInterval
+	}
+	return StoreProbeInterval
+}
+
+// untilNextProbe is how long until the probe period of store ends.
+func (r *OdooBackupStoreReconciler) untilNextProbe(store *odoov1.OdooBackupStore) time.Duration {
+	now := r.now()
+	step := int64(probeInterval(store) / time.Second)
+	return time.Unix((now.Unix()/step+1)*step, 0).Sub(now)
+}
+
 // probeHash identifies what a probe tests: the spec, the Secrets' versions
 // and the probe period, so a change or the next period starts a new probe.
 func (r *OdooBackupStoreReconciler) probeHash(ctx context.Context, store *odoov1.OdooBackupStore) (string, error) {
@@ -111,8 +133,9 @@ func (r *OdooBackupStoreReconciler) probeHash(ctx context.Context, store *odoov1
 		}
 		_, _ = fmt.Fprintf(h, "\x00%s=%s", n, secret.ResourceVersion)
 	}
-	period := r.now().Unix() / int64(StoreProbeInterval/time.Second)
-	_, _ = fmt.Fprintf(h, "\x00%s", strconv.FormatInt(period, 10))
+	interval := probeInterval(store)
+	period := r.now().Unix() / int64(interval/time.Second)
+	_, _ = fmt.Fprintf(h, "\x00%s/%s", strconv.FormatInt(period, 10), interval)
 	return hex.EncodeToString(h.Sum(nil))[:16], nil
 }
 
@@ -158,10 +181,8 @@ func (r *OdooBackupStoreReconciler) reconcile(ctx context.Context, store *odoov1
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	now := r.now()
-	nextPeriod := time.Unix((now.Unix()/int64(StoreProbeInterval/time.Second)+1)*int64(StoreProbeInterval/time.Second), 0).Sub(now)
 	if store.Status.ProbedHash == hash && store.Status.ProbeJob == "" {
-		return ctrl.Result{RequeueAfter: nextPeriod}, nil
+		return ctrl.Result{RequeueAfter: r.untilNextProbe(store)}, nil
 	}
 	if store.Status.ProbeJob == "" || store.Status.ProbedHash != hash {
 		image, err := r.Image(ctx)
@@ -175,6 +196,10 @@ func (r *OdooBackupStoreReconciler) reconcile(ctx context.Context, store *odoov1
 			return ctrl.Result{}, nil
 		}
 		if err := controllerutil.SetControllerReference(store, &job, r.Scheme); err != nil {
+			return ctrl.Result{}, err
+		}
+		// A failed probe's Job is kept for its log until the next probe.
+		if err := r.deleteOldProbeJobs(ctx, store, job.Name); err != nil {
 			return ctrl.Result{}, err
 		}
 		if err := r.Create(ctx, &job); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -218,8 +243,10 @@ func (r *OdooBackupStoreReconciler) reconcile(ctx context.Context, store *odoov1
 		}
 	} else {
 		msg := fmt.Sprintf("probe %s; inspect with: kubectl -n %s logs job/%s", failureText(out), store.Namespace, obs.Job.Name)
-		if store.Status.Ready || findCondition(store.Status.Conditions, odoov1.ConditionReady) == nil ||
-			findCondition(store.Status.Conditions, odoov1.ConditionReady).Message != msg {
+		// Warn when the store stops being reachable or fails differently,
+		// not on every retry that fails the same way.
+		prev := findCondition(store.Status.Conditions, odoov1.ConditionReady)
+		if store.Status.Ready || prev == nil || !strings.HasPrefix(prev.Message, "probe "+failureText(out)+";") {
 			if r.Recorder != nil {
 				r.Recorder.Event(store, corev1.EventTypeWarning, ReasonStoreUnreachable, msg)
 			}
@@ -227,8 +254,31 @@ func (r *OdooBackupStoreReconciler) reconcile(ctx context.Context, store *odoov1
 		r.setReady(store, false, ReasonStoreUnreachable, msg)
 	}
 	store.Status.ProbeJob = ""
+	// The result may change the probe interval; the period the probe just
+	// covered counts as probed under the new one too.
+	if store.Status.ProbedHash, err = r.probeHash(ctx, store); err != nil {
+		return ctrl.Result{}, err
+	}
 	log.FromContext(ctx).Info("Probed backup store", "store", store.Name, "ready", store.Status.Ready)
-	return ctrl.Result{RequeueAfter: nextPeriod}, nil
+	return ctrl.Result{RequeueAfter: r.untilNextProbe(store)}, nil
+}
+
+// deleteOldProbeJobs deletes the store's probe Jobs other than keep.
+func (r *OdooBackupStoreReconciler) deleteOldProbeJobs(ctx context.Context, store *odoov1.OdooBackupStore, keep string) error {
+	jobs := &batchv1.JobList{}
+	if err := r.List(ctx, jobs, client.InNamespace(store.Namespace),
+		client.MatchingLabels{odoov1.LabelJobKind: jobspec.KindProbe, jobspec.LabelStore: store.Name}); err != nil {
+		return err
+	}
+	for i := range jobs.Items {
+		if jobs.Items[i].Name == keep || !metav1.IsControlledBy(&jobs.Items[i], store) {
+			continue
+		}
+		if err := reconcileloops.DeleteMaintenanceJob(ctx, r.Client, &jobs.Items[i]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func findCondition(conds []metav1.Condition, t string) *metav1.Condition {
