@@ -766,6 +766,39 @@ var _ = Describe("OdooDeployment lifecycle", func() {
 		Eventually(func() *appsv1.Deployment { return h.deployment() }).Should(BeNil())
 	})
 
+	It("drops the database on delete while finished Job pods remain, but not while one runs", func() {
+		h.create()
+		od := h.bootToRunning()
+		jobPod := func(name string, phase corev1.PodPhase) *corev1.Pod {
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: h.name + "-" + name, Namespace: ns, Labels: map[string]string{odoov1.LabelOdooDeployment: h.name}},
+				Spec:       corev1.PodSpec{RestartPolicy: corev1.RestartPolicyNever, Containers: []corev1.Container{{Name: "agent", Image: "backup:test"}}},
+			}
+			Expect(k8sClient.Create(ctx, pod)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, pod, client.GracePeriodSeconds(0)) })
+			pod.Status.Phase = phase
+			Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
+			return pod
+		}
+		// A restore Job keeps its pods until its TTL removes it.
+		jobPod("restored", corev1.PodSucceeded)
+		jobPod("restore-failed", corev1.PodFailed)
+		running := jobPod("restoring", corev1.PodRunning)
+
+		Expect(k8sClient.Delete(ctx, od)).To(Succeed())
+		res, od := h.reconcile()
+		Expect(od).NotTo(BeNil(), "a running pod may still use the database")
+		Expect(res.RequeueAfter).To(Equal(5 * time.Second))
+		Expect(h.fake.CallCount("Drop")).To(BeZero())
+
+		running.Status.Phase = corev1.PodSucceeded
+		Expect(k8sClient.Status().Update(ctx, running)).To(Succeed())
+		_, od = h.reconcile()
+		Expect(od).To(BeNil(), "finished pods do not hold up the delete")
+		Expect(h.fake.CallCount("Drop")).To(Equal(1))
+		Expect(h.fake.Has(h.dbName())).To(BeFalse())
+	})
+
 	It("refuses to drop a database whose comment does not match", func() {
 		h.create()
 		od := h.bootToRunning()

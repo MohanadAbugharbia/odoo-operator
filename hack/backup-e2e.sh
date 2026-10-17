@@ -143,4 +143,11 @@ YAML
 backup_restore_cycle s3
 backup_restore_cycle pvc
 
+# The restore Jobs and their finished pods stay until their TTL; they must not
+# hold up deleting the instance.
+log "deleting the OdooDeployment drops its database"
+k delete odoodeployment "$OD" --wait=true --timeout=3m || fail "the OdooDeployment was not deleted"
+[ "$(psql_q "SELECT count(*) FROM pg_database WHERE datname LIKE '${DB}%'" postgres)" = 0 ] ||
+	fail "databases of $OD left after deleting it"
+
 log "backup and restore e2e passed"

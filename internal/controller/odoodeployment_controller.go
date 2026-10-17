@@ -236,13 +236,22 @@ func (r *OdooDeploymentReconciler) event(od *odoov1.OdooDeployment, eventType, r
 	}
 }
 
-// countPods returns the number of pods (terminating ones included) matching labels.
+// countPods returns the number of pods matching labels that may still run:
+// terminating ones count, finished ones (Succeeded or Failed) do not. A
+// finished Job keeps its pods until the Job goes, which for a restore Job is
+// its TTL; they hold no connection and must not stall a delete.
 func (r *OdooDeploymentReconciler) countPods(ctx context.Context, namespace string, labels map[string]string) (int, error) {
 	pods := &corev1.PodList{}
 	if err := r.reader().List(ctx, pods, client.InNamespace(namespace), client.MatchingLabels(labels)); err != nil {
 		return 0, fmt.Errorf("list pods: %w", err)
 	}
-	return len(pods.Items), nil
+	n := 0
+	for _, p := range pods.Items {
+		if p.Status.Phase != corev1.PodSucceeded && p.Status.Phase != corev1.PodFailed {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // Reconcile drives an OdooDeployment through Pending → Initializing →
