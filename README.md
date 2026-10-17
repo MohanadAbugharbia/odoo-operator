@@ -293,7 +293,7 @@ next scrape. Every series has `namespace` and `name` labels.
 | Metric | Labels | Value |
 |---|---|---|
 | `odoo_operator_deployment_info` | `image`, `applied_image`, `database` | 1 |
-| `odoo_operator_deployment_phase` | `phase` | 1 for the current `status.phase`, 0 for the other four |
+| `odoo_operator_deployment_phase` | `phase` | 1 for the current `status.phase`, 0 for every other phase |
 | `odoo_operator_deployment_condition` | `type`, `status` (`true`/`false`/`unknown`), `reason` | 1, one series per condition |
 | `odoo_operator_deployment_condition_last_transition_timestamp_seconds` | `type` | when the condition last changed status |
 | `odoo_operator_deployment_replicas_desired` | | `spec.replicas` |

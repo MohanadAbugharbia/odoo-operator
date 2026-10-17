@@ -215,9 +215,10 @@ jobs:
       - name: Build the binaries
         # Laid out as $TARGETPLATFORM/<binary>, as goreleaser does.
         run: |
+          ldflags="-X main.version=sha-${{ github.event.pull_request.head.sha }}"
           for p in ${PLATFORMS//,/ }; do
-            GOOS=${p%/*} GOARCH=${p#*/} CGO_ENABLED=0 go build -o "$p/odoo-operator" ./cmd
-            GOOS=${p%/*} GOARCH=${p#*/} CGO_ENABLED=0 go build -o "$p/odoo-backup" ./cmd/odoo-backup
+            GOOS=${p%/*} GOARCH=${p#*/} CGO_ENABLED=0 go build -ldflags "$ldflags" -o "$p/odoo-operator" ./cmd
+            GOOS=${p%/*} GOARCH=${p#*/} CGO_ENABLED=0 go build -ldflags "$ldflags" -o "$p/odoo-backup" ./cmd/odoo-backup
           done
       - name: Push the images
         run: |
