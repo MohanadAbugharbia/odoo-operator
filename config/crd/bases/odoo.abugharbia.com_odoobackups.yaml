@@ -1,0 +1,192 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: odoobackups.odoo.abugharbia.com
+spec:
+  group: odoo.abugharbia.com
+  names:
+    kind: OdooBackup
+    listKind: OdooBackupList
+    plural: odoobackups
+    shortNames:
+    - odoobk
+    singular: odoobackup
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.odooDeployment
+      name: Instance
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.snapshotID
+      name: Snapshot
+      type: string
+    - jsonPath: .status.store
+      name: Store
+      type: string
+    - jsonPath: .status.completedAt
+      name: Completed
+      type: date
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          OdooBackup is one full backup of an OdooDeployment: its database and its
+          filestore, taken together. Create one to take a backup now. It is not owned
+          by the OdooDeployment, so deleting an instance never deletes its backups.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: OdooBackupSpec names the instance to back up.
+            properties:
+              keep:
+                description: Keep marks a backup that retention never removes.
+                type: boolean
+              odooDeployment:
+                description: OdooDeployment to back up, in the same namespace.
+                maxLength: 253
+                minLength: 1
+                type: string
+                x-kubernetes-validations:
+                - message: spec.odooDeployment is immutable
+                  rule: self == oldSelf
+            required:
+            - odooDeployment
+            type: object
+          status:
+            description: OdooBackupStatus describes one backup.
+            properties:
+              addedBytes:
+                description: |-
+                  AddedBytes is the new data this backup uploaded after deduplication
+                  and compression.
+                format: int64
+                type: integer
+              attempts:
+                format: int32
+                type: integer
+              completedAt:
+                description: CompletedAt is when the backup finished, successfully
+                  or not.
+                format: date-time
+                type: string
+              consistency:
+                description: 'Consistency the backup was taken with: Online or Offline.'
+                type: string
+              databaseBytes:
+                description: DatabaseBytes is the size of the SQL dump.
+                format: int64
+                type: integer
+              filestoreBytes:
+                description: FilestoreBytes is the size of the filestore.
+                format: int64
+                type: integer
+              filestoreFiles:
+                description: FilestoreFiles is the number of files in the filestore.
+                format: int64
+                type: integer
+              image:
+                description: Image is the Odoo image the instance ran when the backup
+                  was taken.
+                type: string
+              job:
+                description: Job is the Job taking the backup. Attempts counts the
+                  Jobs started for it.
+                type: string
+              message:
+                description: Message explains the phase in a sentence.
+                type: string
+              missingFileNames:
+                description: MissingFileNames lists the first missing files.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: atomic
+              missingFiles:
+                description: |-
+                  MissingFiles counts attachments the database refers to that are in
+                  neither the filestore nor the previous backup.
+                format: int32
+                type: integer
+              odooVersion:
+                description: OdooVersion is the Odoo series in the database, such
+                  as 18.0.
+                type: string
+              pgServerVersion:
+                description: PgServerVersion is the PostgreSQL server version, such
+                  as 16.4.
+                type: string
+              phase:
+                description: |-
+                  Phase: Pending, WaitingForFilestoreCleanup, Running, Completed,
+                  CompletedWithWarnings or Failed.
+                enum:
+                - Pending
+                - WaitingForFilestoreCleanup
+                - Running
+                - Completed
+                - CompletedWithWarnings
+                - Failed
+                type: string
+              repairedFiles:
+                description: |-
+                  RepairedFiles counts attachments that were gone from the filestore
+                  when the backup ran and were taken from the previous backup instead.
+                format: int32
+                type: integer
+              repository:
+                description: Repository is the restic repository inside the store,
+                  <namespace>/<deployment>.
+                type: string
+              retryAfter:
+                description: |-
+                  RetryAfter is when a backup that waited for Odoo's filestore cleanup
+                  is tried again.
+                format: date-time
+                type: string
+              snapshotID:
+                description: SnapshotID is the restic snapshot holding this backup.
+                type: string
+              startedAt:
+                description: StartedAt is when the backup Job was created.
+                format: date-time
+                type: string
+              store:
+                description: Store is the OdooBackupStore the backup was written to.
+                type: string
+              waitingSince:
+                description: |-
+                  WaitingSince is when the backup started waiting for Odoo's filestore
+                  cleanup to finish.
+                format: date-time
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

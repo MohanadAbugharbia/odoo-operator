@@ -1,0 +1,26 @@
+# permissions for end users to edit odoobackupstores.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: odoo-operator
+  name: odoobackupstore-editor-role
+rules:
+- apiGroups:
+  - odoo.abugharbia.com
+  resources:
+  - odoobackupstores
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - odoo.abugharbia.com
+  resources:
+  - odoobackupstores/status
+  verbs:
+  - get

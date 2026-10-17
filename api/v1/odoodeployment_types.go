@@ -71,6 +71,10 @@ const (
 	PhaseUpgrading    = "Upgrading"
 	PhaseRunning      = "Running"
 	PhaseFailed       = "Failed"
+	// PhaseBackingUp: Odoo is stopped for an Offline backup.
+	PhaseBackingUp = "BackingUp"
+	// PhaseRestoring: Odoo is stopped while an OdooRestore replaces its data.
+	PhaseRestoring = "Restoring"
 )
 
 // Database provenance and states.
@@ -460,6 +464,57 @@ type MaintenancePageConfig struct {
 	Logo string `json:"logo,omitempty"`
 }
 
+// BackupConsistency is how a backup keeps the database and the filestore
+// in step.
+// +kubebuilder:validation:Enum=Online;Offline
+type BackupConsistency string
+
+const (
+	// BackupConsistencyOnline backs up while Odoo keeps serving: the dump and
+	// the list of files come from one database snapshot, and files deleted
+	// meanwhile are taken from the previous backup.
+	BackupConsistencyOnline BackupConsistency = "Online"
+	// BackupConsistencyOffline stops Odoo for the backup.
+	BackupConsistencyOffline BackupConsistency = "Offline"
+)
+
+// OdooRestoreConfig holds the defaults of in-place restores.
+type OdooRestoreConfig struct {
+	// KeepPrevious is how long the database and files a restore replaced
+	// are kept, so the restore can be undone.
+	// +kubebuilder:default="72h"
+	KeepPrevious *metav1.Duration `json:"keepPrevious,omitempty"`
+}
+
+// OdooBackupConfig turns on backups of this instance.
+type OdooBackupConfig struct {
+	// Stores are OdooBackupStores in this namespace. Backups are written to
+	// the first; the instance's repository is <path>/<namespace>/<name>/
+	// inside it.
+	// +kubebuilder:validation:MaxItems=1
+	// +kubebuilder:validation:items:MinLength=1
+	// +listType=atomic
+	Stores []string `json:"stores,omitempty"`
+
+	// Consistency: Online (default) backs up while Odoo keeps serving;
+	// Offline stops Odoo for the backup.
+	// +kubebuilder:default=Online
+	Consistency BackupConsistency `json:"consistency,omitempty"`
+
+	// Restore holds the defaults of in-place restores (OdooRestore).
+	// +kubebuilder:default={}
+	Restore OdooRestoreConfig `json:"restore,omitempty"`
+
+	// Resources of the backup and restore Jobs.
+	// +kubebuilder:validation:Optional
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// ActiveDeadlineSeconds bounds one backup or restore Job.
+	// +kubebuilder:default=21600
+	// +kubebuilder:validation:Minimum=60
+	ActiveDeadlineSeconds *int64 `json:"activeDeadlineSeconds,omitempty"`
+}
+
 // OdooDeploymentSpec defines the desired state of OdooDeployment
 type OdooDeploymentSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
@@ -549,6 +604,12 @@ type OdooDeploymentSpec struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default={}
 	MaintenancePage MaintenancePageConfig `json:"maintenancePage,omitempty"`
+
+	// Backup says where this instance's backups (OdooBackup) are written and
+	// how they and in-place restores (OdooRestore) run.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default={}
+	Backup OdooBackupConfig `json:"backup,omitempty"`
 }
 
 // MaintenanceJobStatus records the maintenance Job (init or upgrade) the
@@ -569,6 +630,32 @@ type MaintenanceJobStatus struct {
 	// The list of modules that are being upgraded (-u)
 	UpgradeModules []string `json:"upgradeModules,omitempty"`
 	// StartedAt is when the operator created the Job.
+	StartedAt *metav1.Time `json:"startedAt,omitempty"`
+}
+
+// Kinds of status.currentOperation.
+const (
+	OperationBackup  = "backup"
+	OperationRestore = "restore"
+	// OperationCleanup deletes the data an OdooRestore replaced.
+	OperationCleanup = "cleanup"
+)
+
+// OperationStatus records the backup, restore or cleanup Job an instance is
+// running. Only one Job (init, upgrade, backup, restore or cleanup) runs per
+// instance at a time.
+type OperationStatus struct {
+	// Kind: backup, restore or cleanup.
+	// +kubebuilder:validation:Enum=backup;restore;cleanup
+	Kind string `json:"kind,omitempty"`
+	// Name of the OdooBackup or OdooRestore.
+	Name string `json:"name,omitempty"`
+	// Job running it; empty while the operator is still stopping Odoo for it.
+	Job string `json:"job,omitempty"`
+	// StoppedOdoo is true when the operation scaled Odoo to zero and must
+	// bring it back.
+	StoppedOdoo bool `json:"stoppedOdoo,omitempty"`
+	// StartedAt is when the operation started.
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`
 }
 
@@ -596,7 +683,7 @@ type OdooDeploymentStatus struct {
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
 	// Phase summarises the lifecycle: Pending, Initializing, Upgrading, Running, Failed.
-	// +kubebuilder:validation:Enum=Pending;Initializing;Upgrading;Running;Failed
+	// +kubebuilder:validation:Enum=Pending;Initializing;Upgrading;Running;Failed;BackingUp;Restoring
 	Phase string `json:"phase,omitempty"`
 
 	// AppliedImage is the image the Deployment runs (the last image a
@@ -629,6 +716,10 @@ type OdooDeploymentStatus struct {
 	// The maintenance Job (init or upgrade) currently running
 	// +kubebuilder:validation:Optional
 	CurrentInitJob MaintenanceJobStatus `json:"currentInitJob,omitempty"`
+
+	// CurrentOperation is the backup, restore or cleanup in progress.
+	// +kubebuilder:validation:Optional
+	CurrentOperation OperationStatus `json:"currentOperation,omitempty"`
 
 	// LastMaintenanceDuration is how long the last successful upgrade Job
 	// took, from its creation to its completion. The maintenance page uses it

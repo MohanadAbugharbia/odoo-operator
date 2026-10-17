@@ -59,6 +59,17 @@ const (
 	DatabaseRefused   = "refused"
 )
 
+// Backup and restore results and restore modes.
+const (
+	BackupSucceeded = "succeeded"
+	BackupFailed    = "failed"
+
+	RestoreModeRestore = "restore"
+	RestoreModeUndo    = "undo"
+	RestoreSucceeded   = "succeeded"
+	RestoreFailed      = "failed"
+)
+
 var (
 	jobKinds   = []string{odoov1.JobKindInit, odoov1.JobKindUpgrade}
 	jobResults = []string{JobSucceeded, JobFailed, JobSuperseded}
@@ -89,6 +100,22 @@ var (
 		Help: "Failed attempts to publish an OdooDeployment's status to its maintenance page.",
 	}, []string{labelNamespace, labelName})
 
+	backupsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "odoo_operator_backups_total",
+		Help: "Backups (OdooBackup) that finished, by kind (manual, scheduled, pre-upgrade) and result (succeeded, failed).",
+	}, []string{labelKind, labelResult})
+
+	backupDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "odoo_operator_backup_duration_seconds",
+		Help:    "How long backups that succeeded took, from the start of their first Job to completion.",
+		Buckets: []float64{30, 60, 120, 300, 600, 1200, 1800, 3600, 7200, 14400, 21600},
+	}, []string{labelKind})
+
+	restoresTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "odoo_operator_restores_total",
+		Help: "In-place restores (OdooRestore) that finished, by mode (restore, undo) and result (succeeded, failed).",
+	}, []string{"mode", labelResult})
+
 	buildInfo = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "odoo_operator_build_info",
 		Help: "Always 1; the version label is the running operator release.",
@@ -96,7 +123,18 @@ var (
 )
 
 func init() {
-	ctrlmetrics.Registry.MustRegister(jobsTotal, jobDuration, imagePullFailures, databaseOperations, pagePublishErrors, buildInfo)
+	ctrlmetrics.Registry.MustRegister(jobsTotal, jobDuration, imagePullFailures, databaseOperations, pagePublishErrors, buildInfo,
+		backupsTotal, backupDuration, restoresTotal)
+	for _, kind := range []string{odoov1.BackupKindManual, odoov1.BackupKindScheduled, odoov1.BackupKindPreUpgrade} {
+		for _, res := range []string{BackupSucceeded, BackupFailed} {
+			backupsTotal.WithLabelValues(kind, res)
+		}
+	}
+	for _, mode := range []string{RestoreModeRestore, RestoreModeUndo} {
+		for _, res := range []string{RestoreSucceeded, RestoreFailed} {
+			restoresTotal.WithLabelValues(mode, res)
+		}
+	}
 	for _, op := range []string{DatabaseCreate, DatabaseAdopt, DatabaseDrop} {
 		for _, res := range []string{DatabaseSucceeded, DatabaseFailed, DatabaseRefused} {
 			if res == DatabaseRefused && op != DatabaseDrop {
@@ -169,4 +207,18 @@ func DatabaseOperation(operation, result string) {
 // MaintenancePagePublishFailed counts a failed maintenance page update.
 func MaintenancePagePublishFailed(namespace, name string) {
 	pagePublishErrors.WithLabelValues(namespace, name).Inc()
+}
+
+// BackupFinished counts a backup that ended and observes how long a
+// successful one took.
+func BackupFinished(kind, result string, took time.Duration) {
+	backupsTotal.WithLabelValues(kind, result).Inc()
+	if result == BackupSucceeded && took > 0 {
+		backupDuration.WithLabelValues(kind).Observe(took.Seconds())
+	}
+}
+
+// RestoreFinished counts a restore that ended.
+func RestoreFinished(mode, result string) {
+	restoresTotal.WithLabelValues(mode, result).Inc()
 }

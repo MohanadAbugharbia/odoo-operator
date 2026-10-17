@@ -1,0 +1,220 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: odoorestores.odoo.abugharbia.com
+spec:
+  group: odoo.abugharbia.com
+  names:
+    kind: OdooRestore
+    listKind: OdooRestoreList
+    plural: odoorestores
+    singular: odoorestore
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.odooDeployment
+      name: Instance
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .spec.backup
+      name: Backup
+      type: string
+    - jsonPath: .status.previous.state
+      name: Previous
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          OdooRestore replaces an OdooDeployment's database and filestore with a
+          backup, in place. Odoo is stopped while it runs; the replaced data is kept
+          for keepPrevious so the restore can be undone.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: OdooRestoreSpec says which backup replaces an instance's
+              data.
+            properties:
+              backup:
+                description: Backup is the OdooBackup to restore.
+                minLength: 1
+                type: string
+              keepPrevious:
+                description: |-
+                  KeepPrevious is how long the replaced database and files are kept
+                  for an undo. Overrides spec.backup.restore.keepPrevious.
+                type: string
+              odooDeployment:
+                description: OdooDeployment whose database and filestore are replaced,
+                  in the same namespace.
+                maxLength: 253
+                minLength: 1
+                type: string
+                x-kubernetes-validations:
+                - message: spec.odooDeployment is immutable
+                  rule: self == oldSelf
+              snapshotID:
+                description: |-
+                  SnapshotID is a restic snapshot in the instance's own repository on
+                  its first store (spec.backup.stores[0]), for a backup that has no
+                  OdooBackup any more.
+                pattern: ^[0-9a-f]{8,64}$
+                type: string
+              undo:
+                description: |-
+                  Undo reverses the OdooRestore of this name: the database and files it
+                  replaced go back in place, and the ones it restored are kept as the
+                  previous data of this restore. Refused once that data has been
+                  removed (keepPrevious passed) or when another restore ran on the
+                  instance since.
+                minLength: 1
+                type: string
+            required:
+            - odooDeployment
+            type: object
+            x-kubernetes-validations:
+            - message: set exactly one of backup, snapshotID, undo
+              rule: '(has(self.backup) ? 1 : 0) + (has(self.snapshotID) ? 1 : 0) +
+                (has(self.undo) ? 1 : 0) == 1'
+            - message: backup, snapshotID and undo are immutable
+              rule: (has(self.backup) == has(oldSelf.backup)) && (!has(self.backup)
+                || self.backup == oldSelf.backup) && (has(self.snapshotID) == has(oldSelf.snapshotID))
+                && (!has(self.snapshotID) || self.snapshotID == oldSelf.snapshotID)
+                && (has(self.undo) == has(oldSelf.undo)) && (!has(self.undo) || self.undo
+                == oldSelf.undo)
+          status:
+            description: OdooRestoreStatus describes the restore.
+            properties:
+              attempts:
+                format: int32
+                type: integer
+              cleanedUp:
+                description: |-
+                  CleanedUp is true once the cleanup Job deleted what the restore left
+                  behind (the replaced data once keepPrevious passed, any half-restored
+                  copy, its journal). CleanupAttempts counts its Jobs.
+                type: boolean
+              cleanupAttempts:
+                format: int32
+                type: integer
+              completedAt:
+                format: date-time
+                type: string
+              image:
+                description: |-
+                  Image is the Odoo image recorded in the backup; the instance is
+                  started on it.
+                type: string
+              job:
+                description: |-
+                  Job is the Job running the restore. Attempts counts the Jobs that
+                  ran it.
+                type: string
+              liveChanged:
+                description: |-
+                  LiveChanged is true once the restore may have renamed the live
+                  database or files; from then on it is finished by retrying, never
+                  abandoned.
+                type: boolean
+              message:
+                description: Message explains the phase in a sentence.
+                type: string
+              odooVersion:
+                description: OdooVersion is the Odoo series in the backup.
+                type: string
+              phase:
+                description: |-
+                  Phase: Pending, Stopping (Odoo is being stopped), Restoring,
+                  Completed or Failed.
+                enum:
+                - Pending
+                - Stopping
+                - Restoring
+                - Completed
+                - Failed
+                type: string
+              previous:
+                description: Previous is the data this restore replaced.
+                properties:
+                  database:
+                    description: Database is the replaced database's name while it
+                      is kept.
+                    type: string
+                  filestore:
+                    description: Filestore is the replaced filestore folder, under
+                      <dataDir>/filestore/.
+                    type: string
+                  image:
+                    description: |-
+                      Image and UpgradeToken are what the instance ran on the replaced
+                      data; an undo starts Odoo on them again.
+                    type: string
+                  keptUntil:
+                    description: KeptUntil is when the replaced data is deleted.
+                    format: date-time
+                    type: string
+                  state:
+                    description: 'State: Kept, Removed, Undone or None.'
+                    type: string
+                  undoneBy:
+                    description: UndoneBy is the OdooRestore that put the data back.
+                    type: string
+                  upgradeToken:
+                    type: string
+                type: object
+              retryAfter:
+                description: |-
+                  RetryAfter is when the next attempt (of the restore or its cleanup)
+                  starts after a failed one.
+                format: date-time
+                type: string
+              snapshotID:
+                type: string
+              startedAt:
+                format: date-time
+                type: string
+              store:
+                description: Store and SnapshotID are the backup that was restored.
+                type: string
+              suffix:
+                description: |-
+                  Suffix names the database and filestore folders of this restore:
+                  <db>_restore_<suffix> while restoring, <db>_prev_<suffix> for the
+                  data it replaced.
+                type: string
+              warnings:
+                description: Warnings found while checking the restored data.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: atomic
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -1,6 +1,8 @@
 package v1
 
 import (
+	"time"
+
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -938,4 +940,48 @@ func (o *OdooDeployment) UsesDeployment(deploymentName string) bool {
 
 func (o *OdooDeployment) UsesService(serviceName string) bool {
 	return o.GetHttpServiceName() == serviceName || o.GetPollServiceName() == serviceName
+}
+
+// PodSecurityContextValue is the security context of the Odoo pods, which
+// the backup and restore Jobs share so the files they write belong to Odoo.
+func (o *OdooDeployment) PodSecurityContextValue() *corev1.PodSecurityContext {
+	return o.podSecurityContext()
+}
+
+// ConfigSecretVolume is the odoo.conf volume of the Odoo pods.
+func (o *OdooDeployment) ConfigSecretVolume(name string) corev1.Volume {
+	return corev1.Volume{
+		Name: name,
+		VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{
+				SecretName:  o.GetConfigSecretName(),
+				Items:       []corev1.KeyToPath{{Key: odooConfigKey, Path: odooConfigKey}},
+				DefaultMode: ptrTo(int32(0o444)),
+			},
+		},
+	}
+}
+
+// KeepPreviousValue is spec.backup.restore.keepPrevious or its default (72h).
+func (o *OdooBackupConfig) KeepPreviousValue() time.Duration {
+	if o.Restore.KeepPrevious == nil {
+		return 72 * time.Hour
+	}
+	return o.Restore.KeepPrevious.Duration
+}
+
+// ConsistencyValue is spec.backup.consistency or its default (Online).
+func (o *OdooBackupConfig) ConsistencyValue() BackupConsistency {
+	if o.Consistency == "" {
+		return BackupConsistencyOnline
+	}
+	return o.Consistency
+}
+
+// ActiveDeadlineSecondsValue bounds one backup or restore Job (default 6h).
+func (o *OdooBackupConfig) ActiveDeadlineSecondsValue() int64 {
+	if o.ActiveDeadlineSeconds == nil {
+		return 21600
+	}
+	return *o.ActiveDeadlineSeconds
 }

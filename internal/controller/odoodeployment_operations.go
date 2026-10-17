@@ -1,0 +1,1304 @@
+/*
+Copyright 2025.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package controller
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/jobspec"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/layout"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/result"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/controller/reconcileloops"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/metrics"
+	"github.com/MohanadAbugharbia/odoo-operator/pkg/utils"
+)
+
+// +kubebuilder:rbac:groups=odoo.abugharbia.com,resources=odoobackups,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=odoo.abugharbia.com,resources=odoobackups/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=odoo.abugharbia.com,resources=odoorestores,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=odoo.abugharbia.com,resources=odoorestores/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=odoo.abugharbia.com,resources=odoorestores/finalizers,verbs=update
+// +kubebuilder:rbac:groups=odoo.abugharbia.com,resources=odoobackupstores,verbs=get;list;watch
+
+// Timings of backups and restores.
+const (
+	// cleanupWaitLimit is how long a backup waits for Odoo's filestore
+	// cleanup before it runs anyway (the repair from the previous backup
+	// covers what the cleanup deletes meanwhile).
+	cleanupWaitLimit = 2 * time.Hour
+	// cleanupRetry is how soon a deferred backup is tried again.
+	cleanupRetry = 2 * time.Minute
+	// maxRestoreRetryDelay caps the backoff of a restore that must be finished.
+	maxRestoreRetryDelay = 15 * time.Minute
+)
+
+// Condition reasons of backups and restores.
+const (
+	ReasonBackupRunning       = "BackupRunning"
+	ReasonBackupFailed        = "BackupFailed"
+	ReasonBackupCompleted     = "BackupCompleted"
+	ReasonBackupDeferred      = "BackupDeferred"
+	ReasonRestoreRunning      = "RestoreRunning"
+	ReasonRestoreFailed       = "RestoreFailed"
+	ReasonRestoreCompleted    = "RestoreCompleted"
+	ReasonRestoreIncomplete   = "RestoreIncomplete"
+	ReasonRestoreRefused      = "RestoreRefused"
+	ReasonCleanupFailed       = "RestoreCleanupFailed"
+	ReasonBackupImageUnknown  = "BackupImageUnknown"
+	ReasonWaitingForOperation = "WaitingForOperation"
+)
+
+// instanceWork is every OdooBackup and OdooRestore of one instance, oldest first.
+type instanceWork struct {
+	backups  []odoov1.OdooBackup
+	restores []odoov1.OdooRestore
+}
+
+// listWork lists the instance's backups and restores. They are few per
+// namespace, so they are filtered here instead of through an index.
+func (r *OdooDeploymentReconciler) listWork(ctx context.Context, od *odoov1.OdooDeployment) (instanceWork, error) {
+	var w instanceWork
+	backups := &odoov1.OdooBackupList{}
+	if err := r.List(ctx, backups, client.InNamespace(od.Namespace)); err != nil {
+		return w, fmt.Errorf("list OdooBackups: %w", err)
+	}
+	for _, b := range backups.Items {
+		if b.Spec.OdooDeployment == od.Name {
+			w.backups = append(w.backups, b)
+		}
+	}
+	restores := &odoov1.OdooRestoreList{}
+	if err := r.List(ctx, restores, client.InNamespace(od.Namespace)); err != nil {
+		return w, fmt.Errorf("list OdooRestores: %w", err)
+	}
+	for _, rs := range restores.Items {
+		if rs.Spec.OdooDeployment == od.Name {
+			w.restores = append(w.restores, rs)
+		}
+	}
+	older := func(a, b metav1.ObjectMeta) bool {
+		if !a.CreationTimestamp.Equal(&b.CreationTimestamp) {
+			return a.CreationTimestamp.Before(&b.CreationTimestamp)
+		}
+		return a.Name < b.Name
+	}
+	sort.Slice(w.backups, func(i, j int) bool { return older(w.backups[i].ObjectMeta, w.backups[j].ObjectMeta) })
+	sort.Slice(w.restores, func(i, j int) bool { return older(w.restores[i].ObjectMeta, w.restores[j].ObjectMeta) })
+	return w, nil
+}
+
+func (w instanceWork) restore(name string) *odoov1.OdooRestore {
+	for i := range w.restores {
+		if w.restores[i].Name == name {
+			return &w.restores[i]
+		}
+	}
+	return nil
+}
+
+func (w instanceWork) backup(name string) *odoov1.OdooBackup {
+	for i := range w.backups {
+		if w.backups[i].Name == name {
+			return &w.backups[i]
+		}
+	}
+	return nil
+}
+
+// nextRestore is the oldest restore still to run (or one a crash left
+// started without the instance knowing).
+func (w instanceWork) nextRestore() *odoov1.OdooRestore {
+	for i := range w.restores {
+		rs := &w.restores[i]
+		switch rs.Status.Phase {
+		case "", odoov1.RestorePhasePending, odoov1.RestorePhaseStopping, odoov1.RestorePhaseRestoring:
+			if !rs.DeletionTimestamp.IsZero() && rs.Status.Phase != odoov1.RestorePhaseRestoring {
+				continue // deleted before it ran: nothing to do but let it go
+			}
+			return rs
+		}
+	}
+	return nil
+}
+
+// nextBackup is the oldest backup still to take whose retry time has come,
+// and when the next deferred one is due.
+func (w instanceWork) nextBackup(now time.Time) (*odoov1.OdooBackup, time.Duration) {
+	var wait time.Duration
+	for i := range w.backups {
+		b := &w.backups[i]
+		if !b.DeletionTimestamp.IsZero() {
+			continue
+		}
+		switch b.Status.Phase {
+		case "", odoov1.BackupPhasePending, odoov1.BackupPhaseRunning, odoov1.BackupPhaseWaitingForFilestoreCleanup:
+		default:
+			continue
+		}
+		if b.Status.RetryAfter != nil && b.Status.RetryAfter.After(now) {
+			if d := b.Status.RetryAfter.Sub(now); wait == 0 || d < wait {
+				wait = d
+			}
+			continue
+		}
+		return b, 0
+	}
+	return nil, wait
+}
+
+// cleanupDue is a restore whose leftovers can be deleted now: the replaced
+// data once keepPrevious has passed (or the OdooRestore is being deleted),
+// and the journal of every finished restore.
+func (w instanceWork) cleanupDue(now time.Time) (*odoov1.OdooRestore, time.Duration) {
+	var wait time.Duration
+	for i := range w.restores {
+		rs := &w.restores[i]
+		st := &rs.Status
+		if st.CleanedUp || st.Suffix == "" {
+			continue
+		}
+		if st.RetryAfter != nil && st.RetryAfter.After(now) {
+			if d := st.RetryAfter.Sub(now); wait == 0 || d < wait {
+				wait = d
+			}
+			continue
+		}
+		switch st.Phase {
+		case odoov1.RestorePhaseFailed:
+			if st.LiveChanged {
+				continue // never: a restore that changed live data is finished, not failed
+			}
+			return rs, 0
+		case odoov1.RestorePhaseCompleted:
+			if st.Previous.State != odoov1.PreviousKept || !rs.DeletionTimestamp.IsZero() {
+				return rs, 0
+			}
+			if st.Previous.KeptUntil != nil {
+				if !st.Previous.KeptUntil.After(now) {
+					return rs, 0
+				}
+				if d := st.Previous.KeptUntil.Sub(now); wait == 0 || d < wait {
+					wait = d
+				}
+			}
+		}
+	}
+	return nil, wait
+}
+
+// backupImage returns the backup Jobs' image.
+// BackupImageLookup returns the backup image; the store reconciler uses it.
+func (r *OdooDeploymentReconciler) BackupImageLookup(ctx context.Context) (string, error) {
+	return r.backupImage(ctx)
+}
+
+func (r *OdooDeploymentReconciler) backupImage(ctx context.Context) (string, error) {
+	r.imageMu.Lock()
+	defer r.imageMu.Unlock()
+	if r.BackupImage != "" {
+		return r.BackupImage, nil
+	}
+	if r.OwnImage == nil {
+		return "", errors.New("the operator has no backup image: set --backup-image")
+	}
+	own, err := r.OwnImage(ctx)
+	if err != nil {
+		return "", fmt.Errorf("look up the operator's image for the backup image: %w", err)
+	}
+	if own == "" {
+		return "", errors.New("the operator has no backup image: set --backup-image")
+	}
+	r.BackupImage = BackupImageFor(own)
+	log.FromContext(ctx).Info("backup image", "image", r.BackupImage)
+	return r.BackupImage, nil
+}
+
+// BackupImageFor derives the backup image from the operator's own image:
+// the same tag of the repository with "-backup" appended
+// (ghcr.io/x/odoo-operator:1.2.3 → ghcr.io/x/odoo-operator-backup:1.2.3).
+func BackupImageFor(operatorImage string) string {
+	ref, digest, _ := strings.Cut(operatorImage, "@")
+	slash := strings.LastIndex(ref, "/")
+	repo, tag := ref, ""
+	if colon := strings.LastIndex(ref, ":"); colon > slash {
+		repo, tag = ref[:colon], ref[colon:]
+	}
+	if tag == "" && digest != "" {
+		// A digest belongs to the operator image only; fall back to latest.
+		return repo + "-backup:latest"
+	}
+	return repo + "-backup" + tag
+}
+
+// patchBackupStatus applies mutate to b's status and patches it.
+func (r *OdooDeploymentReconciler) patchBackupStatus(ctx context.Context, b *odoov1.OdooBackup, mutate func(*odoov1.OdooBackupStatus)) error {
+	base := b.DeepCopy()
+	mutate(&b.Status)
+	if equality.Semantic.DeepEqual(base.Status, b.Status) {
+		return nil
+	}
+	if err := r.Status().Patch(ctx, b, client.MergeFrom(base)); err != nil {
+		return fmt.Errorf("patch OdooBackup %s status: %w", b.Name, err)
+	}
+	return nil
+}
+
+// patchRestoreStatus applies mutate to rs's status and patches it.
+func (r *OdooDeploymentReconciler) patchRestoreStatus(ctx context.Context, rs *odoov1.OdooRestore, mutate func(*odoov1.OdooRestoreStatus)) error {
+	base := rs.DeepCopy()
+	mutate(&rs.Status)
+	if equality.Semantic.DeepEqual(base.Status, rs.Status) {
+		return nil
+	}
+	if err := r.Status().Patch(ctx, rs, client.MergeFrom(base)); err != nil {
+		return fmt.Errorf("patch OdooRestore %s status: %w", rs.Name, err)
+	}
+	return nil
+}
+
+// setRestoreFinalizer adds or removes the restore finalizer.
+func (r *OdooDeploymentReconciler) setRestoreFinalizer(ctx context.Context, rs *odoov1.OdooRestore, want bool) error {
+	if controllerutil.ContainsFinalizer(rs, odoov1.RestoreFinalizer) == want {
+		return nil
+	}
+	patched := rs.DeepCopy()
+	if want {
+		controllerutil.AddFinalizer(patched, odoov1.RestoreFinalizer)
+	} else {
+		controllerutil.RemoveFinalizer(patched, odoov1.RestoreFinalizer)
+	}
+	if err := r.Patch(ctx, patched, client.MergeFrom(rs)); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("patch OdooRestore %s finalizer: %w", rs.Name, err)
+	}
+	rs.ObjectMeta = patched.ObjectMeta
+	return nil
+}
+
+func (r *OdooDeploymentReconciler) objectEvent(obj client.Object, eventType, reason, message string) {
+	if r.Recorder != nil {
+		r.Recorder.Event(obj, eventType, reason, message)
+	}
+}
+
+// getStore reads a store and checks that the Secrets its Jobs mount exist
+// with the keys they need, so a typo fails here instead of as a pod that
+// never starts.
+func (r *OdooDeploymentReconciler) getStore(ctx context.Context, namespace, name string) (*odoov1.OdooBackupStore, error) {
+	store := &odoov1.OdooBackupStore{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, store); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("OdooBackupStore %q does not exist in namespace %s", name, namespace)
+		}
+		return nil, err
+	}
+	if err := checkStoreSecrets(ctx, r.Client, store); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+// checkStoreSecrets checks the Secrets a store names.
+func checkStoreSecrets(ctx context.Context, c client.Reader, store *odoov1.OdooBackupStore) error {
+	for name, keys := range jobspec.StoreSecrets(store) {
+		secret := &corev1.Secret{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: store.Namespace, Name: name}, secret); err != nil {
+			if apierrors.IsNotFound(err) {
+				return fmt.Errorf("Secret %q of OdooBackupStore %s does not exist", name, store.Name)
+			}
+			return err
+		}
+		for _, k := range keys {
+			if _, ok := secret.Data[k]; !ok {
+				return fmt.Errorf("Secret %q of OdooBackupStore %s has no key %q", name, store.Name, k)
+			}
+		}
+	}
+	return nil
+}
+
+// jobParams are the common inputs of the instance's backup Jobs.
+func (r *OdooDeploymentReconciler) jobParams(ctx context.Context, od *odoov1.OdooDeployment, store *odoov1.OdooBackupStore) (jobspec.Params, error) {
+	image, err := r.backupImage(ctx)
+	if err != nil {
+		return jobspec.Params{}, err
+	}
+	return jobspec.Params{
+		Image:           image,
+		Instance:        od,
+		Database:        od.Status.Database.Name,
+		Store:           store,
+		OperatorVersion: r.Version,
+	}, nil
+}
+
+// pvcAccess tells how the data volume can be shared: rwx when any node can
+// mount it, rwop when only one pod can.
+func (r *OdooDeploymentReconciler) pvcAccess(ctx context.Context, od *odoov1.OdooDeployment) (rwx, rwop bool, err error) {
+	pvc := &corev1.PersistentVolumeClaim{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: od.Namespace, Name: od.GetPvcName()}, pvc); err != nil {
+		return false, false, fmt.Errorf("get the data volume claim: %w", err)
+	}
+	modes := pvc.Status.AccessModes
+	if len(modes) == 0 {
+		modes = pvc.Spec.AccessModes
+	}
+	for _, m := range modes {
+		switch m {
+		case corev1.ReadWriteMany:
+			rwx = true
+		case corev1.ReadWriteOncePod:
+			rwop = true
+		}
+	}
+	return rwx, rwop, nil
+}
+
+// affinityToOdoo pins a Job that mounts the data volume next to a running
+// Odoo pod, since a ReadWriteOnce volume is attached to one node at a time.
+func (r *OdooDeploymentReconciler) affinityToOdoo(ctx context.Context, od *odoov1.OdooDeployment) (*corev1.Affinity, error) {
+	rwx, _, err := r.pvcAccess(ctx, od)
+	if err != nil || rwx {
+		return nil, err
+	}
+	pods := &corev1.PodList{}
+	if err := r.reader().List(ctx, pods, client.InNamespace(od.Namespace), client.MatchingLabels(od.GetServiceSelectorLabels())); err != nil {
+		return nil, fmt.Errorf("list pods: %w", err)
+	}
+	for _, p := range pods.Items {
+		if p.Spec.NodeName == "" || !p.DeletionTimestamp.IsZero() {
+			continue
+		}
+		return &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+				NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+					MatchFields: []corev1.NodeSelectorRequirement{{
+						Key: "metadata.name", Operator: corev1.NodeSelectorOpIn, Values: []string{p.Spec.NodeName},
+					}},
+				}},
+			},
+		}}, nil
+	}
+	return nil, nil
+}
+
+// createJob creates job owned by the instance, or returns the one a
+// previous reconcile created under the same name.
+func (r *OdooDeploymentReconciler) createJob(ctx context.Context, od *odoov1.OdooDeployment, job *batchv1.Job) error {
+	if err := controllerutil.SetControllerReference(od, job, r.Scheme); err != nil {
+		return err
+	}
+	err := r.Create(ctx, job)
+	if apierrors.IsAlreadyExists(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("create job %s: %w", job.Name, err)
+	}
+	log.FromContext(ctx).Info("Created job", "job", job.Name, "kind", job.Labels[odoov1.LabelJobKind])
+	return nil
+}
+
+// jobOutcome is a finished (or vanished) Job and its Result.
+type jobOutcome struct {
+	state   reconcileloops.JobState
+	job     *batchv1.Job
+	result  result.Result
+	decoded bool
+	// detail describes a Job that failed without a Result.
+	detail string
+	// pullMessage is set while the Job's pod cannot pull its image.
+	pullMessage string
+}
+
+// observeJob reads the state of a backup Job and, once it has finished, the
+// Result its last pod wrote.
+func (r *OdooDeploymentReconciler) observeJob(ctx context.Context, namespace, name string) (jobOutcome, error) {
+	od := &odoov1.OdooDeployment{}
+	od.Namespace = namespace
+	od.Status.CurrentInitJob = odoov1.MaintenanceJobStatus{Name: name, Namespace: namespace}
+	obs, err := reconcileloops.ObserveMaintenanceJob(ctx, r.Client, r.reader(), od)
+	if err != nil {
+		return jobOutcome{}, err
+	}
+	out := jobOutcome{state: obs.State, job: obs.Job, detail: obs.FailureMessage, pullMessage: obs.ImagePullMessage}
+	if obs.QuotaMessage != "" {
+		out.detail = obs.QuotaMessage
+		out.pullMessage = obs.QuotaMessage
+	}
+	if obs.State != reconcileloops.JobStateSucceeded && obs.State != reconcileloops.JobStateFailed {
+		return out, nil
+	}
+	pods := &corev1.PodList{}
+	if err := r.reader().List(ctx, pods, client.InNamespace(namespace), client.MatchingLabels{"job-name": name}); err != nil {
+		return out, fmt.Errorf("list pods of job %s: %w", name, err)
+	}
+	var latest *corev1.ContainerStateTerminated
+	for i := range pods.Items {
+		for _, cs := range pods.Items[i].Status.ContainerStatuses {
+			if cs.Name != jobspec.ContainerName || cs.State.Terminated == nil {
+				continue
+			}
+			t := cs.State.Terminated
+			if latest == nil || t.FinishedAt.After(latest.FinishedAt.Time) {
+				latest = t
+			}
+		}
+	}
+	if latest == nil {
+		return out, nil
+	}
+	res, err := result.Decode(latest.Message)
+	if err != nil {
+		if out.detail == "" {
+			out.detail = fmt.Sprintf("%s (exit code %d)", latest.Reason, latest.ExitCode)
+		}
+		return out, nil
+	}
+	out.result, out.decoded = res, true
+	return out, nil
+}
+
+// failureText describes a failed Job for a status message.
+func failureText(out jobOutcome) string {
+	if out.decoded && out.result.Error != "" {
+		return fmt.Sprintf("failed at step %s: %s", out.result.Step, out.result.Error)
+	}
+	if out.detail != "" {
+		return out.detail
+	}
+	return "the Job failed without reporting why"
+}
+
+// ---- the operation in flight -------------------------------------------------
+
+// observeOperation drives status.currentOperation. done is true once the
+// instance is free for other work.
+func (r *OdooDeploymentReconciler) observeOperation(ctx context.Context, s *reconcileState, w instanceWork, configHash string) (ctrl.Result, bool, error) {
+	op := s.od.Status.CurrentOperation
+	switch op.Kind {
+	case odoov1.OperationBackup:
+		b := w.backup(op.Name)
+		if b == nil {
+			return r.abandonOperation(ctx, s, "OdooBackup "+op.Name+" was deleted")
+		}
+		return r.driveBackup(ctx, s, b, configHash)
+	case odoov1.OperationRestore:
+		rs := w.restore(op.Name)
+		if rs == nil {
+			return r.abandonOperation(ctx, s, "OdooRestore "+op.Name+" was deleted")
+		}
+		return r.driveRestore(ctx, s, w, rs, configHash)
+	case odoov1.OperationCleanup:
+		rs := w.restore(op.Name)
+		if rs == nil {
+			return r.abandonOperation(ctx, s, "OdooRestore "+op.Name+" was deleted")
+		}
+		return r.driveCleanup(ctx, s, rs, configHash)
+	}
+	s.od.Status.CurrentOperation = odoov1.OperationStatus{}
+	return ctrl.Result{}, true, nil
+}
+
+// abandonOperation ends an operation whose object is gone, once its Job (if
+// any) is no longer running.
+func (r *OdooDeploymentReconciler) abandonOperation(ctx context.Context, s *reconcileState, why string) (ctrl.Result, bool, error) {
+	op := s.od.Status.CurrentOperation
+	if op.Job != "" {
+		out, err := r.observeJob(ctx, s.od.Namespace, op.Job)
+		if err != nil {
+			return ctrl.Result{}, false, err
+		}
+		if out.state == reconcileloops.JobStateActive {
+			s.ready(metav1.ConditionFalse, ReasonWaitingForOperation, why+"; waiting for job "+op.Job+" to finish")
+			return ctrl.Result{RequeueAfter: 15 * time.Second}, false, nil
+		}
+		if op.Kind == odoov1.OperationRestore && (!out.decoded || out.result.LiveChanged) && !(out.decoded && out.result.OK) {
+			// The restore may have renamed the live data and nobody can
+			// finish it any more: keep Odoo stopped for a person to look.
+			msg := fmt.Sprintf("%s while job %s had not finished the swap; Odoo stays stopped. "+
+				"Check the databases and filestore folders with suffix in the job log, then clear status.currentOperation", why, op.Job)
+			s.degraded(ReasonRestoreIncomplete, msg)
+			s.ready(metav1.ConditionFalse, ReasonRestoreIncomplete, msg)
+			s.od.Status.Phase = odoov1.PhaseFailed
+			return ctrl.Result{RequeueAfter: 5 * time.Minute}, false, nil
+		}
+	}
+	log.FromContext(ctx).Info("Operation abandoned", "kind", op.Kind, "name", op.Name, "reason", why)
+	s.od.Status.CurrentOperation = odoov1.OperationStatus{}
+	return ctrl.Result{Requeue: true}, false, nil
+}
+
+// stopOdoo scales the Deployment to zero and reports whether its pods are gone.
+func (r *OdooDeploymentReconciler) stopOdoo(ctx context.Context, s *reconcileState, configHash string) (bool, error) {
+	od := s.od
+	if _, err := reconcileloops.EnsureDeployment(ctx, r.Client, r.Scheme, od, od.Status.AppliedImage, 0, configHash); err != nil {
+		return false, err
+	}
+	running, err := r.countPods(ctx, od.Namespace, od.GetServiceSelectorLabels())
+	if err != nil {
+		return false, err
+	}
+	return running == 0, nil
+}
+
+// ---- backups -------------------------------------------------------------------
+
+// startBackup claims the instance for backup b.
+func (r *OdooDeploymentReconciler) startBackup(ctx context.Context, s *reconcileState, b *odoov1.OdooBackup, configHash string) (ctrl.Result, error) {
+	od := s.od
+	fail := func(msg string) (ctrl.Result, error) {
+		r.objectEvent(b, corev1.EventTypeWarning, ReasonBackupFailed, msg)
+		metrics.BackupFinished(backupKind(b), metrics.BackupFailed, 0)
+		err := r.patchBackupStatus(ctx, b, func(st *odoov1.OdooBackupStatus) {
+			st.Phase = odoov1.BackupPhaseFailed
+			st.Message = msg
+			now := metav1.Now()
+			st.CompletedAt = &now
+		})
+		return ctrl.Result{Requeue: true}, err
+	}
+	if len(od.Spec.Backup.Stores) == 0 {
+		return fail(fmt.Sprintf("OdooDeployment %s has no spec.backup.stores", od.Name))
+	}
+	if _, err := r.getStore(ctx, od.Namespace, od.Spec.Backup.Stores[0]); err != nil {
+		return fail(err.Error())
+	}
+	stop := od.Spec.Backup.ConsistencyValue() == odoov1.BackupConsistencyOffline
+	if !stop {
+		_, rwop, err := r.pvcAccess(ctx, od)
+		if err != nil {
+			return s.fail(odoov1.ReasonReconcileFailed, err)
+		}
+		stop = rwop
+	}
+	now := metav1.Now()
+	od.Status.CurrentOperation = odoov1.OperationStatus{
+		Kind: odoov1.OperationBackup, Name: b.Name, StoppedOdoo: stop, StartedAt: &now,
+	}
+	log.FromContext(ctx).Info("Starting backup", "backup", b.Name, "offline", stop)
+	result, _, err := r.driveBackup(ctx, s, b, configHash)
+	return result, err
+}
+
+func backupKind(b *odoov1.OdooBackup) string {
+	if k := b.Labels[odoov1.LabelBackupKind]; k != "" {
+		return k
+	}
+	return odoov1.BackupKindManual
+}
+
+// driveBackup moves the backup in status.currentOperation along.
+func (r *OdooDeploymentReconciler) driveBackup(ctx context.Context, s *reconcileState, b *odoov1.OdooBackup, configHash string) (ctrl.Result, bool, error) {
+	od := s.od
+	op := &od.Status.CurrentOperation
+	if op.StoppedOdoo {
+		od.Status.Phase = odoov1.PhaseBackingUp
+	}
+	if op.Job == "" {
+		if op.StoppedOdoo {
+			stopped, err := r.stopOdoo(ctx, s, configHash)
+			if err != nil {
+				res, err := s.fail(odoov1.ReasonDeploymentFailed, err)
+				return res, false, err
+			}
+			if !stopped {
+				s.ready(metav1.ConditionFalse, odoov1.ReasonWaitingForPodsToStop, "stopping Odoo for an offline backup")
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, false, nil
+			}
+		}
+		store, err := r.getStore(ctx, od.Namespace, od.Spec.Backup.Stores[0])
+		if err != nil {
+			return r.finishBackupFailed(ctx, s, b, err.Error())
+		}
+		params, err := r.jobParams(ctx, od, store)
+		if err != nil {
+			s.degraded(ReasonBackupImageUnknown, err.Error())
+			return ctrl.Result{RequeueAfter: time.Minute}, false, nil
+		}
+		if !op.StoppedOdoo {
+			if params.Affinity, err = r.affinityToOdoo(ctx, od); err != nil {
+				res, err := s.fail(odoov1.ReasonReconcileFailed, err)
+				return res, false, err
+			}
+		}
+		attempt := b.Status.Attempts + 1
+		wait := od.Spec.Backup.ConsistencyValue() == odoov1.BackupConsistencyOnline && !op.StoppedOdoo
+		if b.Status.WaitingSince != nil && time.Since(b.Status.WaitingSince.Time) > cleanupWaitLimit {
+			wait = false
+		}
+		job, err := jobspec.BackupJob(params, b, backupKind(b), attempt, wait)
+		if err != nil {
+			return r.finishBackupFailed(ctx, s, b, err.Error())
+		}
+		if err := r.createJob(ctx, od, &job); err != nil {
+			res, err := s.fail(odoov1.ReasonJobCreationFailed, err)
+			return res, false, err
+		}
+		err = r.patchBackupStatus(ctx, b, func(st *odoov1.OdooBackupStatus) {
+			st.Phase = odoov1.BackupPhaseRunning
+			st.Message = "job " + job.Name + " is taking the backup"
+			st.Job = job.Name
+			st.Attempts = attempt
+			st.Store = store.Name
+			st.Repository = layout.Repository(od.Namespace, od.Name)
+			st.Consistency = string(od.Spec.Backup.ConsistencyValue())
+			if op.StoppedOdoo {
+				st.Consistency = string(odoov1.BackupConsistencyOffline)
+			}
+			st.RetryAfter = nil
+			if st.StartedAt == nil {
+				st.StartedAt = op.StartedAt
+			}
+		})
+		if err != nil {
+			return ctrl.Result{}, false, err
+		}
+		op.Job = job.Name
+		r.objectEvent(b, corev1.EventTypeNormal, ReasonBackupRunning, "job "+job.Name+" started")
+	}
+
+	out, err := r.observeJob(ctx, od.Namespace, op.Job)
+	if err != nil {
+		return ctrl.Result{}, false, err
+	}
+	switch out.state {
+	case reconcileloops.JobStateMissing:
+		op.Job = ""
+		return ctrl.Result{Requeue: true}, false, nil
+	case reconcileloops.JobStateActive:
+		if out.pullMessage != "" {
+			_ = r.patchBackupStatus(ctx, b, func(st *odoov1.OdooBackupStatus) {
+				st.Message = "job " + op.Job + " cannot start: " + out.pullMessage
+			})
+		}
+		if op.StoppedOdoo {
+			s.ready(metav1.ConditionFalse, ReasonBackupRunning, "Odoo is stopped for backup "+b.Name)
+		}
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, false, nil
+	}
+
+	took := time.Duration(0)
+	if b.Status.StartedAt != nil {
+		took = time.Since(b.Status.StartedAt.Time).Round(time.Second)
+	}
+	switch {
+	case out.state == reconcileloops.JobStateSucceeded && out.decoded && out.result.Deferred:
+		reason := strings.Join(out.result.Warnings, "; ")
+		err := r.patchBackupStatus(ctx, b, func(st *odoov1.OdooBackupStatus) {
+			st.Phase = odoov1.BackupPhaseWaitingForFilestoreCleanup
+			st.Message = reason + "; the backup waits for it to finish"
+			if st.WaitingSince == nil {
+				now := metav1.Now()
+				st.WaitingSince = &now
+			}
+			retry := metav1.NewTime(time.Now().Add(cleanupRetry))
+			st.RetryAfter = &retry
+			st.Job = ""
+		})
+		if err != nil {
+			return ctrl.Result{}, false, err
+		}
+		if err := reconcileloops.DeleteMaintenanceJob(ctx, r.Client, out.job); err != nil {
+			return ctrl.Result{}, false, err
+		}
+		r.objectEvent(b, corev1.EventTypeNormal, ReasonBackupDeferred, reason)
+		od.Status.CurrentOperation = odoov1.OperationStatus{}
+		return ctrl.Result{RequeueAfter: cleanupRetry}, true, nil
+
+	case out.state == reconcileloops.JobStateSucceeded && out.decoded && out.result.OK:
+		res := out.result
+		phase := odoov1.BackupPhaseCompleted
+		msg := fmt.Sprintf("snapshot %s: %s of database, %d files (%s) in the filestore",
+			short(res.SnapshotID), bytesText(res.DatabaseBytes), res.FilestoreFiles, bytesText(res.FilestoreBytes))
+		if res.MissingFiles > 0 || len(res.Warnings) > 0 {
+			phase = odoov1.BackupPhaseCompletedWithWarnings
+			msg += "; " + strings.Join(res.Warnings, "; ")
+		}
+		err := r.patchBackupStatus(ctx, b, func(st *odoov1.OdooBackupStatus) {
+			st.Phase = phase
+			st.Message = msg
+			st.SnapshotID = res.SnapshotID
+			st.OdooVersion = res.OdooVersion
+			st.PgServerVersion = res.PgServerVersion
+			st.Image = od.Status.AppliedImage
+			st.DatabaseBytes = res.DatabaseBytes
+			st.FilestoreBytes = res.FilestoreBytes
+			st.FilestoreFiles = res.FilestoreFiles
+			st.AddedBytes = res.AddedBytes
+			st.RepairedFiles = int32(res.RepairedFiles)
+			st.MissingFiles = int32(res.MissingFiles)
+			st.MissingFileNames = res.MissingNames
+			st.RetryAfter = nil
+			now := metav1.Now()
+			st.CompletedAt = &now
+		})
+		if err != nil {
+			return ctrl.Result{}, false, err
+		}
+		if err := reconcileloops.DeleteMaintenanceJob(ctx, r.Client, out.job); err != nil {
+			return ctrl.Result{}, false, err
+		}
+		eventType := corev1.EventTypeNormal
+		if phase != odoov1.BackupPhaseCompleted {
+			eventType = corev1.EventTypeWarning
+		}
+		r.objectEvent(b, eventType, ReasonBackupCompleted, msg)
+		metrics.BackupFinished(backupKind(b), metrics.BackupSucceeded, took)
+		od.Status.CurrentOperation = odoov1.OperationStatus{}
+		return ctrl.Result{Requeue: true}, true, nil
+	}
+	msg := fmt.Sprintf("job %s %s; inspect with: kubectl -n %s logs job/%s", op.Job, failureText(out), od.Namespace, op.Job)
+	return r.finishBackupFailed(ctx, s, b, msg)
+}
+
+// finishBackupFailed marks the backup failed and frees the instance.
+func (r *OdooDeploymentReconciler) finishBackupFailed(ctx context.Context, s *reconcileState, b *odoov1.OdooBackup, msg string) (ctrl.Result, bool, error) {
+	took := time.Duration(0)
+	if b.Status.StartedAt != nil {
+		took = time.Since(b.Status.StartedAt.Time).Round(time.Second)
+	}
+	err := r.patchBackupStatus(ctx, b, func(st *odoov1.OdooBackupStatus) {
+		st.Phase = odoov1.BackupPhaseFailed
+		st.Message = msg
+		now := metav1.Now()
+		st.CompletedAt = &now
+	})
+	if err != nil {
+		return ctrl.Result{}, false, err
+	}
+	r.objectEvent(b, corev1.EventTypeWarning, ReasonBackupFailed, msg)
+	r.event(s.od, corev1.EventTypeWarning, ReasonBackupFailed, "backup "+b.Name+": "+msg)
+	metrics.BackupFinished(backupKind(b), metrics.BackupFailed, took)
+	s.od.Status.CurrentOperation = odoov1.OperationStatus{}
+	return ctrl.Result{Requeue: true}, true, nil
+}
+
+// ---- restores --------------------------------------------------------------------
+
+// restoreSource is what a restore puts in place.
+type restoreSource struct {
+	store    *odoov1.OdooBackupStore
+	snapshot string
+	// undo is the restore being undone.
+	undo *odoov1.OdooRestore
+}
+
+// resolveRestore checks a restore against the instance and finds its source.
+// A returned refusal is the user's to fix (the restore fails); an error is
+// retried.
+func (r *OdooDeploymentReconciler) resolveRestore(ctx context.Context, od *odoov1.OdooDeployment, w instanceWork,
+	rs *odoov1.OdooRestore) (src restoreSource, refusal string, err error) {
+	spec := rs.Spec
+	switch {
+	case spec.Backup != "":
+		b := &odoov1.OdooBackup{}
+		if err := r.Get(ctx, client.ObjectKey{Namespace: od.Namespace, Name: spec.Backup}, b); err != nil {
+			if apierrors.IsNotFound(err) {
+				return src, fmt.Sprintf("OdooBackup %q does not exist", spec.Backup), nil
+			}
+			return src, "", err
+		}
+		if b.Spec.OdooDeployment != od.Name {
+			return src, fmt.Sprintf("OdooBackup %q is a backup of %s, not of %s", b.Name, b.Spec.OdooDeployment, od.Name), nil
+		}
+		if b.Status.Phase != odoov1.BackupPhaseCompleted && b.Status.Phase != odoov1.BackupPhaseCompletedWithWarnings {
+			return src, fmt.Sprintf("OdooBackup %q has not completed (phase %q)", b.Name, b.Status.Phase), nil
+		}
+		if b.Status.SnapshotID == "" || b.Status.Store == "" {
+			return src, fmt.Sprintf("OdooBackup %q records no snapshot", b.Name), nil
+		}
+		store, err := r.getStore(ctx, od.Namespace, b.Status.Store)
+		if err != nil {
+			return src, err.Error(), nil
+		}
+		return restoreSource{store: store, snapshot: b.Status.SnapshotID}, "", nil
+	case spec.SnapshotID != "":
+		if len(od.Spec.Backup.Stores) == 0 {
+			return src, fmt.Sprintf("OdooDeployment %s has no spec.backup.stores to find snapshot %s in", od.Name, spec.SnapshotID), nil
+		}
+		store, err := r.getStore(ctx, od.Namespace, od.Spec.Backup.Stores[0])
+		if err != nil {
+			return src, err.Error(), nil
+		}
+		return restoreSource{store: store, snapshot: spec.SnapshotID}, "", nil
+	case spec.Undo != "":
+		target := w.restore(spec.Undo)
+		switch {
+		case spec.Undo == rs.Name:
+			return src, "a restore cannot undo itself", nil
+		case target == nil:
+			return src, fmt.Sprintf("OdooRestore %q of %s does not exist", spec.Undo, od.Name), nil
+		case target.Status.Phase != odoov1.RestorePhaseCompleted:
+			return src, fmt.Sprintf("OdooRestore %q has not completed", spec.Undo), nil
+		case target.Status.Previous.State != odoov1.PreviousKept:
+			return src, fmt.Sprintf("the data OdooRestore %q replaced is no longer kept (%s)", spec.Undo,
+				strings.ToLower(orDefault(target.Status.Previous.State, "none"))), nil
+		}
+		for i := range w.restores {
+			other := &w.restores[i]
+			if other.Name == target.Name || other.Status.Phase != odoov1.RestorePhaseCompleted || other.Status.CompletedAt == nil {
+				continue
+			}
+			if target.Status.CompletedAt == nil || other.Status.CompletedAt.After(target.Status.CompletedAt.Time) {
+				return src, fmt.Sprintf("OdooRestore %q ran after %q; only the latest restore can be undone", other.Name, target.Name), nil
+			}
+		}
+		return restoreSource{undo: target}, "", nil
+	}
+	return src, "set one of backup, snapshotID, undo", nil
+}
+
+func orDefault(s, d string) string {
+	if s == "" {
+		return d
+	}
+	return s
+}
+
+func restoreMode(rs *odoov1.OdooRestore) string {
+	if rs.Spec.Undo != "" {
+		return metrics.RestoreModeUndo
+	}
+	return metrics.RestoreModeRestore
+}
+
+// startRestore claims the instance for restore rs.
+func (r *OdooDeploymentReconciler) startRestore(ctx context.Context, s *reconcileState, w instanceWork,
+	rs *odoov1.OdooRestore, configHash string) (ctrl.Result, error) {
+	od := s.od
+	if !rs.DeletionTimestamp.IsZero() && rs.Status.Phase != odoov1.RestorePhaseRestoring {
+		return ctrl.Result{Requeue: true}, r.setRestoreFinalizer(ctx, rs, false)
+	}
+	resumed := rs.Status.Phase == odoov1.RestorePhaseStopping || rs.Status.Phase == odoov1.RestorePhaseRestoring
+	if !resumed {
+		_, refusal, err := r.resolveRestore(ctx, od, w, rs)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if refusal != "" {
+			r.objectEvent(rs, corev1.EventTypeWarning, ReasonRestoreRefused, refusal)
+			metrics.RestoreFinished(restoreMode(rs), metrics.RestoreFailed)
+			return ctrl.Result{Requeue: true}, r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) {
+				st.Phase = odoov1.RestorePhaseFailed
+				st.Message = refusal
+				now := metav1.Now()
+				st.CompletedAt = &now
+				st.CleanedUp = true // nothing ran, nothing to clean
+			})
+		}
+		if err := r.setRestoreFinalizer(ctx, rs, true); err != nil {
+			return ctrl.Result{}, err
+		}
+		now := metav1.Now()
+		err = r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) {
+			st.Phase = odoov1.RestorePhaseStopping
+			st.Message = "stopping Odoo"
+			st.Suffix = layout.Suffix(now.Time)
+			st.StartedAt = &now
+			st.Previous = odoov1.RestorePrevious{Image: od.Status.AppliedImage, UpgradeToken: od.Status.AppliedUpgradeToken}
+		})
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		r.objectEvent(rs, corev1.EventTypeNormal, ReasonRestoreRunning, "stopping Odoo to restore")
+	}
+	now := metav1.Now()
+	od.Status.CurrentOperation = odoov1.OperationStatus{
+		Kind: odoov1.OperationRestore, Name: rs.Name, StoppedOdoo: true, StartedAt: &now, Job: rs.Status.Job,
+	}
+	log.FromContext(ctx).Info("Starting restore", "restore", rs.Name, "resumed", resumed)
+	result, _, err := r.driveRestore(ctx, s, w, rs, configHash)
+	return result, err
+}
+
+// restoreRetryDelay is the backoff after a failed attempt of a restore that
+// has to be finished.
+func restoreRetryDelay(attempts int32) time.Duration {
+	d := 30 * time.Second
+	for i := int32(1); i < attempts && d < maxRestoreRetryDelay; i++ {
+		d *= 2
+	}
+	if d > maxRestoreRetryDelay {
+		d = maxRestoreRetryDelay
+	}
+	return d
+}
+
+// driveRestore moves the restore in status.currentOperation along.
+func (r *OdooDeploymentReconciler) driveRestore(ctx context.Context, s *reconcileState, w instanceWork,
+	rs *odoov1.OdooRestore, configHash string) (ctrl.Result, bool, error) {
+	od := s.od
+	op := &od.Status.CurrentOperation
+	od.Status.Phase = odoov1.PhaseRestoring
+	s.ready(metav1.ConditionFalse, ReasonRestoreRunning, "Odoo is stopped while OdooRestore "+rs.Name+" runs")
+
+	if op.Job == "" {
+		if rs.Status.RetryAfter != nil && rs.Status.RetryAfter.After(time.Now()) {
+			return ctrl.Result{RequeueAfter: time.Until(rs.Status.RetryAfter.Time)}, false, nil
+		}
+		stopped, err := r.stopOdoo(ctx, s, configHash)
+		if err != nil {
+			res, err := s.fail(odoov1.ReasonDeploymentFailed, err)
+			return res, false, err
+		}
+		if !stopped {
+			s.ready(metav1.ConditionFalse, odoov1.ReasonWaitingForPodsToStop, "stopping Odoo for OdooRestore "+rs.Name)
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, false, nil
+		}
+		src, refusal, err := r.resolveRestore(ctx, od, w, rs)
+		if err != nil {
+			return ctrl.Result{}, false, err
+		}
+		if refusal != "" && !rs.Status.LiveChanged {
+			return r.finishRestoreFailed(ctx, s, rs, refusal)
+		}
+		if refusal != "" {
+			// A swap that started must be finished; its inputs are in the
+			// journal, only the store is needed again for a restore.
+			msg := "cannot retry the unfinished restore: " + refusal
+			s.degraded(ReasonRestoreIncomplete, msg)
+			_ = r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) { st.Message = msg })
+			return ctrl.Result{RequeueAfter: time.Minute}, false, nil
+		}
+		params, err := r.jobParams(ctx, od, src.store)
+		if err != nil {
+			s.degraded(ReasonBackupImageUnknown, err.Error())
+			return ctrl.Result{RequeueAfter: time.Minute}, false, nil
+		}
+		undoSuffix := ""
+		if src.undo != nil {
+			undoSuffix = src.undo.Status.Suffix
+		}
+		attempt := rs.Status.Attempts + 1
+		job, err := jobspec.RestoreJob(params, rs, rs.Status.Suffix, src.snapshot, undoSuffix, od.Spec.Modules, attempt)
+		if err != nil {
+			return r.finishRestoreFailed(ctx, s, rs, err.Error())
+		}
+		if err := r.createJob(ctx, od, &job); err != nil {
+			res, err := s.fail(odoov1.ReasonJobCreationFailed, err)
+			return res, false, err
+		}
+		err = r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) {
+			st.Phase = odoov1.RestorePhaseRestoring
+			st.Message = "job " + job.Name + " is restoring"
+			st.Job = job.Name
+			st.Attempts = attempt
+			st.RetryAfter = nil
+			if src.store != nil {
+				st.Store = src.store.Name
+			}
+			st.SnapshotID = src.snapshot
+		})
+		if err != nil {
+			return ctrl.Result{}, false, err
+		}
+		op.Job = job.Name
+	}
+
+	out, err := r.observeJob(ctx, od.Namespace, op.Job)
+	if err != nil {
+		return ctrl.Result{}, false, err
+	}
+	switch out.state {
+	case reconcileloops.JobStateMissing:
+		op.Job = ""
+		return ctrl.Result{Requeue: true}, false, nil
+	case reconcileloops.JobStateActive:
+		if out.pullMessage != "" {
+			_ = r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) {
+				st.Message = "job " + op.Job + " cannot start: " + out.pullMessage
+			})
+		}
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, false, nil
+	}
+	if out.state == reconcileloops.JobStateSucceeded && out.decoded && out.result.OK {
+		return r.finishRestore(ctx, s, w, rs, out.result)
+	}
+
+	msg := fmt.Sprintf("job %s %s; inspect with: kubectl -n %s logs job/%s", op.Job, failureText(out), od.Namespace, op.Job)
+	liveChanged := rs.Status.LiveChanged || !out.decoded || out.result.LiveChanged
+	if !liveChanged {
+		return r.finishRestoreFailed(ctx, s, rs, msg)
+	}
+	// The swap may have started: the only safe way out is forward.
+	delay := restoreRetryDelay(rs.Status.Attempts)
+	retry := metav1.NewTime(time.Now().Add(delay))
+	full := fmt.Sprintf("%s; the restore may have started replacing the live data, so Odoo stays stopped and it is retried at %s",
+		msg, retry.UTC().Format(time.RFC3339))
+	err = r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) {
+		st.Message = full
+		st.LiveChanged = true
+		st.RetryAfter = &retry
+		st.Job = ""
+	})
+	if err != nil {
+		return ctrl.Result{}, false, err
+	}
+	s.degraded(ReasonRestoreIncomplete, full)
+	r.objectEvent(rs, corev1.EventTypeWarning, ReasonRestoreIncomplete, full)
+	op.Job = ""
+	return ctrl.Result{RequeueAfter: delay}, false, nil
+}
+
+// finishRestore records a restore that swapped the data in and points the
+// instance at what the backup ran.
+func (r *OdooDeploymentReconciler) finishRestore(ctx context.Context, s *reconcileState, w instanceWork,
+	rs *odoov1.OdooRestore, res result.Result) (ctrl.Result, bool, error) {
+	od := s.od
+	image, token := res.Image, res.UpgradeToken
+	if rs.Spec.Undo != "" {
+		if target := w.restore(rs.Spec.Undo); target != nil {
+			image, token = target.Status.Previous.Image, target.Status.Previous.UpgradeToken
+			err := r.patchRestoreStatus(ctx, target, func(st *odoov1.OdooRestoreStatus) {
+				st.Previous.State = odoov1.PreviousUndone
+				st.Previous.UndoneBy = rs.Name
+				st.Previous.Database, st.Previous.Filestore = "", ""
+				st.Previous.KeptUntil = nil
+			})
+			if err != nil {
+				return ctrl.Result{}, false, err
+			}
+		}
+	}
+	keep := od.Spec.Backup.KeepPreviousValue()
+	if rs.Spec.KeepPrevious != nil {
+		keep = rs.Spec.KeepPrevious.Duration
+	}
+	db := od.Status.Database.Name
+	now := metav1.Now()
+	msg := "the data was restored"
+	if res.PreviousKept {
+		msg += fmt.Sprintf("; the replaced data is kept as %s until %s", layout.PrevName(db, rs.Status.Suffix),
+			now.Add(keep).UTC().Format(time.RFC3339))
+	}
+	if len(res.MissingModules) > 0 {
+		msg += fmt.Sprintf("; modules %s are installed again", strings.Join(res.MissingModules, ", "))
+	}
+	err := r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) {
+		st.Phase = odoov1.RestorePhaseCompleted
+		st.Message = msg
+		st.CompletedAt = &now
+		st.Image = image
+		st.OdooVersion = res.OdooVersion
+		st.LiveChanged = true
+		st.RetryAfter = nil
+		st.Warnings = res.Warnings
+		if res.PreviousKept {
+			until := metav1.NewTime(now.Add(keep))
+			st.Previous.State = odoov1.PreviousKept
+			st.Previous.Database = layout.PrevName(db, st.Suffix)
+			st.Previous.Filestore = layout.PrevName(db, st.Suffix)
+			st.Previous.KeptUntil = &until
+		} else {
+			st.Previous.State = odoov1.PreviousNone
+		}
+	})
+	if err != nil {
+		return ctrl.Result{}, false, err
+	}
+	if image != "" {
+		od.Status.AppliedImage = image
+	}
+	od.Status.AppliedUpgradeToken = token
+	od.Status.InitModulesInstalled = utils.Difference(od.Spec.Modules, res.MissingModules)
+	od.Status.CurrentOperation = odoov1.OperationStatus{}
+	r.objectEvent(rs, corev1.EventTypeNormal, ReasonRestoreCompleted, msg)
+	r.event(od, corev1.EventTypeNormal, ReasonRestoreCompleted, "OdooRestore "+rs.Name+": "+msg)
+	metrics.RestoreFinished(restoreMode(rs), metrics.RestoreSucceeded)
+	s.healthy()
+	return ctrl.Result{Requeue: true}, true, nil
+}
+
+// finishRestoreFailed records a restore that failed before touching live data.
+func (r *OdooDeploymentReconciler) finishRestoreFailed(ctx context.Context, s *reconcileState, rs *odoov1.OdooRestore, msg string) (ctrl.Result, bool, error) {
+	msg += "; the live data was not changed"
+	err := r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) {
+		st.Phase = odoov1.RestorePhaseFailed
+		st.Message = msg
+		now := metav1.Now()
+		st.CompletedAt = &now
+		st.RetryAfter = nil
+	})
+	if err != nil {
+		return ctrl.Result{}, false, err
+	}
+	r.objectEvent(rs, corev1.EventTypeWarning, ReasonRestoreFailed, msg)
+	r.event(s.od, corev1.EventTypeWarning, ReasonRestoreFailed, "OdooRestore "+rs.Name+": "+msg)
+	metrics.RestoreFinished(restoreMode(rs), metrics.RestoreFailed)
+	s.od.Status.CurrentOperation = odoov1.OperationStatus{}
+	return ctrl.Result{Requeue: true}, true, nil
+}
+
+// ---- cleanups --------------------------------------------------------------------
+
+// startCleanup claims the instance to delete what restore rs left behind.
+func (r *OdooDeploymentReconciler) startCleanup(ctx context.Context, s *reconcileState, rs *odoov1.OdooRestore, configHash string) (ctrl.Result, error) {
+	_, rwop, err := r.pvcAccess(ctx, s.od)
+	if err != nil {
+		return s.fail(odoov1.ReasonReconcileFailed, err)
+	}
+	now := metav1.Now()
+	s.od.Status.CurrentOperation = odoov1.OperationStatus{
+		Kind: odoov1.OperationCleanup, Name: rs.Name, StoppedOdoo: rwop, StartedAt: &now,
+	}
+	result, _, err := r.driveCleanup(ctx, s, rs, configHash)
+	return result, err
+}
+
+// driveCleanup moves the cleanup in status.currentOperation along.
+func (r *OdooDeploymentReconciler) driveCleanup(ctx context.Context, s *reconcileState, rs *odoov1.OdooRestore, configHash string) (ctrl.Result, bool, error) {
+	od := s.od
+	op := &od.Status.CurrentOperation
+	if op.Job == "" {
+		if op.StoppedOdoo {
+			stopped, err := r.stopOdoo(ctx, s, configHash)
+			if err != nil {
+				res, err := s.fail(odoov1.ReasonDeploymentFailed, err)
+				return res, false, err
+			}
+			if !stopped {
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, false, nil
+			}
+		}
+		params, err := r.jobParams(ctx, od, nil)
+		if err != nil {
+			s.degraded(ReasonBackupImageUnknown, err.Error())
+			return ctrl.Result{RequeueAfter: time.Minute}, false, nil
+		}
+		if !op.StoppedOdoo {
+			if params.Affinity, err = r.affinityToOdoo(ctx, od); err != nil {
+				res, err := s.fail(odoov1.ReasonReconcileFailed, err)
+				return res, false, err
+			}
+		}
+		attempt := rs.Status.CleanupAttempts + 1
+		job := jobspec.CleanupJob(params, rs, rs.Status.Suffix, attempt)
+		if err := r.createJob(ctx, od, &job); err != nil {
+			res, err := s.fail(odoov1.ReasonJobCreationFailed, err)
+			return res, false, err
+		}
+		if err := r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) { st.CleanupAttempts = attempt }); err != nil {
+			return ctrl.Result{}, false, err
+		}
+		op.Job = job.Name
+	}
+	out, err := r.observeJob(ctx, od.Namespace, op.Job)
+	if err != nil {
+		return ctrl.Result{}, false, err
+	}
+	switch out.state {
+	case reconcileloops.JobStateMissing:
+		op.Job = ""
+		return ctrl.Result{Requeue: true}, false, nil
+	case reconcileloops.JobStateActive:
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, false, nil
+	}
+	od.Status.CurrentOperation = odoov1.OperationStatus{}
+	if out.state == reconcileloops.JobStateSucceeded && out.decoded && out.result.OK {
+		err := r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) {
+			st.CleanedUp = true
+			st.RetryAfter = nil
+			if st.Previous.State == odoov1.PreviousKept {
+				st.Previous.State = odoov1.PreviousRemoved
+				st.Previous.KeptUntil = nil
+			}
+		})
+		if err != nil {
+			return ctrl.Result{}, false, err
+		}
+		if err := reconcileloops.DeleteMaintenanceJob(ctx, r.Client, out.job); err != nil {
+			return ctrl.Result{}, false, err
+		}
+		if err := r.setRestoreFinalizer(ctx, rs, false); err != nil {
+			return ctrl.Result{}, false, err
+		}
+		return ctrl.Result{Requeue: true}, true, nil
+	}
+	msg := fmt.Sprintf("cleanup job %s %s; retried in an hour", op.Job, failureText(out))
+	retry := metav1.NewTime(time.Now().Add(time.Hour))
+	if err := r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) { st.RetryAfter = &retry }); err != nil {
+		return ctrl.Result{}, false, err
+	}
+	r.objectEvent(rs, corev1.EventTypeWarning, ReasonCleanupFailed, msg)
+	r.event(od, corev1.EventTypeWarning, ReasonCleanupFailed, "OdooRestore "+rs.Name+": "+msg)
+	return ctrl.Result{Requeue: true}, true, nil
+}
+
+// releaseFinishedRestores drops the finalizer of restores that are being
+// deleted and have nothing left to clean.
+func (r *OdooDeploymentReconciler) releaseFinishedRestores(ctx context.Context, w instanceWork) error {
+	for i := range w.restores {
+		rs := &w.restores[i]
+		if rs.DeletionTimestamp.IsZero() || !controllerutil.ContainsFinalizer(rs, odoov1.RestoreFinalizer) {
+			continue
+		}
+		switch rs.Status.Phase {
+		case "", odoov1.RestorePhasePending:
+		case odoov1.RestorePhaseCompleted, odoov1.RestorePhaseFailed:
+			if !rs.Status.CleanedUp && rs.Status.Suffix != "" && !(rs.Status.Phase == odoov1.RestorePhaseFailed && rs.Status.LiveChanged) {
+				continue // the cleanup releases it
+			}
+		default:
+			continue // running
+		}
+		if err := r.setRestoreFinalizer(ctx, rs, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ---- formatting --------------------------------------------------------------------
+
+func short(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
+func bytesText(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+}
