@@ -29,7 +29,10 @@ docker run -d --name backup-it-pg --network "$NET" -e POSTGRES_PASSWORD=postgres
 
 # SFTP: a user with key authentication; the host key goes to known_hosts.
 mkdir -p "$WORK/ssh"
-docker run --rm -v "$WORK/ssh:/k" --entrypoint ssh-keygen atmoz/sftp:alpine -q -t ed25519 -N "" -f /k/id_ed25519
+# The key is made, and made readable for the unprivileged test user, inside
+# the container: its files belong to root, which a CI runner is not.
+docker run --rm -v "$WORK/ssh:/k" --entrypoint sh atmoz/sftp:alpine -c \
+	'ssh-keygen -q -t ed25519 -N "" -f /k/id_ed25519 && chmod 0644 /k/id_ed25519'
 docker run -d --name backup-it-sftp --network "$NET" \
 	-v "$WORK/ssh/id_ed25519.pub:/home/backup/.ssh/keys/id.pub:ro" atmoz/sftp:alpine backup::1001:1001:upload >/dev/null
 
@@ -51,7 +54,7 @@ for i in $(seq 1 60); do
 done
 docker exec backup-it-sftp cat /etc/ssh/ssh_host_ed25519_key.pub |
 	awk '{print "backup-it-sftp " $1 " " $2}' >"$WORK/ssh/known_hosts"
-chmod 0644 "$WORK/ssh/id_ed25519" "$WORK/ssh/known_hosts"
+chmod 0644 "$WORK/ssh/known_hosts"
 cp "$WORK/agent.test" "$WORK/ssh/"
 
 # The tests run as an unprivileged user, as the Jobs do.
