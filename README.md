@@ -459,6 +459,9 @@ in these jobs:
 - **Backup on PostgreSQL 16–18** — `hack/backup-it.sh` once per major.
 - **Backup e2e (kind)** — `hack/backup-e2e.sh`.
 - **Lint** — `make lint` (golangci-lint).
+- **Images** — on pull requests from this repository, pushes the operator and
+  backup images (amd64 and arm64) tagged `sha-<head sha>` and `pr-<number>`, so
+  a branch can be tried on a real cluster before it is released.
 
 ### Test results
 
