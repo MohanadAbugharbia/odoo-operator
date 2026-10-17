@@ -245,7 +245,7 @@ func setEnv(t *testing.T, env []string) {
 // TestStores backs up, restores and probes through every store kind with
 // the configuration the operator gives its Jobs.
 func TestStores(t *testing.T) {
-	if _, err := exec.LookPath("rclone"); err != nil && os.Getenv("TEST_PG_HOST") != "" {
+	if _, err := exec.LookPath("rclone"); err != nil && os.Getenv("TEST_BACKUP_PG_HOST") != "" {
 		t.Fatal("rclone is not on PATH")
 	}
 	for _, tc := range storeCases(t) {

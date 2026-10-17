@@ -59,7 +59,7 @@ cp "$WORK/agent.test" "$WORK/ssh/"
 
 # The tests run as an unprivileged user, as the Jobs do.
 docker run --rm --network "$NET" --user 65532:65532 -v "$WORK/ssh:/it:ro" -v "$PWD/cover:/cover" \
-	-e TEST_PG_HOST=backup-it-pg -e TEST_PG_PASSWORD=postgres \
+	-e TEST_BACKUP_PG_HOST=backup-it-pg -e TEST_BACKUP_PG_PASSWORD=postgres \
 	-e TEST_SFTP_HOST=backup-it-sftp -e TEST_SFTP_USER=backup -e TEST_SFTP_PATH=upload \
 	-e TEST_SFTP_KEY_FILE=/it/id_ed25519 -e TEST_SFTP_KNOWN_HOSTS=/it/known_hosts \
 	-e TEST_S3_ENDPOINT=http://backup-it-s3:8333 -e TEST_S3_BUCKET=odoo-it \

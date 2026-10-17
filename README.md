@@ -374,11 +374,13 @@ TEST_PG_USER=postgres TEST_PG_PASSWORD=postgres make test
 ```
 
 The backup agent's real-service tests (`internal/backup/agent`) skip without
-`TEST_PG_HOST` too. `hack/backup-it.sh` runs them inside the backup image
-against PostgreSQL, an SFTP server and an S3 server it starts in Docker:
-fidelity of a round trip, the repair from the previous backup, undo, cleanup,
-and a failure or crash injected at every step of a restore, which must then
-either leave the live data untouched or finish when run again.
+`TEST_BACKUP_PG_HOST` (the same variables with a `BACKUP_` infix), because
+they also need restic, rclone and the client tools of the server's major.
+`hack/backup-it.sh` runs them inside the backup image against PostgreSQL, an
+SFTP server and an S3 server it starts in Docker: fidelity of a round trip,
+the repair from the previous backup, undo, cleanup, and a failure or crash
+injected at every step of a restore, which must then either leave the live
+data untouched or finish when run again.
 
 ```sh
 PG_MAJOR=17 hack/backup-it.sh

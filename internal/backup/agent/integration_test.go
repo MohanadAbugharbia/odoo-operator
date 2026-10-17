@@ -18,10 +18,10 @@ package agent
 
 // Real-service tests: a PostgreSQL server, the restic binary and the
 // PostgreSQL client tools of the server's major. They skip without
-// TEST_PG_HOST, so `make test` still runs offline.
+// TEST_BACKUP_PG_HOST, so `make test` still runs offline.
 //
-//	TEST_PG_HOST=127.0.0.1 TEST_PG_PORT=5432 TEST_PG_USER=postgres \
-//	TEST_PG_PASSWORD=postgres go test ./internal/backup/agent/
+//	TEST_BACKUP_PG_HOST=127.0.0.1 TEST_BACKUP_PG_PORT=5432 TEST_BACKUP_PG_USER=postgres \
+//	TEST_BACKUP_PG_PASSWORD=postgres go test ./internal/backup/agent/
 //
 // TEST_RESTIC_BIN picks the restic binary (default: restic on PATH) and
 // ODOO_BACKUP_PG_BIN_TEMPLATE the client tools (default: PATH), as in the
@@ -75,22 +75,22 @@ type itServer struct {
 
 func newServer(t *testing.T) itServer {
 	t.Helper()
-	host := os.Getenv("TEST_PG_HOST")
+	host := os.Getenv("TEST_BACKUP_PG_HOST")
 	if host == "" {
-		t.Skip("TEST_PG_HOST is not set, skipping the real-service backup tests")
+		t.Skip("TEST_BACKUP_PG_HOST is not set, skipping the real-service backup tests")
 	}
 	port := 5432
-	if raw := os.Getenv("TEST_PG_PORT"); raw != "" {
+	if raw := os.Getenv("TEST_BACKUP_PG_PORT"); raw != "" {
 		var err error
 		if port, err = strconv.Atoi(raw); err != nil {
-			t.Fatalf("TEST_PG_PORT=%q: %v", raw, err)
+			t.Fatalf("TEST_BACKUP_PG_PORT=%q: %v", raw, err)
 		}
 	}
-	user := os.Getenv("TEST_PG_USER")
+	user := os.Getenv("TEST_BACKUP_PG_USER")
 	if user == "" {
 		user = "postgres"
 	}
-	maint := os.Getenv("TEST_PG_MAINTENANCE_DB")
+	maint := os.Getenv("TEST_BACKUP_PG_MAINTENANCE_DB")
 	if maint == "" {
 		maint = "postgres"
 	}
@@ -98,12 +98,12 @@ func newServer(t *testing.T) itServer {
 	if bin == "" {
 		var err error
 		if bin, err = exec.LookPath("restic"); err != nil {
-			t.Fatalf("TEST_PG_HOST is set but restic is not on PATH (set TEST_RESTIC_BIN)")
+			t.Fatalf("TEST_BACKUP_PG_HOST is set but restic is not on PATH (set TEST_RESTIC_BIN)")
 		}
 	}
 	return itServer{
 		admin: odooconf.Config{
-			Host: host, Port: port, User: user, Password: os.Getenv("TEST_PG_PASSWORD"),
+			Host: host, Port: port, User: user, Password: os.Getenv("TEST_BACKUP_PG_PASSWORD"),
 			Name: maint, SSLMode: "disable",
 		},
 		maint:  maint,
