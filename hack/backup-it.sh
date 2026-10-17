@@ -38,7 +38,7 @@ cat >"$WORK/s3.json" <<'JSON'
 {"identities":[{"name":"backup","credentials":[{"accessKey":"backupkey","secretKey":"backupsecret123"}],"actions":["Admin","Read","Write","List","Tagging"]}]}
 JSON
 docker run -d --name backup-it-s3 --network "$NET" -v "$WORK/s3.json:/etc/s3.json:ro" \
-	chrislusf/seaweedfs:3.97 server -s3 -s3.config=/etc/s3.json -dir=/data >/dev/null
+	chrislusf/seaweedfs:3.97 server -s3 -s3.config=/etc/s3.json -dir=/data -master.volumeSizeLimitMB=64 >/dev/null
 
 for i in $(seq 1 60); do
 	if docker exec backup-it-pg pg_isready -U postgres >/dev/null 2>&1 &&
