@@ -251,8 +251,10 @@ func (r *OdooDeploymentReconciler) countPods(ctx context.Context, namespace stri
 func (r *OdooDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, err error) {
 	logger := log.FromContext(ctx)
 
+	// Read from the API server: a cached copy can lag this reconciler's own
+	// last status write, and status.currentOperation must never be stale.
 	od := &odoov1.OdooDeployment{}
-	if err := r.Get(ctx, req.NamespacedName, od); err != nil {
+	if err := r.reader().Get(ctx, req.NamespacedName, od); err != nil {
 		if apierrors.IsNotFound(err) {
 			logger.V(1).Info("OdooDeployment resource object not found.")
 			metrics.Forget(req.Namespace, req.Name)

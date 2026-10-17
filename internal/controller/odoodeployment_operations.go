@@ -84,12 +84,14 @@ type instanceWork struct {
 	restores []odoov1.OdooRestore
 }
 
-// listWork lists the instance's backups and restores. They are few per
-// namespace, so they are filtered here instead of through an index.
+// listWork lists the instance's backups and restores from the API server, so
+// attempt counts and phases are never older than this reconciler's own last
+// write. They are few per namespace, so they are filtered here instead of
+// through an index.
 func (r *OdooDeploymentReconciler) listWork(ctx context.Context, od *odoov1.OdooDeployment) (instanceWork, error) {
 	var w instanceWork
 	backups := &odoov1.OdooBackupList{}
-	if err := r.List(ctx, backups, client.InNamespace(od.Namespace)); err != nil {
+	if err := r.reader().List(ctx, backups, client.InNamespace(od.Namespace)); err != nil {
 		return w, fmt.Errorf("list OdooBackups: %w", err)
 	}
 	for _, b := range backups.Items {
@@ -98,7 +100,7 @@ func (r *OdooDeploymentReconciler) listWork(ctx context.Context, od *odoov1.Odoo
 		}
 	}
 	restores := &odoov1.OdooRestoreList{}
-	if err := r.List(ctx, restores, client.InNamespace(od.Namespace)); err != nil {
+	if err := r.reader().List(ctx, restores, client.InNamespace(od.Namespace)); err != nil {
 		return w, fmt.Errorf("list OdooRestores: %w", err)
 	}
 	for _, rs := range restores.Items {
@@ -432,6 +434,65 @@ func (r *OdooDeploymentReconciler) createJob(ctx context.Context, od *odoov1.Odo
 	return nil
 }
 
+// operationJobKinds are the Job kinds of backups, restores and cleanups, of
+// which an instance runs one at a time.
+var operationJobKinds = map[string]bool{jobspec.KindBackup: true, jobspec.KindRestore: true, jobspec.KindCleanup: true}
+
+// sameOperation reports whether two Job names differ at most in their
+// attempt suffix.
+func sameOperation(a, b string) bool {
+	trim := func(n string) string {
+		if i := strings.LastIndexByte(n, '-'); i > 0 {
+			return n[:i]
+		}
+		return n
+	}
+	return trim(a) == trim(b)
+}
+
+// startOperationJob creates job unless one of the instance's operation Jobs
+// is still running, read from the API server rather than the cache: a status
+// write that was lost, or a cache that lags it, must never start a second
+// Job beside a running one. It returns the Job to follow: job's own name, a
+// running attempt of the same operation, or "" to wait for another one.
+func (r *OdooDeploymentReconciler) startOperationJob(ctx context.Context, s *reconcileState, job *batchv1.Job) (string, error) {
+	od := s.od
+	jobs := &batchv1.JobList{}
+	if err := r.reader().List(ctx, jobs, client.InNamespace(od.Namespace),
+		client.MatchingLabels{odoov1.LabelOdooDeployment: od.Name}); err != nil {
+		return "", fmt.Errorf("list jobs: %w", err)
+	}
+	for i := range jobs.Items {
+		j := &jobs.Items[i]
+		if !operationJobKinds[j.Labels[odoov1.LabelJobKind]] || !metav1.IsControlledBy(j, od) || jobFinished(j) {
+			continue
+		}
+		if sameOperation(j.Name, job.Name) {
+			log.FromContext(ctx).Info("Following running job", "job", j.Name)
+			return j.Name, nil
+		}
+		s.ready(metav1.ConditionFalse, ReasonWaitingForOperation, "waiting for job "+j.Name+" to finish")
+		return "", nil
+	}
+	if err := r.createJob(ctx, od, job); err != nil {
+		return "", err
+	}
+	return job.Name, nil
+}
+
+// jobFinished reports whether a Job completed, failed or is being deleted.
+func jobFinished(j *batchv1.Job) bool {
+	if !j.DeletionTimestamp.IsZero() {
+		return true
+	}
+	for _, c := range j.Status.Conditions {
+		if (c.Type == batchv1.JobComplete || c.Type == batchv1.JobFailed) && c.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
 // jobOutcome is a finished (or vanished) Job and its Result.
 type jobOutcome struct {
 	state   reconcileloops.JobState
@@ -667,9 +728,14 @@ func (r *OdooDeploymentReconciler) driveBackup(ctx context.Context, s *reconcile
 		if err != nil {
 			return r.finishBackupFailed(ctx, s, b, err.Error())
 		}
-		if err := r.createJob(ctx, od, &job); err != nil {
+		started, err := r.startOperationJob(ctx, s, &job)
+		if err != nil {
 			res, err := s.fail(odoov1.ReasonJobCreationFailed, err)
 			return res, false, err
+		}
+		if started != job.Name {
+			op.Job = started
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, false, nil
 		}
 		err = r.patchBackupStatus(ctx, b, func(st *odoov1.OdooBackupStatus) {
 			st.Phase = odoov1.BackupPhaseRunning
@@ -1026,9 +1092,14 @@ func (r *OdooDeploymentReconciler) driveRestore(ctx context.Context, s *reconcil
 		if err != nil {
 			return r.finishRestoreFailed(ctx, s, rs, err.Error())
 		}
-		if err := r.createJob(ctx, od, &job); err != nil {
+		started, err := r.startOperationJob(ctx, s, &job)
+		if err != nil {
 			res, err := s.fail(odoov1.ReasonJobCreationFailed, err)
 			return res, false, err
+		}
+		if started != job.Name {
+			op.Job = started
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, false, nil
 		}
 		err = r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) {
 			st.Phase = odoov1.RestorePhaseRestoring
@@ -1225,9 +1296,14 @@ func (r *OdooDeploymentReconciler) driveCleanup(ctx context.Context, s *reconcil
 		}
 		attempt := rs.Status.CleanupAttempts + 1
 		job := jobspec.CleanupJob(params, rs, rs.Status.Suffix, attempt)
-		if err := r.createJob(ctx, od, &job); err != nil {
+		started, err := r.startOperationJob(ctx, s, &job)
+		if err != nil {
 			res, err := s.fail(odoov1.ReasonJobCreationFailed, err)
 			return res, false, err
+		}
+		if started != job.Name {
+			op.Job = started
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, false, nil
 		}
 		if err := r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) { st.CleanupAttempts = attempt }); err != nil {
 			return ctrl.Result{}, false, err

@@ -403,6 +403,79 @@ var _ = Describe("Backups and restores", func() {
 		})
 	})
 
+	Describe("never two jobs at once", func() {
+		// operationJobs are the instance's backup, restore and cleanup Jobs.
+		operationJobs := func() []string {
+			list := &batchv1.JobList{}
+			Expect(k8sClient.List(ctx, list, client.InNamespace(ns),
+				client.MatchingLabels{odoov1.LabelOdooDeployment: h.name})).To(Succeed())
+			var names []string
+			for _, j := range list.Items {
+				if operationJobKinds[j.Labels[odoov1.LabelJobKind]] && j.DeletionTimestamp.IsZero() {
+					names = append(names, j.Name)
+				}
+			}
+			return names
+		}
+		// forget drops what the instance's status says about its operation,
+		// as a lost status write would.
+		forget := func(clear func(*odoov1.OperationStatus)) {
+			od := h.get()
+			clear(&od.Status.CurrentOperation)
+			Expect(k8sClient.Status().Update(ctx, od)).To(Succeed())
+		}
+
+		It("follows the running Job when the status lost it", func() {
+			h = newBackupHarness()
+			h.newBackup("one")
+			_, od := h.reconcile()
+			first := od.Status.CurrentOperation.Job
+			Expect(first).NotTo(BeEmpty())
+
+			// The backup's own status still counts the attempt, so a new Job
+			// would be attempt 2: what a lagging cache once started.
+			forget(func(op *odoov1.OperationStatus) { op.Job = "" })
+			Expect(h.backup("one").Status.Attempts).To(Equal(int32(1)))
+
+			_, od = h.reconcile()
+			Expect(od.Status.CurrentOperation.Job).To(Equal(first))
+			Expect(operationJobs()).To(ConsistOf(first))
+
+			By("finishing through the followed Job")
+			h.finishJob(first, &result.Result{OK: true, SnapshotID: "0123456789abcdef0123", OdooVersion: "18.0"})
+			_, od = h.reconcile()
+			Expect(od.Status.CurrentOperation.Kind).To(BeEmpty())
+			Expect(h.backup("one").Status.Phase).To(Equal(odoov1.BackupPhaseCompleted))
+		})
+
+		It("starts no restore while another operation's Job still runs", func() {
+			h = newBackupHarness()
+			h.completedBackup()
+			h.newBackup("two")
+			_, od := h.reconcile()
+			Expect(od.Status.CurrentOperation.Name).To(Equal(h.name + "-two"))
+			backupJob := od.Status.CurrentOperation.Job
+			Expect(backupJob).NotTo(BeEmpty())
+
+			forget(func(op *odoov1.OperationStatus) { *op = odoov1.OperationStatus{} })
+			h.newRestore("back", func(s *odoov1.OdooRestoreSpec) { s.Backup = h.name + "-one" })
+			h.reconcile()
+			_, od = h.reconcile()
+			Expect(operationJobs()).To(ConsistOf(backupJob), "the restore waits")
+			Expect(od.Status.CurrentOperation.Kind).To(Equal(odoov1.OperationRestore))
+			Expect(od.Status.CurrentOperation.Job).To(BeEmpty())
+			ready := condition(od, odoov1.ConditionReady)
+			Expect(ready.Reason).To(Equal(ReasonWaitingForOperation))
+			Expect(ready.Message).To(ContainSubstring(backupJob))
+
+			By("starting once that Job has ended")
+			h.failJob(backupJob)
+			_, od = h.reconcile()
+			Expect(od.Status.CurrentOperation.Job).NotTo(BeEmpty())
+			Expect(operationJobs()).To(ContainElement(od.Status.CurrentOperation.Job))
+		})
+	})
+
 	Describe("a restore", func() {
 		restoreFrom := func(backup string) func(*odoov1.OdooRestoreSpec) {
 			return func(s *odoov1.OdooRestoreSpec) { s.Backup = h.name + "-" + backup }
