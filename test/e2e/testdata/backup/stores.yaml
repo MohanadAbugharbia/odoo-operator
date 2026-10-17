@@ -1,0 +1,119 @@
+# Stores for the backup e2e (hack/backup-e2e.sh): an S3 server in the
+# cluster and a PersistentVolumeClaim. Not for production.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: e2e-s3-config
+  namespace: odoo-e2e
+stringData:
+  s3.json: |
+    {"identities":[{"name":"backup","credentials":[{"accessKey":"backupkey","secretKey":"backupsecret123"}],"actions":["Admin","Read","Write","List","Tagging"]}]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: e2e-s3
+  namespace: odoo-e2e
+spec:
+  selector:
+    app: e2e-s3
+  ports:
+    - name: s3
+      port: 8333
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: e2e-s3
+  namespace: odoo-e2e
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: e2e-s3
+  template:
+    metadata:
+      labels:
+        app: e2e-s3
+    spec:
+      containers:
+        - name: seaweedfs
+          image: chrislusf/seaweedfs:4.48
+          args: ["server", "-s3", "-s3.config=/etc/s3/s3.json", "-dir=/data", "-master.volumeSizeLimitMB=64"]
+          ports:
+            - containerPort: 8333
+          readinessProbe:
+            tcpSocket:
+              port: 8333
+            periodSeconds: 5
+          volumeMounts:
+            - name: config
+              mountPath: /etc/s3
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: config
+          secret:
+            secretName: e2e-s3-config
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: e2e-s3-credentials
+  namespace: odoo-e2e
+stringData:
+  AWS_ACCESS_KEY_ID: backupkey
+  AWS_SECRET_ACCESS_KEY: backupsecret123
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: e2e-restic
+  namespace: odoo-e2e
+stringData:
+  password: correct-horse-battery-staple
+---
+apiVersion: odoo.abugharbia.com/v1
+kind: OdooBackupStore
+metadata:
+  name: s3
+  namespace: odoo-e2e
+spec:
+  s3:
+    endpoint: http://e2e-s3.odoo-e2e.svc.cluster.local:8333
+    region: us-east-1
+    bucket: odoo-backups
+    path: e2e
+    forcePathStyle: true
+    credentialsSecret:
+      name: e2e-s3-credentials
+  encryptionKeySecret:
+    name: e2e-restic
+    key: password
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: e2e-backups
+  namespace: odoo-e2e
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: odoo.abugharbia.com/v1
+kind: OdooBackupStore
+metadata:
+  name: pvc
+  namespace: odoo-e2e
+spec:
+  pvc:
+    claimName: e2e-backups
+    subPath: odoo
+  encryptionKeySecret:
+    name: e2e-restic
+    key: password

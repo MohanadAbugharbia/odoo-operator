@@ -17,8 +17,8 @@ Check out the [Odoo](https://www.odoo.com/) website for more information on Odoo
 | Maintenance page | available | Serve an "updating" page in English or Arabic on the http Service while Odoo is installed, upgraded or started, instead of an empty Service (`spec.maintenancePage`) |
 | Metrics | available | Prometheus metrics for every OdooDeployment's phase, conditions and Jobs, next to the controller-runtime defaults (see [Metrics](#metrics)) |
 | Safety defaults | available | `list_db = False` + `dbfilter` lockdown, retained filestore and database by default, HTTP probes, resources, env, pod security context, Job deadlines/TTL, CEL-validated spec, `Ready`/`Degraded` conditions and `kubectl get` columns |
-| Backup | planned | Snapshot Odoo filestore and database |
-| Restore | planned | Restore from a snapshot |
+| Backup | available | Back up the database and filestore together, consistently, to S3, SFTP, NFS or a PVC (`OdooBackupStore`, `OdooBackup`); encrypted and deduplicated with restic; attachments the filestore lost are taken from the previous backup (see [Backups and restores](#backups-and-restores)) |
+| Restore | available | Restore a backup in place (`OdooRestore`): loaded and checked beside the live data, then swapped in; the replaced data is kept for `keepPrevious` so the restore can be undone |
 
 Feel free to request more features by creating an [issue](https://github.com/MohanadAbugharbia/odoo-operator/issues/new?template=Blank+issue)
 
@@ -40,6 +40,8 @@ An `OdooDeployment` moves through `status.phase`:
 | `Initializing` | The `<name>-init` Job installs `spec.modules` (`-i`, with `--load-language` from `spec.config.loadLanguages`) on `spec.image`. No Deployment exists yet. |
 | `Upgrading` | The new image has been pulled once (see [Upgrades](#upgrades)); the Deployment is scaled to zero and a `<name>-upgrade-<hash>` Job runs `-i <new modules>` / `-u <spec.upgrade.modules>` on it. |
 | `Running` | The Deployment runs `status.appliedImage`; `Ready` is True once the requested replicas are available (or `spec.replicas` is 0). |
+| `BackingUp` | An offline backup runs; Odoo is stopped (see [Backups and restores](#backups-and-restores)). An online backup leaves the phase alone. |
+| `Restoring` | An OdooRestore runs; Odoo is stopped until it finishes. |
 | `Failed` | A maintenance Job failed. Inspect it with `kubectl logs job/<name>`; deleting the Job retries it. |
 
 `status.currentInitJob.startedAt` records when the running Job was created and
@@ -153,6 +155,129 @@ is the only configuration source. The image's own `addons_path` and
 `server_wide_modules` must therefore be re-expressed in
 `spec.config.extraAddonsPaths` and `spec.config.serverWideModules`.
 
+## Backups and restores
+
+Backups need three objects: a store, the instance pointing at it, and a
+backup.
+
+```yaml
+apiVersion: odoo.abugharbia.com/v1
+kind: OdooBackupStore
+metadata:
+  name: offsite
+  namespace: shop
+spec:
+  s3:                                 # or sftp, nfs, pvc: exactly one
+    endpoint: https://s3.example.com
+    bucket: odoo-backups
+    path: production
+    credentialsSecret: { name: s3-credentials }   # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+  encryptionKeySecret: { name: backup-key, key: password }
+---
+# in the OdooDeployment
+spec:
+  backup:
+    stores: [offsite]
+    consistency: Online               # default; Offline stops Odoo while it runs
+---
+apiVersion: odoo.abugharbia.com/v1
+kind: OdooBackup
+metadata:
+  name: my-odoo-2026-10-17
+  namespace: shop
+spec:
+  odooDeployment: my-odoo
+```
+
+**Stores.** Every store holds [restic](https://restic.net/) repositories, one
+per instance under `<path>/<namespace>/<deployment>/`, encrypted with the key
+in `encryptionKeySecret` (keep a copy of it outside the cluster: without it no
+backup can be read). The kinds:
+
+| Kind | Fields | Secret |
+|---|---|---|
+| `s3` | `endpoint` (empty for AWS), `region`, `bucket`, `path`, `forcePathStyle` | `credentialsSecret`: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` |
+| `sftp` | `host`, `port` (22), `user`, `path` | `sshSecret`: `id_ed25519` (private key) and `known_hosts` (the server's host key; nothing else is trusted) |
+| `nfs` | `server`, `path` | |
+| `pvc` | `claimName`, `subPath` | |
+
+The operator probes each store with a short Job that writes, reads and deletes
+a file (`.odoo-operator-probe-<random>`), on every change to the store or its
+Secrets and every six hours. `kubectl get odoobackupstore` shows `Ready`; a
+store that fails says why in its `Ready` condition and in an event, and is
+probed again every two minutes until it passes. The last failed probe's Job is
+kept for its log.
+
+**A backup** is one restic snapshot holding `dump.sql` (a plain `pg_dump`
+taken with a `pg_dump` of the server's major), `manifest.json` (Odoo's own
+format, plus an `operator` key) and the `filestore/`, so it is also what
+Odoo's database manager restores. Online backups run beside Odoo: the dump,
+the attachment list and the row counts all come from one database snapshot, so
+they agree with each other. Files that disappeared from the filestore since
+(Odoo's attachment cleanup) are taken from the previous backup; attachments in
+neither are listed in `status.missingFileNames` and the backup ends
+`CompletedWithWarnings`. An online backup waits up to two hours for Odoo's
+filestore cleanup cron to finish when it is running or due within ten minutes
+(phase `WaitingForFilestoreCleanup`). With a `ReadWriteOncePod` data volume,
+or `consistency: Offline`, Odoo is stopped while the backup runs.
+
+| `OdooBackup` phase | Meaning |
+|---|---|
+| `Pending` | Waiting for the instance: one backup, restore or cleanup runs at a time, and backups wait for init, upgrades and rollouts. |
+| `WaitingForFilestoreCleanup` | Odoo's filestore cleanup runs or is due; tried again every two minutes. |
+| `Running` | The Job runs. |
+| `Completed` / `CompletedWithWarnings` | `status.snapshotID` holds it. |
+| `Failed` | `status.message` names the step that failed and the Job to read. |
+
+Deleting an OdooBackup does not delete the snapshot, and deleting an
+instance never deletes its backups.
+
+**A restore** replaces the instance's database and filestore in place:
+
+```yaml
+apiVersion: odoo.abugharbia.com/v1
+kind: OdooRestore
+metadata:
+  name: back-to-friday
+  namespace: shop
+spec:
+  odooDeployment: my-odoo
+  backup: my-odoo-2026-10-17        # or snapshotID: <id> in the instance's store
+  keepPrevious: 72h                 # default spec.backup.restore.keepPrevious (72h)
+```
+
+Odoo is stopped; the backup is loaded into `<db>_restore_<suffix>` and
+`filestore/<db>_restore_<suffix>` beside the live data and checked (every
+table's row count against the backup, every attachment's file, a sample of
+files against their checksum). Only then are the names swapped: the live data
+becomes `<db>_prev_<suffix>` and the restored data takes its place, and Odoo
+starts on the image recorded in the backup. A restore that fails before the
+swap leaves the live data untouched (`Failed`); one that fails during the swap
+is retried until it finishes, with Odoo stopped and the instance `Degraded`
+(`RestoreIncomplete`). A restore takes precedence over everything else and
+replaces a failed upgrade Job, which makes it the way back from a failed
+upgrade. Modules in `spec.modules` that the backup lacks are installed again
+afterwards. If `spec.image` differs from the backup's image the usual upgrade
+follows; set `spec.image` to the backup's image first to stay on it.
+
+The replaced data is kept until `status.previous.keptUntil`, then deleted. Until
+then the restore can be undone:
+
+```yaml
+spec:
+  odooDeployment: my-odoo
+  undo: back-to-friday
+```
+
+Only the latest restore can be undone. Deleting an OdooRestore deletes the data
+it kept.
+
+**The backup image.** The Jobs run `ghcr.io/mohanadabugharbia/odoo-operator-backup`
+at the operator's own tag (derived from the operator's image; `--backup-image`
+overrides it). It carries the PostgreSQL 14–18 clients, restic, rclone and the
+`odoo-backup` agent, and runs as the instance's pod security context with no
+service account token.
+
 ## Metrics
 
 The manager serves `/metrics` (by default on `:8443`, HTTPS, with Kubernetes
@@ -168,7 +293,7 @@ next scrape. Every series has `namespace` and `name` labels.
 | Metric | Labels | Value |
 |---|---|---|
 | `odoo_operator_deployment_info` | `image`, `applied_image`, `database` | 1 |
-| `odoo_operator_deployment_phase` | `phase` | 1 for the current `status.phase`, 0 for the other four |
+| `odoo_operator_deployment_phase` | `phase` | 1 for the current `status.phase`, 0 for every other phase |
 | `odoo_operator_deployment_condition` | `type`, `status` (`true`/`false`/`unknown`), `reason` | 1, one series per condition |
 | `odoo_operator_deployment_condition_last_transition_timestamp_seconds` | `type` | when the condition last changed status |
 | `odoo_operator_deployment_replicas_desired` | | `spec.replicas` |
@@ -176,6 +301,11 @@ next scrape. Every series has `namespace` and `name` labels.
 | `odoo_operator_deployment_job_start_timestamp_seconds` | `kind` (`init`/`upgrade`) | creation time of the running Job; absent while none runs |
 | `odoo_operator_deployment_last_upgrade_duration_seconds` | | `status.lastMaintenanceDuration` |
 | `odoo_operator_deployment_database_ready` | `provisioned_by` | 1 while `DatabaseReady` is true |
+| `odoo_operator_backup_last_success_timestamp_seconds` | | when the newest successful backup completed |
+| `odoo_operator_backup_last_size_bytes` | `part` (`database`/`filestore`/`added`) | sizes of the newest successful backup |
+| `odoo_operator_backup_missing_files` | | attachments the newest successful backup could not include |
+| `odoo_operator_backup_last_failed` | | 1 when the most recently finished backup failed |
+| `odoo_operator_backup_store_ready` | `store` (no `name`) | 1 when the store's last probe succeeded |
 
 **Events, counted by the reconciler.** Each event is counted once, on the
 reconcile that causes it: a Job that stays failed, an image that keeps failing
@@ -190,6 +320,9 @@ OdooDeployment is gone.
 | `odoo_operator_image_pull_failures_total` | `namespace`, `name` | times an OdooDeployment became Degraded with `ImagePullFailed` |
 | `odoo_operator_database_operations_total` | `operation` (`create`/`adopt`/`drop`), `result` (`succeeded`/`failed`/`refused`) | database operations |
 | `odoo_operator_maintenance_page_publish_errors_total` | `namespace`, `name` | failed maintenance page updates |
+| `odoo_operator_backups_total` | `kind` (`manual`/`scheduled`/`pre-upgrade`), `result` (`succeeded`/`failed`) | finished backups |
+| `odoo_operator_backup_duration_seconds` (histogram) | `kind` | start to completion of successful backups |
+| `odoo_operator_restores_total` | `mode` (`restore`/`undo`), `result` (`succeeded`/`failed`) | finished restores |
 | `odoo_operator_build_info` | `version` | 1 |
 
 ## Upgrading to 0.3.0
@@ -241,6 +374,22 @@ To run them locally against any throwaway server:
 TEST_PG_HOST=127.0.0.1 TEST_PG_PORT=5432 \
 TEST_PG_USER=postgres TEST_PG_PASSWORD=postgres make test
 ```
+
+The backup agent's real-service tests (`internal/backup/agent`) skip without
+`TEST_BACKUP_PG_HOST` (the same variables with a `BACKUP_` infix), because
+they also need restic, rclone and the client tools of the server's major.
+`hack/backup-it.sh` runs them inside the backup image against PostgreSQL, an
+SFTP server and an S3 server it starts in Docker: fidelity of a round trip,
+the repair from the previous backup, undo, cleanup, and a failure or crash
+injected at every step of a restore, which must then either leave the live
+data untouched or finish when run again.
+
+```sh
+PG_MAJOR=17 hack/backup-it.sh
+```
+
+`hack/backup-e2e.sh` backs up, restores and undoes a real Odoo in a kind
+cluster through an S3 store and a PVC store. CI runs both.
 
 `make test-e2e` additionally needs Docker and kind, and is not part of CI.
 
@@ -301,13 +450,18 @@ make undeploy
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every pull request and on pushes to `main`,
-in two jobs:
+in these jobs:
 
 - **Unit and envtest** — `make test` (the envtest suites against a real API
   server), a check that the generated files in `api/v1/zz_generated.deepcopy.go`,
   `config/crd` and `config/rbac` are in sync with the types, and a
   `make build-installer` of the release bundle.
+- **Backup on PostgreSQL 16–18** — `hack/backup-it.sh` once per major.
+- **Backup e2e (kind)** — `hack/backup-e2e.sh`.
 - **Lint** — `make lint` (golangci-lint).
+- **Images** — on pull requests from this repository, pushes the operator and
+  backup images (amd64 and arm64) tagged `sha-<head sha>` and `pr-<number>`, so
+  a branch can be tried on a real cluster before it is released.
 
 ### Test results
 

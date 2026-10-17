@@ -29,10 +29,22 @@ builds:
       - amd64
       - arm64
       - arm
+  - id: odoo-backup
+    main: ./cmd/odoo-backup
+    binary: odoo-backup
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
 
 
 dockers_v2:
-  - images:
+  - id: odoo-operator
+    ids: [odoo-operator]
+    images:
       - "ghcr.io/mohanadabugharbia/odoo-operator"
     tags:
       - "{{ .Version }}"
@@ -47,9 +59,30 @@ dockers_v2:
       org.opencontainers.image.description: "Odoo Operator for Kubernetes"
     annotations:
       "org.opencontainers.image.description": "Odoo Operator for Kubernetes"
+  # Runs the backup, restore and store probe Jobs. The operator derives its
+  # name from its own image: the same tag of <repository>-backup.
+  - id: odoo-backup
+    ids: [odoo-backup]
+    dockerfile: Dockerfile.backup
+    images:
+      - "ghcr.io/mohanadabugharbia/odoo-operator-backup"
+    tags:
+      - "{{ .Version }}"
+      - "{{ if .IsNightly }}nightly{{ end }}"
+      - "{{ if not .IsNightly }}latest{{ end }}"
+    labels:
+      org.opencontainers.image.created: "{{.Date}}"
+      org.opencontainers.image.name: "{{.ProjectName}}-backup"
+      org.opencontainers.image.revision: "{{.FullCommit}}"
+      org.opencontainers.image.version: "{{.Version}}"
+      org.opencontainers.image.source: "{{.GitURL}}"
+      org.opencontainers.image.description: "Backup and restore agent of the Odoo Operator"
+    annotations:
+      "org.opencontainers.image.description": "Backup and restore agent of the Odoo Operator"
 
 archives:
-  - formats: [tar.gz]
+  - ids: [odoo-operator]
+    formats: [tar.gz]
     # this name template makes the OS and Arch compatible with the results of `uname`.
     name_template: >-
       {{ .ProjectName }}_

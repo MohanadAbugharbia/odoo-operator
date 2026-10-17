@@ -121,6 +121,57 @@ jobs:
           header: go-test-results
           path: test-summary.md
 
+  backup-real-services:
+    # The backup agent against real servers, inside the backup image built
+    # from Dockerfile.backup: PostgreSQL of each tested major, an SFTP
+    # server and an S3 server (hack/backup-it.sh). Restores are checked for
+    # fidelity and interrupted at every step to prove they resume.
+    name: Backup on PostgreSQL ${{ matrix.pg }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: ["16", "17", "18"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run the backup tests in the backup image
+        run: PG_MAJOR=${{ matrix.pg }} hack/backup-it.sh
+
+      - name: Coverage of the backup packages
+        if: ${{ !cancelled() && hashFiles('cover/*.out') != '' }}
+        run: go tool cover -func=cover/backup-it-pg${{ matrix.pg }}.out | tail -n 1
+
+      - name: Upload coverage
+        if: ${{ !cancelled() && hashFiles('cover/*.out') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-coverage-pg${{ matrix.pg }}
+          path: cover/
+          retention-days: 7
+
+  backup-e2e:
+    # Backup, restore and undo of a real Odoo in kind, through an S3 store
+    # and a PVC store (hack/backup-e2e.sh).
+    name: Backup e2e (kind)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: kind
+      - name: Back up and restore Odoo
+        run: hack/backup-e2e.sh
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -133,3 +184,46 @@ jobs:
 
       - name: golangci-lint
         run: make lint
+
+  images:
+    # Publishes the operator and backup images of a pull request as
+    # sha-<head sha> and pr-<number>, so a branch can be tried on a real
+    # cluster before it is released. Skipped for pull requests from forks,
+    # which get no package write token.
+    name: Images
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      PLATFORMS: linux/amd64,linux/arm64
+      TAGS: sha-${{ github.event.pull_request.head.sha }} pr-${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build the binaries
+        # Laid out as $TARGETPLATFORM/<binary>, as goreleaser does.
+        run: |
+          ldflags="-X main.version=sha-${{ github.event.pull_request.head.sha }}"
+          for p in ${PLATFORMS//,/ }; do
+            GOOS=${p%/*} GOARCH=${p#*/} CGO_ENABLED=0 go build -ldflags "$ldflags" -o "$p/odoo-operator" ./cmd
+            GOOS=${p%/*} GOARCH=${p#*/} CGO_ENABLED=0 go build -ldflags "$ldflags" -o "$p/odoo-backup" ./cmd/odoo-backup
+          done
+      - name: Push the images
+        run: |
+          repo=ghcr.io/${GITHUB_REPOSITORY,,}
+          op=() bk=()
+          for t in $TAGS; do op+=(-t "$repo:$t"); bk+=(-t "$repo-backup:$t"); done
+          docker buildx build --push --platform "$PLATFORMS" "${op[@]}" .
+          docker buildx build --push --platform "$PLATFORMS" "${bk[@]}" -f Dockerfile.backup .

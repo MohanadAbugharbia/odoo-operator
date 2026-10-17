@@ -38,3 +38,4 @@ __debug_*
 # Added by goreleaser init:
 dist/
 out/
+cover/

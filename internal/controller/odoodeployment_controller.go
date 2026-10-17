@@ -69,6 +69,11 @@ type OdooDeploymentReconciler struct {
 	// once (a slow API server at startup) does not disable the page for the
 	// operator's lifetime. Nil, with no MaintenancePageImage, disables the page.
 	OwnImage func(context.Context) (string, error)
+	// BackupImage runs the backup, restore and cleanup Jobs. When empty it
+	// is derived from the operator's own image (BackupImageFor).
+	BackupImage string
+	// Version is the operator's version, recorded in every backup.
+	Version string
 
 	imageMu sync.Mutex
 }
@@ -246,8 +251,10 @@ func (r *OdooDeploymentReconciler) countPods(ctx context.Context, namespace stri
 func (r *OdooDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, err error) {
 	logger := log.FromContext(ctx)
 
+	// Read from the API server: a cached copy can lag this reconciler's own
+	// last status write, and status.currentOperation must never be stale.
 	od := &odoov1.OdooDeployment{}
-	if err := r.Get(ctx, req.NamespacedName, od); err != nil {
+	if err := r.reader().Get(ctx, req.NamespacedName, od); err != nil {
 		if apierrors.IsNotFound(err) {
 			logger.V(1).Info("OdooDeployment resource object not found.")
 			metrics.Forget(req.Namespace, req.Name)
@@ -277,6 +284,7 @@ func (r *OdooDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	return r.reconcileNormal(ctx, s)
 }
 
+//nolint:gocyclo // the lifecycle state machine
 func (r *OdooDeploymentReconciler) reconcileNormal(ctx context.Context, s *reconcileState) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	od := s.od
@@ -338,6 +346,43 @@ func (r *OdooDeploymentReconciler) reconcileNormal(ctx context.Context, s *recon
 		return result, err
 	}
 
+	// Backups and restores of this instance.
+	work, err := r.listWork(ctx, od)
+	if err != nil {
+		return s.fail(odoov1.ReasonReconcileFailed, err)
+	}
+	if err := r.releaseFinishedRestores(ctx, work); err != nil {
+		return s.fail(odoov1.ReasonReconcileFailed, err)
+	}
+
+	// A backup, restore or cleanup in flight owns the instance until it ends.
+	if od.Status.CurrentOperation.Kind != "" {
+		result, done, err := r.observeOperation(ctx, s, work, configHash)
+		if err != nil || !done {
+			return result, err
+		}
+		if work, err = r.listWork(ctx, od); err != nil {
+			return s.fail(odoov1.ReasonReconcileFailed, err)
+		}
+	}
+
+	// A restore goes before everything else: it is how a failed upgrade is
+	// undone. It waits for a running init or upgrade Job but replaces a
+	// failed one.
+	if restore := work.nextRestore(); restore != nil {
+		if od.Status.CurrentInitJob.Name != "" {
+			abandoned, err := r.abandonFailedJob(ctx, s, restore.Name)
+			if err != nil {
+				return s.fail(odoov1.ReasonReconcileFailed, err)
+			}
+			if abandoned {
+				return r.startRestore(ctx, s, work, restore, configHash)
+			}
+		} else {
+			return r.startRestore(ctx, s, work, restore, configHash)
+		}
+	}
+
 	// Maintenance Job in flight?
 	if od.Status.CurrentInitJob.Name != "" {
 		result, done, err := r.observeCurrentJob(ctx, s)
@@ -377,13 +422,68 @@ func (r *OdooDeploymentReconciler) reconcileNormal(ctx context.Context, s *recon
 	if needJob {
 		return r.startMaintenanceJob(ctx, s, configHash, initModules, upgradeModules, firstBoot)
 	}
+	// Cleanups and backups wait for init and upgrades, and for a new image
+	// to roll out.
+	var retryOperations time.Duration
+	if !firstBoot && !plainRoll {
+		now := time.Now()
+		cleanup, cleanupWait := work.cleanupDue(now)
+		if cleanup != nil {
+			return r.startCleanup(ctx, s, cleanup, configHash)
+		}
+		backup, backupWait := work.nextBackup(now)
+		if backup != nil {
+			return r.startBackup(ctx, s, backup, configHash)
+		}
+		retryOperations = minPositive(cleanupWait, backupWait)
+	}
 	if plainRoll {
 		logger.Info("Rolling out new image without an upgrade Job", "from", od.Status.AppliedImage, "to", od.Spec.Image)
 		od.Status.AppliedImage = od.Spec.Image
 		od.Status.AppliedUpgradeToken = od.Spec.Upgrade.Token
 	}
 
-	return r.reconcileSteadyState(ctx, s, configHash, imageWait)
+	result, err := r.reconcileSteadyState(ctx, s, configHash, imageWait)
+	if retryOperations > 0 && (result.RequeueAfter == 0 || retryOperations < result.RequeueAfter) {
+		result.RequeueAfter = retryOperations
+	}
+	return result, err
+}
+
+// minPositive is the smaller of two durations, ignoring zeros.
+func minPositive(a, b time.Duration) time.Duration {
+	switch {
+	case a == 0:
+		return b
+	case b == 0 || a < b:
+		return a
+	}
+	return b
+}
+
+// abandonFailedJob deletes a failed init or upgrade Job so that a restore
+// can run instead, and reports whether the instance is free. A Job that is
+// still running is waited for.
+func (r *OdooDeploymentReconciler) abandonFailedJob(ctx context.Context, s *reconcileState, restore string) (bool, error) {
+	od := s.od
+	obs, err := reconcileloops.ObserveMaintenanceJob(ctx, r.Client, r.reader(), od)
+	if err != nil {
+		return false, err
+	}
+	switch obs.State {
+	case reconcileloops.JobStateFailed:
+		if err := reconcileloops.DeleteMaintenanceJob(ctx, r.Client, obs.Job); err != nil {
+			return false, err
+		}
+	case reconcileloops.JobStateMissing:
+	default:
+		return false, nil
+	}
+	msg := fmt.Sprintf("OdooRestore %s replaces the failed %s job %s", restore, od.Status.CurrentInitJob.Kind, od.Status.CurrentInitJob.Name)
+	log.FromContext(ctx).Info(msg)
+	r.event(od, corev1.EventTypeNormal, odoov1.ReasonJobSuperseded, msg)
+	od.Status.CurrentInitJob = odoov1.MaintenanceJobStatus{}
+	return true, nil
 }
 
 // reconcileSteadyState runs status.appliedImage. imageWait is the note from
@@ -919,6 +1019,9 @@ func (r *OdooDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.mapServicesToOdooDeployments()),
 			builder.WithPredicates(servicePredicate),
 		).
+		Watches(&odoov1.OdooBackup{}, handler.EnqueueRequestsFromMapFunc(workToOdooDeployment)).
+		Watches(&odoov1.OdooRestore{}, handler.EnqueueRequestsFromMapFunc(workToOdooDeployment)).
+		Watches(&odoov1.OdooBackupStore{}, handler.EnqueueRequestsFromMapFunc(r.storeToOdooDeployments)).
 		WithOptions(controller.Options{MaxConcurrentReconciles: 2}).
 		Complete(r)
 }
@@ -1149,4 +1252,38 @@ func filterOdooDeploymentsUsingService(
 		}
 	}
 	return requests
+}
+
+// workToOdooDeployment maps an OdooBackup or OdooRestore to its instance.
+func workToOdooDeployment(_ context.Context, obj client.Object) []reconcile.Request {
+	var name string
+	switch o := obj.(type) {
+	case *odoov1.OdooBackup:
+		name = o.Spec.OdooDeployment
+	case *odoov1.OdooRestore:
+		name = o.Spec.OdooDeployment
+	}
+	if name == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: obj.GetNamespace(), Name: name}}}
+}
+
+// storeToOdooDeployments maps a store to the instances that back up to it,
+// so a store turning ready starts their waiting backups.
+func (r *OdooDeploymentReconciler) storeToOdooDeployments(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &odoov1.OdooDeploymentList{}
+	if err := r.List(ctx, list, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for i := range list.Items {
+		for _, s := range list.Items[i].Spec.Backup.Stores {
+			if s == obj.GetName() {
+				reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&list.Items[i])})
+				break
+			}
+		}
+	}
+	return reqs
 }

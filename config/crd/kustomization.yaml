@@ -3,6 +3,9 @@
 # It should be run by config/default
 resources:
 - bases/odoo.abugharbia.com_odoodeployments.yaml
+- bases/odoo.abugharbia.com_odoobackupstores.yaml
+- bases/odoo.abugharbia.com_odoobackups.yaml
+- bases/odoo.abugharbia.com_odoorestores.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

@@ -40,6 +40,8 @@ var phases = []string{
 	odoov1.PhaseUpgrading,
 	odoov1.PhaseRunning,
 	odoov1.PhaseFailed,
+	odoov1.PhaseBackingUp,
+	odoov1.PhaseRestoring,
 }
 
 var (
@@ -72,6 +74,24 @@ var (
 		[]string{labelNamespace, labelName, "provisioned_by"}, nil)
 )
 
+var (
+	descBackupLastSuccess = prometheus.NewDesc("odoo_operator_backup_last_success_timestamp_seconds",
+		"When the instance's newest successful backup (Completed or CompletedWithWarnings) completed, as a Unix timestamp.",
+		[]string{labelNamespace, labelName}, nil)
+	descBackupLastSize = prometheus.NewDesc("odoo_operator_backup_last_size_bytes",
+		"Sizes of the instance's newest successful backup: part is database, filestore or added (new data uploaded).",
+		[]string{labelNamespace, labelName, "part"}, nil)
+	descBackupMissingFiles = prometheus.NewDesc("odoo_operator_backup_missing_files",
+		"Attachments the database refers to that the instance's newest successful backup could not include.",
+		[]string{labelNamespace, labelName}, nil)
+	descBackupLastFailed = prometheus.NewDesc("odoo_operator_backup_last_failed",
+		"1 when the instance's most recently finished backup failed.",
+		[]string{labelNamespace, labelName}, nil)
+	descStoreReady = prometheus.NewDesc("odoo_operator_backup_store_ready",
+		"1 when the OdooBackupStore's last probe could write, read and delete a file.",
+		[]string{labelNamespace, "store"}, nil)
+)
+
 // Collector reports every OdooDeployment's status at scrape time. Reading
 // at scrape time means a deleted OdooDeployment simply stops appearing.
 type Collector struct {
@@ -90,6 +110,7 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	for _, d := range []*prometheus.Desc{
 		descInfo, descPhase, descCondition, descConditionTransition, descReplicasDesired,
 		descImagePending, descJobStart, descLastUpgrade, descDatabaseReady,
+		descBackupLastSuccess, descBackupLastSize, descBackupMissingFiles, descBackupLastFailed, descStoreReady,
 	} {
 		ch <- d
 	}
@@ -117,6 +138,58 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	}
 	for i := range list.Items {
 		collectOne(ch, &list.Items[i])
+	}
+	backups := &odoov1.OdooBackupList{}
+	if err := c.Reader.List(ctx, backups); err != nil {
+		logf.Log.WithName("metrics").Error(err, "could not list OdooBackups for /metrics")
+	} else {
+		collectBackups(ch, backups.Items)
+	}
+	stores := &odoov1.OdooBackupStoreList{}
+	if err := c.Reader.List(ctx, stores); err != nil {
+		logf.Log.WithName("metrics").Error(err, "could not list OdooBackupStores for /metrics")
+	} else {
+		for _, st := range stores.Items {
+			ch <- prometheus.MustNewConstMetric(descStoreReady, prometheus.GaugeValue, boolValue(st.Status.Ready), st.Namespace, st.Name)
+		}
+	}
+}
+
+// collectBackups reports, per instance, its newest successful backup and
+// whether its most recently finished backup failed.
+func collectBackups(ch chan<- prometheus.Metric, backups []odoov1.OdooBackup) {
+	type instance struct{ namespace, name string }
+	lastOK := map[instance]*odoov1.OdooBackup{}
+	lastDone := map[instance]*odoov1.OdooBackup{}
+	for i := range backups {
+		b := &backups[i]
+		if b.Status.CompletedAt == nil {
+			continue
+		}
+		key := instance{b.Namespace, b.Spec.OdooDeployment}
+		if cur := lastDone[key]; cur == nil || b.Status.CompletedAt.After(cur.Status.CompletedAt.Time) {
+			lastDone[key] = b
+		}
+		switch b.Status.Phase {
+		case odoov1.BackupPhaseCompleted, odoov1.BackupPhaseCompletedWithWarnings:
+			if cur := lastOK[key]; cur == nil || b.Status.CompletedAt.After(cur.Status.CompletedAt.Time) {
+				lastOK[key] = b
+			}
+		}
+	}
+	for key, b := range lastOK {
+		gauge := func(desc *prometheus.Desc, value float64, labels ...string) {
+			ch <- prometheus.MustNewConstMetric(desc, prometheus.GaugeValue, value, append([]string{key.namespace, key.name}, labels...)...)
+		}
+		gauge(descBackupLastSuccess, unixSeconds(*b.Status.CompletedAt))
+		gauge(descBackupLastSize, float64(b.Status.DatabaseBytes), "database")
+		gauge(descBackupLastSize, float64(b.Status.FilestoreBytes), "filestore")
+		gauge(descBackupLastSize, float64(b.Status.AddedBytes), "added")
+		gauge(descBackupMissingFiles, float64(b.Status.MissingFiles))
+	}
+	for key, b := range lastDone {
+		ch <- prometheus.MustNewConstMetric(descBackupLastFailed, prometheus.GaugeValue,
+			boolValue(b.Status.Phase == odoov1.BackupPhaseFailed), key.namespace, key.name)
 	}
 }
 
