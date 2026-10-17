@@ -96,6 +96,11 @@ func Failed(step string, err error) Result {
 	return Result{Step: step, Error: err.Error()}
 }
 
+const (
+	moreWarnings = "(more warnings in the Job log)"
+	errorCut     = "… (see the Job log)"
+)
+
 // Encode returns r as JSON no longer than MaxBytes, dropping list entries
 // and shortening the error until it fits.
 func Encode(r Result) []byte {
@@ -108,21 +113,30 @@ func Encode(r Result) []byte {
 		if len(b) <= MaxBytes {
 			return b
 		}
+		// Every case must make r strictly smaller or stop matching, or this
+		// loops forever.
 		switch {
 		case len(r.MissingNames) > 0:
 			r.MissingNames = r.MissingNames[:len(r.MissingNames)/2]
-		case len(r.Warnings) > 1:
-			r.Warnings = append(r.Warnings[:len(r.Warnings)/2:len(r.Warnings)/2], "(more warnings in the Job log)")
+		case len(r.Warnings) > 2 || (len(r.Warnings) == 2 && r.Warnings[1] != moreWarnings):
+			r.Warnings = append(r.Warnings[:len(r.Warnings)/2:len(r.Warnings)/2], moreWarnings)
 		case len(r.MissingModules) > 0:
 			r.MissingModules = r.MissingModules[:len(r.MissingModules)/2]
 		case len(r.Error) > 512:
-			r.Error = r.Error[:512] + "… (see the Job log)"
-		case len(r.Warnings) == 1 && len(r.Warnings[0]) > 512:
-			r.Warnings[0] = r.Warnings[0][:512] + "…"
+			r.Error = r.Error[:512-len(errorCut)] + errorCut
+		case len(r.Warnings) > 0 && len(r.Warnings[0]) > 512:
+			// A new slice: r shares its backing array with the caller's.
+			r.Warnings = append([]string{r.Warnings[0][:512-len("…")] + "…"}, r.Warnings[1:]...)
 		default:
-			// Nothing left to trim but the free-form fields.
-			return Encode(Result{OK: r.OK, Step: r.Step, Error: truncate(r.Error, 256), Deferred: r.Deferred,
-				SnapshotID: r.SnapshotID, LiveChanged: r.LiveChanged, PreviousKept: r.PreviousKept})
+			// Nothing left to trim but the free-form fields. Each is bounded
+			// here, so this fits even when every byte is JSON-escaped.
+			b, err := json.Marshal(Result{OK: r.OK, Step: truncate(r.Step, 64), Error: truncate(r.Error, 256),
+				Deferred: r.Deferred, SnapshotID: truncate(r.SnapshotID, 128),
+				LiveChanged: r.LiveChanged, PreviousKept: r.PreviousKept})
+			if err != nil || len(b) > MaxBytes {
+				return []byte(`{"ok":false,"error":"could not encode the result"}`)
+			}
+			return b
 		}
 	}
 }

@@ -1,0 +1,46 @@
+# The image the operator's backup, restore, cleanup and store probe Jobs run.
+# It carries the odoo-backup agent, restic, rclone and the PostgreSQL client
+# tools of every supported server major, so a dump is always taken with a
+# pg_dump at least as new as the server.
+#
+# Built by goreleaser (dockers_v2), which puts the agent binary at
+# $TARGETPLATFORM/odoo-backup in the build context; `make docker-build-backup`
+# lays it out the same way.
+
+ARG RESTIC_VERSION=0.18.1
+ARG RCLONE_VERSION=1.71.2
+
+FROM restic/restic:${RESTIC_VERSION} AS restic
+FROM rclone/rclone:${RCLONE_VERSION} AS rclone
+# Only for the PGDG apt source and its signing key.
+FROM postgres:18 AS pgdg
+
+FROM debian:trixie-slim
+ARG TARGETPLATFORM
+# PostgreSQL majors whose client tools are installed. The agent picks
+# /usr/lib/postgresql/<major>/bin for the server it talks to.
+ARG PG_MAJORS="14 15 16 17 18"
+
+COPY --from=pgdg /usr/local/share/keyrings/postgres.gpg.asc /usr/local/share/keyrings/postgres.gpg.asc
+RUN set -eux; \
+	. /etc/os-release; \
+	echo "deb [ signed-by=/usr/local/share/keyrings/postgres.gpg.asc ] http://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+		> /etc/apt/sources.list.d/pgdg.list; \
+	apt-get update; \
+	packages=""; \
+	for v in $PG_MAJORS; do packages="$packages postgresql-client-$v"; done; \
+	apt-get install -y --no-install-recommends ca-certificates tzdata $packages; \
+	rm -rf /var/lib/apt/lists/*; \
+	for v in $PG_MAJORS; do /usr/lib/postgresql/$v/bin/pg_dump --version; done
+
+COPY --from=restic /usr/bin/restic /usr/local/bin/restic
+COPY --from=rclone /usr/local/bin/rclone /usr/local/bin/rclone
+COPY $TARGETPLATFORM/odoo-backup /usr/local/bin/odoo-backup
+
+ENV ODOO_BACKUP_PG_BIN_TEMPLATE=/usr/lib/postgresql/%d/bin \
+	HOME=/tmp \
+	TMPDIR=/tmp
+
+# The Jobs run as the OdooDeployment's user; this is only the default.
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/odoo-backup"]

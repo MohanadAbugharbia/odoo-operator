@@ -55,6 +55,32 @@ type Env struct {
 	Log *log.Logger
 	// Now is the clock; time.Now when nil.
 	Now func() time.Time
+	// Fault, when set, is called at each named point of a backup, restore
+	// or cleanup; an error it returns stops the run there as a crash would.
+	// Tests use it to check that every point can be resumed from.
+	Fault func(point string) error
+}
+
+// Fault points.
+const (
+	FaultBackupDumped     = "backup:dumped"
+	FaultBackupUploaded   = "backup:uploaded"
+	FaultRestoreLoaded    = "restore:loaded"
+	FaultRestoreFilestore = "restore:filestore"
+	FaultRestoreChecked   = "restore:checked"
+	FaultSwapStarted      = "swap:started"
+	FaultSwapDatabases    = "swap:databases"
+	FaultSwapLiveAside    = "swap:live-aside"
+	FaultSwapFilestore    = "swap:filestore"
+	FaultCleanupDatabase  = "cleanup:database"
+	FaultCleanupFilestore = "cleanup:filestore"
+)
+
+func (e *Env) fault(point string) error {
+	if e.Fault == nil {
+		return nil
+	}
+	return e.Fault(point)
 }
 
 func (e *Env) now() time.Time {

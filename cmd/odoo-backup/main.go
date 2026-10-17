@@ -133,6 +133,9 @@ func main() {
 func run(ctx context.Context, command string, args []string) int {
 	fs := flag.NewFlagSet(command, flag.ContinueOnError)
 	var c common
+	if err := agent.LimitHostKeyAlgorithms(); err != nil {
+		fmt.Fprintln(os.Stderr, "read the SFTP known_hosts:", err)
+	}
 	switch command {
 	case "version":
 		fmt.Println(version)

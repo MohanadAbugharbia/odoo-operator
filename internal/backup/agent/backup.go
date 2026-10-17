@@ -135,6 +135,9 @@ func Backup(ctx context.Context, e *Env, o BackupOptions) result.Result {
 	}
 	snap.Close(ctx)
 	e.logf("dumped %d bytes with %s", dumpBytes, pgDumpVersion)
+	if err := e.fault(FaultBackupDumped); err != nil {
+		return result.Failed(result.StepDump, err)
+	}
 
 	fsDir := filepath.Join(o.Root, layout.FilestoreDir)
 	files, fsBytes, err := walkFilestore(fsDir)
@@ -200,6 +203,9 @@ func Backup(ctx context.Context, e *Env, o BackupOptions) result.Result {
 		return result.Failed(result.StepUpload, err)
 	}
 	e.logf("snapshot %s: %d bytes added", up.Summary.SnapshotID, up.Summary.DataAdded)
+	if err := e.fault(FaultBackupUploaded); err != nil {
+		return result.Failed(result.StepUpload, err)
+	}
 
 	// The snapshot must hold dump.sql, manifest.json and every attachment
 	// that was in the filestore when it was checked: a file deleted after
@@ -215,7 +221,7 @@ func Backup(ctx context.Context, e *Env, o BackupOptions) result.Result {
 		OK:              true,
 		SnapshotID:      up.Summary.SnapshotID,
 		OdooVersion:     m.Series(),
-		PgServerVersion: manifest.PgVersion(serverVersion),
+		PgServerVersion: manifest.ServerVersion(serverVersion),
 		DatabaseBytes:   dumpBytes,
 		FilestoreBytes:  fsBytes,
 		FilestoreFiles:  files,

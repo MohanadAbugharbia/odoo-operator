@@ -51,6 +51,8 @@ endif
 OPERATOR_SDK_VERSION ?= v1.39.1
 # Image URL to use all building/pushing image targets
 IMG ?= ghcr.io/mohanadabugharbia/odoo-operator:$(VERSION)
+# BACKUP_IMG is the image of the backup, restore and store probe Jobs.
+BACKUP_IMG ?= ghcr.io/mohanadabugharbia/odoo-operator-backup:$(VERSION)
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
 ENVTEST_K8S_VERSION = 1.34.0
 
@@ -170,6 +172,14 @@ run: manifests generate fmt vet ## Run a controller from your host.
 .PHONY: docker-build
 docker-build: build ## Build docker image with the manager.
 	$(CONTAINER_TOOL) build -t ${IMG} --build-arg TARGETPLATFORM=bin .
+
+.PHONY: build-backup
+build-backup: fmt vet ## Build the odoo-backup agent binary.
+	CGO_ENABLED=0 go build -ldflags "-X main.version=$(VERSION)" -o bin/odoo-backup ./cmd/odoo-backup
+
+.PHONY: docker-build-backup
+docker-build-backup: build-backup ## Build the backup image the Jobs run.
+	$(CONTAINER_TOOL) build -t ${BACKUP_IMG} --build-arg TARGETPLATFORM=bin -f Dockerfile.backup .
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.

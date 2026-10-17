@@ -253,11 +253,20 @@ func (r *restoreRun) load(ctx context.Context) (string, error) {
 	if err := r.loadDump(ctx, snap.ID, filepath.Join(root, layout.DumpFile), source, m); err != nil {
 		return result.StepLoad, err
 	}
+	if err := e.fault(FaultRestoreLoaded); err != nil {
+		return result.StepLoad, err
+	}
 	if err := r.loadFilestore(ctx, snap.ID, root, source); err != nil {
+		return result.StepLoad, err
+	}
+	if err := e.fault(FaultRestoreFilestore); err != nil {
 		return result.StepLoad, err
 	}
 	warnings, missingModules, err := r.check(ctx, source, m)
 	if err != nil {
+		return result.StepCheck, err
+	}
+	if err := e.fault(FaultRestoreChecked); err != nil {
 		return result.StepCheck, err
 	}
 	if m.Operator != nil {
@@ -621,12 +630,21 @@ func (r *restoreRun) swap(ctx context.Context) error {
 			return err
 		}
 		r.e.logf("swap started: live %s → %s, %s → live", r.live, prev, j.Source)
+		if err := r.e.fault(FaultSwapStarted); err != nil {
+			return err
+		}
 	}
 	if j.Stage == stageSwapping {
 		if err := r.swapDatabase(ctx, prev); err != nil {
 			return err
 		}
+		if err := r.e.fault(FaultSwapDatabases); err != nil {
+			return err
+		}
 		if err := r.swapFilestore(prev); err != nil {
+			return err
+		}
+		if err := r.e.fault(FaultSwapFilestore); err != nil {
 			return err
 		}
 		j.Stage = stageSwapped
@@ -690,6 +708,9 @@ func (r *restoreRun) swapFilestore(prev string) error {
 				return fmt.Errorf("filestore folders %s, %s and %s all exist", j.Source, r.live, prev)
 			}
 			if err := os.Rename(live, old); err != nil {
+				return err
+			}
+			if err := r.e.fault(FaultSwapLiveAside); err != nil {
 				return err
 			}
 		}

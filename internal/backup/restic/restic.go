@@ -389,6 +389,11 @@ func (r *Restic) Restore(ctx context.Context, snapshot, target string, includes 
 				_ = f.Close()
 				return fmt.Errorf("restore: path %q contains a line break", inc)
 			}
+			// restic trims each line of the file, so such a path cannot be matched.
+			if strings.TrimSpace(inc) != inc {
+				_ = f.Close()
+				return fmt.Errorf("restore: path %q starts or ends with a space", inc)
+			}
 			if _, err := fmt.Fprintln(f, escapePattern(inc)); err != nil {
 				_ = f.Close()
 				return err
@@ -404,13 +409,17 @@ func (r *Restic) Restore(ctx context.Context, snapshot, target string, includes 
 }
 
 // escapePattern escapes the characters restic's include patterns treat
-// specially, so a path matches only itself.
+// specially, so a path matches only itself. In an include file restic also
+// expands $VAR ("$$" is a literal "$"), skips lines starting with "#" and
+// takes a leading "!" as a negation.
 func escapePattern(p string) string {
 	var b strings.Builder
-	for _, c := range p {
-		switch c {
-		case '*', '?', '[', ']', '\\':
+	for i, c := range p {
+		switch {
+		case c == '*', c == '?', c == '[', c == ']', c == '\\', (c == '#' || c == '!') && i == 0:
 			b.WriteRune('\\')
+		case c == '$':
+			b.WriteRune('$')
 		}
 		b.WriteRune(c)
 	}

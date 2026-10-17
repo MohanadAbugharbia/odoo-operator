@@ -69,7 +69,6 @@ const (
 	passwordFile    = "password"
 	sshMount        = layout.SecretsMount + "/ssh"
 	passwordMount   = layout.SecretsMount + "/restic"
-	pgBinTemplate   = "/usr/libexec/postgresql%d"
 	toolBinary      = "odoo-backup"
 	defaultTTL      = int32(86400)
 	backupBackoff   = int32(1)
@@ -116,7 +115,8 @@ func S3Repository(s3 *odoov1.S3Store, repo string) string {
 	if endpoint == "" {
 		endpoint = "s3.amazonaws.com"
 	}
-	p := layout.JoinStorePath(string(s3.Path), repo)
+	// A key prefix has no leading "/" (restic would keep one in the keys).
+	p := strings.TrimPrefix(layout.JoinStorePath(string(s3.Path), repo), "/")
 	url := "s3:" + endpoint + "/" + s3.Bucket
 	if p != "" {
 		url += "/" + p
@@ -154,7 +154,7 @@ func Locate(store *odoov1.OdooBackupStore, repo string) (Location, error) {
 			loc.Env = append(loc.Env, rcloneEnv("FORCE_PATH_STYLE", "true"))
 		}
 		loc.Repository = S3Repository(s3, repo)
-		loc.ProbeTarget = rcloneRemote + ":" + strings.TrimSuffix(s3.Bucket+"/"+layout.JoinStorePath(string(s3.Path), ""), "/")
+		loc.ProbeTarget = rcloneRemote + ":" + strings.TrimSuffix(s3.Bucket+"/"+strings.TrimPrefix(layout.JoinStorePath(string(s3.Path), ""), "/"), "/")
 	case spec.SFTP != nil:
 		sftp := spec.SFTP
 		port := sftp.Port
@@ -303,7 +303,6 @@ func baseEnv() []corev1.EnvVar {
 		plainEnv("HOME", "/tmp"),
 		plainEnv("TMPDIR", "/tmp"),
 		plainEnv("RESTIC_CACHE_DIR", "/tmp/restic-cache"),
-		plainEnv("ODOO_BACKUP_PG_BIN_TEMPLATE", pgBinTemplate),
 	}
 }
 

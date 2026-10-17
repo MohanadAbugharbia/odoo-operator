@@ -123,6 +123,15 @@ func PgVersion(serverVersionNum int) string {
 	return fmt.Sprintf("%d.%d", v/100, v%100)
 }
 
+// ServerVersion formats server_version_num as PostgreSQL prints it: 16.4
+// for 160004, 9.6.24 for 90624.
+func ServerVersion(serverVersionNum int) string {
+	if serverVersionNum >= 100000 {
+		return fmt.Sprintf("%d.%d", serverVersionNum/10000, serverVersionNum%10000)
+	}
+	return fmt.Sprintf("%d.%d.%d", serverVersionNum/10000, serverVersionNum/100%100, serverVersionNum%100)
+}
+
 // New returns the Odoo part of a manifest for a database.
 func New(dbName string, modules map[string]string, serverVersionNum int) Manifest {
 	series := Series(modules["base"])

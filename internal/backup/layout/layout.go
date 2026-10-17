@@ -27,6 +27,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Paths inside a snapshot and inside the backup Job's pod.
@@ -127,13 +128,17 @@ const (
 )
 
 // base trims db so that db + the longest infix + a suffix fits a
-// PostgreSQL identifier.
+// PostgreSQL identifier, never cutting a UTF-8 character in two (PostgreSQL
+// refuses a name that is not valid UTF-8).
 func base(db string) string {
 	limit := maxIdentifier - len(restoreInfix) - len(SuffixFormat)
-	if len(db) > limit {
-		return db[:limit]
+	if len(db) <= limit {
+		return db
 	}
-	return db
+	for limit > 0 && !utf8.RuneStart(db[limit]) {
+		limit--
+	}
+	return db[:limit]
 }
 
 // RestoreName is the database (and filestore folder) a restore loads the
@@ -169,6 +174,10 @@ func FilestorePath(db string) string {
 func CheckName(name, db, suffix string) error {
 	if !ValidSuffix(suffix) {
 		return fmt.Errorf("invalid restore suffix %q", suffix)
+	}
+	if name == db {
+		// A live database can itself be named like a restore copy.
+		return fmt.Errorf("%q is the live database", name)
 	}
 	if name == RestoreName(db, suffix) || name == PrevName(db, suffix) {
 		return nil

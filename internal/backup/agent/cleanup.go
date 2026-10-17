@@ -60,7 +60,13 @@ func Cleanup(ctx context.Context, e *Env, dataRoot, suffix string) result.Result
 		if err := pg.Drop(ctx, maint, name); err != nil {
 			return result.Failed(result.StepCleanup, err)
 		}
+		if err := e.fault(FaultCleanupDatabase); err != nil {
+			return result.Failed(result.StepCleanup, err)
+		}
 		if err := os.RemoveAll(filepath.Join(dataRoot, layout.FilestorePath(name))); err != nil {
+			return result.Failed(result.StepCleanup, err)
+		}
+		if err := e.fault(FaultCleanupFilestore); err != nil {
 			return result.Failed(result.StepCleanup, err)
 		}
 		e.logf("deleted database and filestore folder %s", name)

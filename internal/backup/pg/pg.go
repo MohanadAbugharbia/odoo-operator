@@ -372,11 +372,16 @@ func Drop(ctx context.Context, conn *pgx.Conn, name string) error {
 	return nil
 }
 
-// Terminate ends the other sessions on the databases.
+// Terminate ends the other client sessions on the databases that the
+// current role may end (its own and its member roles'). Autovacuum workers
+// are left alone: DROP and RENAME DATABASE stop them themselves, and a
+// non-superuser may not. Sessions of other roles make the following DROP or
+// RENAME fail with "being accessed by other users", which names the problem.
 func Terminate(ctx context.Context, conn *pgx.Conn, names ...string) error {
 	_, err := conn.Exec(ctx, `
 		SELECT pg_terminate_backend(pid) FROM pg_stat_activity
-		WHERE datname = ANY($1) AND pid <> pg_backend_pid()`, names)
+		WHERE datname = ANY($1) AND pid <> pg_backend_pid() AND backend_type = 'client backend'
+		  AND pg_has_role(current_user, usesysid, 'MEMBER')`, names)
 	if err != nil {
 		return fmt.Errorf("end sessions on %v: %w", names, err)
 	}
