@@ -456,7 +456,7 @@ in these jobs:
   server), a check that the generated files in `api/v1/zz_generated.deepcopy.go`,
   `config/crd` and `config/rbac` are in sync with the types, and a
   `make build-installer` of the release bundle.
-- **Backup on PostgreSQL 14–18** — `hack/backup-it.sh` once per major.
+- **Backup on PostgreSQL 16–18** — `hack/backup-it.sh` once per major.
 - **Backup e2e (kind)** — `hack/backup-e2e.sh`.
 - **Lint** — `make lint` (golangci-lint).
 
