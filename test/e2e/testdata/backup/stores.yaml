@@ -38,7 +38,7 @@ spec:
     spec:
       containers:
         - name: seaweedfs
-          image: chrislusf/seaweedfs:3.97
+          image: chrislusf/seaweedfs:4.48
           args: ["server", "-s3", "-s3.config=/etc/s3/s3.json", "-dir=/data", "-master.volumeSizeLimitMB=64"]
           ports:
             - containerPort: 8333
