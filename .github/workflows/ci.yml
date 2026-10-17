@@ -123,7 +123,7 @@ jobs:
 
   backup-real-services:
     # The backup agent against real servers, inside the backup image built
-    # from Dockerfile.backup: PostgreSQL of every supported major, an SFTP
+    # from Dockerfile.backup: PostgreSQL of each tested major, an SFTP
     # server and an S3 server (hack/backup-it.sh). Restores are checked for
     # fidelity and interrupted at every step to prove they resume.
     name: Backup on PostgreSQL ${{ matrix.pg }}
