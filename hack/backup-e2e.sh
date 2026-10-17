@@ -5,7 +5,7 @@
 # restore and checks the database and filestore at every step.
 #
 #   kind create cluster && hack/backup-e2e.sh
-set -euo pipefail
+set -Eeuo pipefail
 
 cd "$(dirname "$0")/.."
 NS=odoo-e2e
@@ -19,13 +19,18 @@ log() { printf '\n=== %s\n' "$*"; }
 k() { kubectl -n "$NS" "$@"; }
 psql_q() { k exec deploy/e2e-postgres -- psql -U odoo -d "${2:-$DB}" -tAc "$1"; }
 fail() {
+	trap - ERR
 	echo "FAILED: $*" >&2
 	k get odoodeployment,odoobackup,odoorestore,odoobackupstore,job,pod -o wide >&2 || true
 	k describe odoodeployment "$OD" >&2 || true
 	for j in $(k get jobs -o name 2>/dev/null); do echo "--- logs $j" >&2; k logs "$j" --tail=50 >&2 || true; done
-	kubectl -n odoo-operator-system logs deploy/odoo-operator-controller-manager --tail=200 >&2 || true
+	kubectl -n odoo-operator-system get pods -o wide >&2 || true
+	kubectl -n odoo-operator-system describe pods >&2 || true
+	kubectl -n odoo-operator-system logs deploy/odoo-operator-controller-manager --all-containers --tail=200 >&2 || true
+	kubectl -n odoo-operator-system logs deploy/odoo-operator-controller-manager --all-containers --previous --tail=100 >&2 || true
 	exit 1
 }
+trap 'fail "command failed at line $LINENO"' ERR
 # wait_for <resource> <jsonpath> <value> [timeout seconds]
 wait_for() {
 	local deadline=$((SECONDS + ${4:-300})) got
