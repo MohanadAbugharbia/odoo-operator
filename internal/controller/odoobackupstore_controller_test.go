@@ -589,6 +589,30 @@ var _ = Describe("OdooBackupStore reconciler", func() {
 		Expect(s.jobs()).To(HaveLen(1))
 	})
 
+	It("does not probe again when the cache still shows the finished probe", func() {
+		s.createPVCStore()
+		s.reconcile()
+		stale := s.get()
+		jobName := stale.Status.ProbeJob
+		s.finishJob(jobName, true)
+		s.podReporting(jobName, `{"ok":true}`, 0)
+		s.reconcile()
+		Expect(s.get().Status.Ready).To(BeTrue())
+		Eventually(func() *batchv1.Job { return s.job(jobName) }).Should(BeNil())
+
+		By("reconciling while the cache still holds the store as it was before the probe finished")
+		probed := s.get().Status.ProbedHash
+		s.r.Client = staleStoreClient{Client: k8sClient, store: stale}
+		s.reconcile()
+		s.r.Client = k8sClient
+		s.reconcile()
+		Expect(s.jobs()).To(BeEmpty())
+		store := s.get()
+		Expect(store.Status.Ready).To(BeTrue())
+		Expect(store.Status.ProbeJob).To(BeEmpty())
+		Expect(store.Status.ProbedHash).To(Equal(probed))
+	})
+
 	It("restarts the probe when its Job vanishes", func() {
 		s.createPVCStore()
 		s.reconcile()
@@ -1186,3 +1210,18 @@ var _ = Describe("Backup CRD admission", func() {
 		})
 	})
 })
+
+// staleStoreClient answers Gets of one OdooBackupStore with an old copy, as a
+// lagging informer cache would.
+type staleStoreClient struct {
+	client.Client
+	store *odoov1.OdooBackupStore
+}
+
+func (c staleStoreClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if out, ok := obj.(*odoov1.OdooBackupStore); ok && key == client.ObjectKeyFromObject(c.store) {
+		c.store.DeepCopyInto(out)
+		return nil
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
+}

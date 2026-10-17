@@ -141,8 +141,10 @@ func (r *OdooBackupStoreReconciler) probeHash(ctx context.Context, store *odoov1
 
 // Reconcile probes the store when its spec, its Secrets or the probe period changed.
 func (r *OdooBackupStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	// Read past the cache: a cached store that still names a probe Job this
+	// reconciler already finished and deleted would start the probe again.
 	store := &odoov1.OdooBackupStore{}
-	if err := r.Get(ctx, req.NamespacedName, store); err != nil {
+	if err := r.reader().Get(ctx, req.NamespacedName, store); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !store.DeletionTimestamp.IsZero() {
