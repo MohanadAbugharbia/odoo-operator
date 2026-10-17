@@ -282,6 +282,7 @@ func (r *OdooDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	return r.reconcileNormal(ctx, s)
 }
 
+//nolint:gocyclo // the lifecycle state machine
 func (r *OdooDeploymentReconciler) reconcileNormal(ctx context.Context, s *reconcileState) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	od := s.od

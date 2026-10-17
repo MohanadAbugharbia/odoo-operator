@@ -349,7 +349,7 @@ func randomContent(seed int) []byte {
 
 // addAttachment writes a file the way Odoo does (named by its sha1) and the
 // ir_attachment row referring to it.
-func (f *fixture) addAttachment(name string, content []byte) string {
+func (f *fixture) addAttachment(name string, content []byte) {
 	f.t.Helper()
 	sum := sha1.Sum(content)
 	sha := hex.EncodeToString(sum[:])
@@ -363,7 +363,6 @@ func (f *fixture) addAttachment(name string, content []byte) string {
 	}
 	f.exec(f.db, "INSERT INTO ir_attachment (name, store_fname, checksum, mimetype) VALUES ($1, $2, $3, 'application/octet-stream')",
 		name, storeName, sha)
-	return storeName
 }
 
 // fingerprint describes a database's content: every table's rows, the

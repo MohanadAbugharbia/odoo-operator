@@ -75,7 +75,8 @@ func (c *common) register(fs *flag.FlagSet) {
 	fs.StringVar(&c.maintenanceDB, "maintenance-db", "postgres", "database to run CREATE/DROP/RENAME DATABASE from")
 	fs.StringVar(&c.pgBinTemplate, "pg-bin-template", os.Getenv("ODOO_BACKUP_PG_BIN_TEMPLATE"),
 		"folder of each PostgreSQL client major, with %d for the major; empty uses PATH")
-	fs.StringVar(&c.pgMajors, "pg-majors", envOr("ODOO_BACKUP_PG_MAJORS", "13,14,15,16,17,18"), "client majors to look for")
+	fs.StringVar(&c.pgMajors, "pg-majors", envOr("ODOO_BACKUP_PG_MAJORS", "13,14,15,16,17,18"),
+		"client majors to look for")
 	fs.StringVar(&c.resticBin, "restic", "restic", "restic executable")
 	fs.Var(&c.resticOptions, "restic-option", "restic -o option (repeatable)")
 	fs.DurationVar(&c.retryLock, "retry-lock", 31*time.Minute, "how long restic waits for a repository lock")

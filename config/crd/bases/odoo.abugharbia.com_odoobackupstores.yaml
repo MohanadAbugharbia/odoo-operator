@@ -375,8 +375,6 @@ spec:
                   Ready is true when the last probe could write to, read from and
                   delete a file in the store.
                 type: boolean
-            required:
-            - ready
             type: object
         type: object
     served: true

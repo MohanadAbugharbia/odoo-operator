@@ -62,6 +62,7 @@ const (
 	volData         = "odoo-data"
 	volScratch      = "scratch"
 	volTmp          = "tmp"
+	tmpDir          = "/tmp"
 	volStore        = "store"
 	volStorePass    = "store-password"
 	volStoreSSH     = "store-ssh"
@@ -289,6 +290,9 @@ type Params struct {
 	// Affinity pins the pod next to the running Odoo pod (a ReadWriteOnce
 	// filestore volume can only be mounted on one node).
 	Affinity *corev1.Affinity
+	// Offline is set when Odoo is stopped for the backup, whatever
+	// spec.backup.consistency says (a ReadWriteOncePod volume).
+	Offline bool
 }
 
 func (p Params) labels(kind string) map[string]string {
@@ -300,14 +304,15 @@ func (p Params) labels(kind string) map[string]string {
 
 func baseEnv() []corev1.EnvVar {
 	return []corev1.EnvVar{
-		plainEnv("HOME", "/tmp"),
-		plainEnv("TMPDIR", "/tmp"),
-		plainEnv("RESTIC_CACHE_DIR", "/tmp/restic-cache"),
+		plainEnv("HOME", tmpDir),
+		plainEnv("TMPDIR", tmpDir),
+		plainEnv("RESTIC_CACHE_DIR", tmpDir+"/restic-cache"),
 	}
 }
 
 func (p Params) commonArgs(loc Location) []string {
-	args := []string{"--maintenance-db", p.Instance.Spec.Database.MaintenanceDatabaseValue()}
+	args := make([]string, 0, 2+2*len(loc.ResticOptions))
+	args = append(args, "--maintenance-db", p.Instance.Spec.Database.MaintenanceDatabaseValue())
 	for _, o := range loc.ResticOptions {
 		args = append(args, "--restic-option", o)
 	}
@@ -404,6 +409,10 @@ func BackupJob(p Params, backup *odoov1.OdooBackup, kind string, attempt int32, 
 		return batchv1.Job{}, err
 	}
 	od := p.Instance
+	consistency := od.Spec.Backup.ConsistencyValue()
+	if p.Offline {
+		consistency = odoov1.BackupConsistencyOffline
+	}
 	command := []string{toolBinary, "backup",
 		"--namespace", od.Namespace,
 		"--deployment", od.Name,
@@ -411,7 +420,7 @@ func BackupJob(p Params, backup *odoov1.OdooBackup, kind string, attempt int32, 
 		"--kind", kind,
 		"--image", od.Status.AppliedImage,
 		"--upgrade-token", od.Status.AppliedUpgradeToken,
-		"--consistency", string(od.Spec.Backup.ConsistencyValue()),
+		"--consistency", string(consistency),
 		"--root", layout.BackupRoot,
 	}
 	if waitForCleanup {
@@ -430,7 +439,7 @@ func BackupJob(p Params, backup *odoov1.OdooBackup, kind string, attempt int32, 
 		// The filestore folder only, read-only: a backup never writes there.
 		{Name: volData, MountPath: layout.BackupRoot + "/" + layout.FilestoreDir,
 			SubPath: layout.FilestorePath(p.Database), ReadOnly: true},
-		{Name: volTmp, MountPath: "/tmp"},
+		{Name: volTmp, MountPath: tmpDir},
 	}, loc.Mounts...)
 	spec := p.podSpec(command, append(baseEnv(), loc.Env...), volumes, mounts)
 	// The kubelet would create a missing subPath folder as root; the init
@@ -474,7 +483,7 @@ func RestoreJob(p Params, restore *odoov1.OdooRestore, suffix, snapshot, undoSuf
 	mounts := []corev1.VolumeMount{
 		{Name: volConfig, MountPath: layout.ConfigMount, ReadOnly: true},
 		{Name: volData, MountPath: layout.DataMount},
-		{Name: volTmp, MountPath: "/tmp"},
+		{Name: volTmp, MountPath: tmpDir},
 	}
 	var loc Location
 	if undoSuffix == "" {
@@ -506,7 +515,7 @@ func CleanupJob(p Params, restore *odoov1.OdooRestore, suffix string, attempt in
 	mounts := []corev1.VolumeMount{
 		{Name: volConfig, MountPath: layout.ConfigMount, ReadOnly: true},
 		{Name: volData, MountPath: layout.DataMount},
-		{Name: volTmp, MountPath: "/tmp"},
+		{Name: volTmp, MountPath: tmpDir},
 	}
 	spec := p.podSpec(command, baseEnv(), volumes, mounts)
 	return p.job(CleanupJobName(od, restore.Name, attempt), KindCleanup, map[string]string{LabelRestore: restore.Name},
@@ -545,7 +554,7 @@ func ProbeJob(image string, store *odoov1.OdooBackupStore, hash string) (batchv1
 						ImagePullPolicy:          corev1.PullIfNotPresent,
 						Command:                  []string{toolBinary, "probe", "--target", loc.ProbeTarget},
 						Env:                      append(baseEnv(), loc.Env...),
-						VolumeMounts:             append([]corev1.VolumeMount{{Name: volTmp, MountPath: "/tmp"}}, loc.Mounts...),
+						VolumeMounts:             append([]corev1.VolumeMount{{Name: volTmp, MountPath: tmpDir}}, loc.Mounts...),
 						Resources:                resources,
 						TerminationMessagePath:   layout.TerminationLog,
 						TerminationMessagePolicy: corev1.TerminationMessageReadFile,

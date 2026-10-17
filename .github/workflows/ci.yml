@@ -121,6 +121,57 @@ jobs:
           header: go-test-results
           path: test-summary.md
 
+  backup-real-services:
+    # The backup agent against real servers, inside the backup image built
+    # from Dockerfile.backup: PostgreSQL of every supported major, an SFTP
+    # server and an S3 server (hack/backup-it.sh). Restores are checked for
+    # fidelity and interrupted at every step to prove they resume.
+    name: Backup on PostgreSQL ${{ matrix.pg }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: ["14", "15", "16", "17", "18"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run the backup tests in the backup image
+        run: PG_MAJOR=${{ matrix.pg }} hack/backup-it.sh
+
+      - name: Coverage of the backup packages
+        if: ${{ !cancelled() && hashFiles('cover/*.out') != '' }}
+        run: go tool cover -func=cover/backup-it-pg${{ matrix.pg }}.out | tail -n 1
+
+      - name: Upload coverage
+        if: ${{ !cancelled() && hashFiles('cover/*.out') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-coverage-pg${{ matrix.pg }}
+          path: cover/
+          retention-days: 7
+
+  backup-e2e:
+    # Backup, restore and undo of a real Odoo in kind, through an S3 store
+    # and a PVC store (hack/backup-e2e.sh).
+    name: Backup e2e (kind)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: kind
+      - name: Back up and restore Odoo
+        run: hack/backup-e2e.sh
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

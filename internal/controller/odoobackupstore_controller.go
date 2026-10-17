@@ -109,10 +109,10 @@ func (r *OdooBackupStoreReconciler) probeHash(ctx context.Context, store *odoov1
 		if err := r.Get(ctx, types.NamespacedName{Namespace: store.Namespace, Name: n}, secret); err != nil {
 			return "", err
 		}
-		fmt.Fprintf(h, "\x00%s=%s", n, secret.ResourceVersion)
+		_, _ = fmt.Fprintf(h, "\x00%s=%s", n, secret.ResourceVersion)
 	}
 	period := r.now().Unix() / int64(StoreProbeInterval/time.Second)
-	fmt.Fprintf(h, "\x00%s", strconv.FormatInt(period, 10))
+	_, _ = fmt.Fprintf(h, "\x00%s", strconv.FormatInt(period, 10))
 	return hex.EncodeToString(h.Sum(nil))[:16], nil
 }
 
@@ -158,7 +158,8 @@ func (r *OdooBackupStoreReconciler) reconcile(ctx context.Context, store *odoov1
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	nextPeriod := time.Until(time.Unix((r.now().Unix()/int64(StoreProbeInterval/time.Second)+1)*int64(StoreProbeInterval/time.Second), 0))
+	now := r.now()
+	nextPeriod := time.Unix((now.Unix()/int64(StoreProbeInterval/time.Second)+1)*int64(StoreProbeInterval/time.Second), 0).Sub(now)
 	if store.Status.ProbedHash == hash && store.Status.ProbeJob == "" {
 		return ctrl.Result{RequeueAfter: nextPeriod}, nil
 	}
@@ -197,15 +198,15 @@ func (r *OdooBackupStoreReconciler) reconcile(ctx context.Context, store *odoov1
 	case reconcileloops.JobStateMissing:
 		store.Status.ProbeJob = ""
 		store.Status.ProbedHash = ""
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: time.Second}, nil
 	case reconcileloops.JobStateActive:
 		if obs.ImagePullMessage != "" {
 			r.setReady(store, store.Status.Ready, ReasonStoreProbing, "probe job "+obs.Job.Name+" cannot start: "+obs.ImagePullMessage)
 		}
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
-	now := metav1.NewTime(r.now())
-	store.Status.LastProbeTime = &now
+	probed := metav1.NewTime(r.now())
+	store.Status.LastProbeTime = &probed
 	out, err := (&OdooDeploymentReconciler{Client: r.Client, APIReader: r.APIReader}).observeJob(ctx, store.Namespace, obs.Job.Name)
 	if err != nil {
 		return ctrl.Result{}, err

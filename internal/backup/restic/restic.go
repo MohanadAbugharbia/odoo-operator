@@ -36,6 +36,9 @@ import (
 )
 
 // Exit codes restic documents.
+// jsonFlag asks restic for machine-readable output.
+const jsonFlag = "--json"
+
 const (
 	exitIncomplete   = 3
 	exitNoRepository = 10
@@ -204,7 +207,7 @@ type BackupOptions struct {
 
 // Backup backs up paths into a new snapshot.
 func (r *Restic) Backup(ctx context.Context, opts BackupOptions, paths ...string) (BackupResult, error) {
-	args := []string{"backup", "--json"}
+	args := []string{"backup", jsonFlag}
 	if opts.Host != "" {
 		args = append(args, "--host", opts.Host)
 	}
@@ -282,7 +285,7 @@ func (s Snapshot) HasTag(tag string) bool {
 
 // Snapshots lists the snapshots of host carrying every tag in tags, oldest first.
 func (r *Restic) Snapshots(ctx context.Context, host string, tags ...string) ([]Snapshot, error) {
-	args := []string{"snapshots", "--json"}
+	args := []string{"snapshots", jsonFlag}
 	if host != "" {
 		args = append(args, "--host", host)
 	}
@@ -302,7 +305,7 @@ func (r *Restic) Snapshots(ctx context.Context, host string, tags ...string) ([]
 
 // Snapshot returns one snapshot by (short) id.
 func (r *Restic) Snapshot(ctx context.Context, id string) (Snapshot, error) {
-	out, err := r.run(ctx, "snapshots", "--json", id)
+	out, err := r.run(ctx, "snapshots", jsonFlag, id)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -326,7 +329,7 @@ type Node struct {
 
 // Ls calls fn for every node under dir in snapshot.
 func (r *Restic) Ls(ctx context.Context, snapshot, dir string, fn func(Node)) error {
-	args := []string{"ls", "--json", "--recursive", snapshot, dir}
+	args := []string{"ls", jsonFlag, "--recursive", snapshot, dir}
 	cmd := r.command(ctx, args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

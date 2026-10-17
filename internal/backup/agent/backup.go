@@ -68,6 +68,8 @@ const maxListed = 20
 // Backup takes one backup: dump and file list from one database snapshot,
 // the filestore, a check that every attachment is in the backup, and one
 // restic snapshot holding all of it.
+//
+//nolint:gocyclo // one linear sequence of steps
 func Backup(ctx context.Context, e *Env, o BackupOptions) result.Result {
 	conn, err := pg.Connect(ctx, e.Config, e.Config.Name)
 	if err != nil {

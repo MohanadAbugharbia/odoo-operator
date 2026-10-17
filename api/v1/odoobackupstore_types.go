@@ -147,6 +147,7 @@ type OdooBackupStoreStatus struct {
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// Ready is true when the last probe could write to, read from and
 	// delete a file in the store.
+	// +optional
 	Ready bool `json:"ready"`
 	// LastProbeTime is when the store was last probed.
 	LastProbeTime *metav1.Time `json:"lastProbeTime,omitempty"`

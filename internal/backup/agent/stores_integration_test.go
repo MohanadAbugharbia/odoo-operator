@@ -222,7 +222,7 @@ func parseInt32(s string) (int32, error) {
 		if c < '0' || c > '9' {
 			return 0, os.ErrInvalid
 		}
-		n = n*10 + int32(c-'0')
+		n = n*10 + (c - '0')
 	}
 	return n, nil
 }
