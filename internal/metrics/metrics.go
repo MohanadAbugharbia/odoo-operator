@@ -123,9 +123,34 @@ var (
 	}, []string{"version"})
 )
 
+// Metric types, as the metrics reference names them.
+const (
+	typeCounter   = "counter"
+	typeGauge     = "gauge"
+	typeHistogram = "histogram"
+)
+
+// registered are the metrics init registers, with their types for the
+// metrics reference (Reference).
+var registered = []struct {
+	collector prometheus.Collector
+	typ       string
+}{
+	{jobsTotal, typeCounter},
+	{jobDuration, typeHistogram},
+	{imagePullFailures, typeCounter},
+	{databaseOperations, typeCounter},
+	{pagePublishErrors, typeCounter},
+	{buildInfo, typeGauge},
+	{backupsTotal, typeCounter},
+	{backupDuration, typeHistogram},
+	{restoresTotal, typeCounter},
+}
+
 func init() {
-	ctrlmetrics.Registry.MustRegister(jobsTotal, jobDuration, imagePullFailures, databaseOperations, pagePublishErrors, buildInfo,
-		backupsTotal, backupDuration, restoresTotal)
+	for _, m := range registered {
+		ctrlmetrics.Registry.MustRegister(m.collector)
+	}
 	for _, kind := range []string{odoov1.BackupKindManual, odoov1.BackupKindScheduled, odoov1.BackupKindPreUpgrade} {
 		for _, res := range []string{BackupSucceeded, BackupFailed} {
 			backupsTotal.WithLabelValues(kind, res)

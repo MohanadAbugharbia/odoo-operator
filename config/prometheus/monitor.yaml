@@ -12,6 +12,10 @@ spec:
     - path: /metrics
       port: https # Ensure this is the name of the port that exposes HTTPS metrics
       scheme: https
+      # Keep the namespace label of the per-instance series (the namespace of
+      # their OdooDeployment); without it Prometheus renames it to
+      # exported_namespace and the alerts and the dashboard lose it.
+      honorLabels: true
       bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
       tlsConfig:
         # TODO(user): The option insecureSkipVerify: true is not recommended for production since it disables

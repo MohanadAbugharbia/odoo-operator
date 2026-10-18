@@ -1,8 +1,15 @@
 ---
 name: CI
 
+# Which jobs run (docs/contributing/ci.md):
+#   - Unit and envtest, Lint: on every change that is not docs-only;
+#   - the backup suite (PostgreSQL 16-18, kind e2e): when backup code
+#     changes, on the full-ci or backup-ci label, and on every push to main;
+#   - Images: on the full-ci or images-ci label.
+# Adding one of those labels runs CI again with it; other labels do not.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   push:
     branches:
       - main
@@ -10,9 +17,111 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # A new push or a CI label replaces the pull request's running CI. A label
+  # CI does not use gets a group of its own, so it cancels nothing; its run
+  # skips every job.
+  group: >-
+    ci-${{ github.event.pull_request.number || github.sha }}-${{
+      (github.event.action == 'labeled' &&
+       !contains(fromJSON('["full-ci", "backup-ci", "images-ci"]'), github.event.label.name))
+      && github.run_id || 'run' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  changes:
+    # Decides what runs. Every job below needs it and is skipped by its `if`
+    # when it does not apply; a skipped job counts as passed, so this also
+    # works for required checks, which a workflow-level paths-ignore would
+    # leave waiting.
+    name: Changes
+    if: >-
+      github.event.action != 'labeled' ||
+      contains(fromJSON('["full-ci", "backup-ci", "images-ci"]'), github.event.label.name)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.code.outputs.code }}
+      backup: ${{ steps.decide.outputs.backup }}
+      images: ${{ steps.decide.outputs.images }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: code
+        with:
+          # A file counts as code when it matches every pattern, i.e. it is
+          # not one of the docs paths.
+          predicate-quantifier: every
+          filters: |
+            code:
+              - '**'
+              - '!docs/**'
+              - '!**/*.md'
+              - '!mkdocs.yml'
+              - '!LICENSE'
+              - '!.github/workflows/docs.yml'
+      - uses: dorny/paths-filter@v3
+        id: backup
+        with:
+          # What the backup suite exercises beyond envtest: the agent and its
+          # image, the backup and restore types, CRDs and RBAC, the backup
+          # controllers and the instance work queue, schedules, the
+          # dependencies (restic and pgx come from go.mod) and this workflow.
+          filters: |
+            backup:
+              - 'internal/backup/**'
+              - 'internal/schedule/**'
+              - 'cmd/odoo-backup/**'
+              - 'Dockerfile.backup'
+              - 'hack/backup-*.sh'
+              - 'test/e2e/testdata/backup/**'
+              - 'api/v1/odoobackup*.go'
+              - 'api/v1/odoorestore*.go'
+              - 'config/crd/bases/odoo.abugharbia.com_odoobackup*.yaml'
+              - 'config/crd/bases/odoo.abugharbia.com_odoorestores.yaml'
+              - 'config/rbac/**'
+              - 'internal/controller/odoobackupstore_*.go'
+              - 'internal/controller/odoodeployment_drill.go'
+              - 'internal/controller/odoodeployment_operations.go'
+              - 'internal/controller/odoodeployment_retention.go'
+              - 'internal/controller/odoodeployment_schedule.go'
+              - 'internal/controller/odoowork_controller.go'
+              - 'go.mod'
+              - 'go.sum'
+              - '.github/workflows/ci.yml'
+      - name: Decide
+        id: decide
+        env:
+          CODE: ${{ steps.code.outputs.code }}
+          BACKUP_PATHS: ${{ steps.backup.outputs.backup }}
+          EVENT: ${{ github.event_name }}
+          FULL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+          BACKUP_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'backup-ci') }}
+          IMAGES_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'images-ci') }}
+        run: |
+          backup=false
+          images=false
+          if [ "$EVENT" = push ]; then
+            [ "$CODE" = true ] && backup=true
+          else
+            { [ "$FULL" = true ] || [ "$BACKUP_LABEL" = true ] || [ "$BACKUP_PATHS" = true ]; } && backup=true
+            { [ "$FULL" = true ] || [ "$IMAGES_LABEL" = true ]; } && images=true
+          fi
+          echo "backup=$backup" >> "$GITHUB_OUTPUT"
+          echo "images=$images" >> "$GITHUB_OUTPUT"
+          {
+            echo "### What runs"
+            echo "- Unit and envtest, Lint: $CODE"
+            echo "- Backup suite: $backup (backup paths changed: $BACKUP_PATHS, full-ci: $FULL, backup-ci: $BACKUP_LABEL)"
+            echo "- Images: $images (full-ci: $FULL, images-ci: $IMAGES_LABEL)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   test:
     name: Unit and envtest
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -127,6 +236,8 @@ jobs:
     # server and an S3 server (hack/backup-it.sh). Restores are checked for
     # fidelity and interrupted at every step to prove they resume.
     name: Backup on PostgreSQL ${{ matrix.pg }}
+    needs: changes
+    if: needs.changes.outputs.backup == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -158,6 +269,8 @@ jobs:
     # Backup, restore and undo of a real Odoo in kind, through an S3 store
     # and a PVC store (hack/backup-e2e.sh).
     name: Backup e2e (kind)
+    needs: changes
+    if: needs.changes.outputs.backup == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -174,6 +287,8 @@ jobs:
 
   lint:
     name: Lint
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -191,7 +306,8 @@ jobs:
     # cluster before it is released. Skipped for pull requests from forks,
     # which get no package write token.
     name: Images
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: changes
+    if: needs.changes.outputs.images == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       contents: read

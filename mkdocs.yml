@@ -1,0 +1,85 @@
+site_name: Odoo Operator
+site_description: A Kubernetes operator for the whole lifecycle of Odoo instances.
+site_url: https://odoo-operator.abugharbia.com/
+repo_url: https://github.com/MohanadAbugharbia/odoo-operator
+repo_name: MohanadAbugharbia/odoo-operator
+edit_uri: edit/main/docs/
+copyright: MIT License, © Mohanad Abugharbia
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - content.code.copy
+    - content.action.edit
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+extra:
+  version:
+    provider: mike
+
+markdown_extensions:
+  - admonition
+  - def_list
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Concepts:
+      - Lifecycle: concepts/lifecycle.md
+      - Databases: concepts/databases.md
+      - How backups work: concepts/backups.md
+  - Guides:
+      - Expose Odoo: guides/expose.md
+      - Upgrade Odoo: guides/upgrades.md
+      - Maintenance page: guides/maintenance-page.md
+      - Set up production backups: guides/production-backups.md
+      - Set up a backup store: guides/backup-stores.md
+      - Take and schedule backups: guides/backups.md
+      - Restore and undo: guides/restore.md
+      - Recover onto a new cluster: guides/disaster-recovery.md
+      - Restore drills: guides/drills.md
+      - Check and prune a store: guides/store-check-prune.md
+      - Monitoring and alerts: guides/monitoring.md
+      - Grafana dashboard: guides/grafana-dashboard.md
+      - Uninstall: guides/uninstall.md
+  - Operations:
+      - Upgrading the operator: operations/upgrading-the-operator.md
+      - Troubleshooting: operations/troubleshooting.md
+  - Reference:
+      - API: reference/api.md
+      - Metrics: reference/metrics.md
+      - Configuration: reference/configuration.md
+      - Operator flags: reference/operator-flags.md
+      - Glossary: reference/glossary.md
+  - Contributing:
+      - Development: contributing/development.md
+      - Continuous integration: contributing/ci.md
+      - Writing the docs: contributing/docs.md
