@@ -862,6 +862,7 @@ var _ = Describe("OdooDeployment lifecycle", func() {
 		Expect(condition(od, odoov1.ConditionDegraded).Reason).To(Equal(odoov1.ReasonInitJobFailed))
 		Expect(condition(od, odoov1.ConditionDegraded).Message).To(ContainSubstring("kubectl -n default logs job/" + h.name + "-init"))
 		Expect(h.job(h.name+"-init").DeletionTimestamp).To(BeNil(), "a failed job is kept for inspection")
+		Expect(h.job(h.name+"-init").Spec.TTLSecondsAfterFinished).To(BeNil(), "no TTL would delete it and retry it unasked")
 
 		By("deleting the job means retry")
 		Expect(k8sClient.Delete(ctx, h.job(h.name+"-init"), client.PropagationPolicy(metav1.DeletePropagationBackground))).To(Succeed())
@@ -873,6 +874,20 @@ var _ = Describe("OdooDeployment lifecycle", func() {
 		Expect(od.Status.CurrentInitJob.Name).To(Equal(h.name + "-init"))
 		Expect(od.Status.Phase).To(Equal(odoov1.PhaseInitializing))
 		Expect(h.job(h.name + "-init")).NotTo(BeNil())
+	})
+
+	It("removes the TTL of a failed job an older operator created, so it is not retried unasked", func() {
+		h.create()
+		h.reconcile()
+		job := h.job(h.name + "-init")
+		ttl := int32(86400)
+		job.Spec.TTLSecondsAfterFinished = &ttl
+		Expect(k8sClient.Update(ctx, job)).To(Succeed())
+		h.failJob(h.name + "-init")
+
+		_, od := h.reconcile()
+		Expect(od.Status.Phase).To(Equal(odoov1.PhaseFailed))
+		Expect(h.job(h.name + "-init").Spec.TTLSecondsAfterFinished).To(BeNil())
 	})
 
 	It("is Ready at replicas 0", func() {

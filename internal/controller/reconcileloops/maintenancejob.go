@@ -22,7 +22,8 @@ import (
 type JobState string
 
 const (
-	// JobStateMissing: status.currentInitJob points at a Job that no longer exists (a deleted failed Job means "retry").
+	// JobStateMissing: status.currentInitJob points at a Job that no longer exists (a deleted failed Job means "retry";
+	// failed Jobs carry no TTL, so only a person deletes them).
 	JobStateMissing JobState = "Missing"
 	// JobStateActive: the Job has not finished yet (running, pending, or unable to create its pod).
 	JobStateActive JobState = "Active"
@@ -190,6 +191,22 @@ func DeleteMaintenanceJob(ctx context.Context, c client.Client, job *batchv1.Job
 	err := c.Delete(ctx, job, &client.DeleteOptions{PropagationPolicy: &propagation})
 	if err != nil && !errors.IsNotFound(err) {
 		return fmt.Errorf("delete job %s: %w", job.Name, err)
+	}
+	return nil
+}
+
+// KeepFailedMaintenanceJob removes the TTL from a failed init or upgrade Job,
+// so it stays until someone deletes it to retry. Jobs created before
+// maintenance Jobs lost their TTL still carry one, and its expiry would look
+// like that deletion and run the Job again unasked.
+func KeepFailedMaintenanceJob(ctx context.Context, c client.Client, job *batchv1.Job) error {
+	if job == nil || job.Spec.TTLSecondsAfterFinished == nil {
+		return nil
+	}
+	patch := client.MergeFrom(job.DeepCopy())
+	job.Spec.TTLSecondsAfterFinished = nil
+	if err := c.Patch(ctx, job, patch); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("keep failed job %s: %w", job.Name, err)
 	}
 	return nil
 }

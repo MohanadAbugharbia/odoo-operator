@@ -12,7 +12,7 @@ flowchart TD
   stop["scale Odoo to 0<br/>phase Upgrading"]
   job["upgrade Job<br/>-u spec.upgrade.modules,<br/>-i new spec.modules"]
   running["Odoo starts on the new image<br/>phase Running"]
-  failed["phase Failed, Odoo stays stopped<br/>delete the Job to retry (it is also retried<br/>when its TTL removes it), or restore a backup"]
+  failed["phase Failed, Odoo stays stopped<br/>delete the Job to retry,<br/>or restore a backup"]
 
   trigger --> check
   check -- "cannot pull or run" --> old
@@ -44,10 +44,11 @@ flowchart TD
   run the upgrade on demand. A `spec.image` change then does nothing until the
   token changes, with one exception: a new entry in `spec.modules` is installed
   by a Job on `spec.image`, and the instance moves to that image without `-u`.
-- A failed Job is retried when it is deleted, by you or by its
-  `ttlSecondsAfterFinished` (24 hours by default): the upgrade then runs again
-  on its own. Read the Job's log before that, or restore a backup.
-- `spec.jobs` bounds the Jobs (`activeDeadlineSeconds`, `ttlSecondsAfterFinished`,
-  `backoffLimit`).
+- A failed Job stays, with Odoo stopped, until you delete it: deleting it
+  retries the upgrade. Read its log first, or restore a backup instead.
+- `spec.jobs` bounds the Jobs (`activeDeadlineSeconds`, `backoffLimit`). Its
+  `ttlSecondsAfterFinished` applies to the backup, restore and drill Jobs; the
+  init and upgrade Jobs have none, as the operator deletes them when they
+  succeed and keeps a failed one until you delete it.
 
 A failed upgrade can be rolled back by [restoring a backup](restore.md): a restore replaces a failed init or upgrade Job.
