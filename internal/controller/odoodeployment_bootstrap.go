@@ -32,6 +32,9 @@ import (
 	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
 )
 
+// The bootstrap creates the instance's first OdooRestore.
+// +kubebuilder:rbac:groups=odoo.abugharbia.com,resources=odoorestores,verbs=create
+
 // ReasonBootstrap: the OdooRestore of spec.bootstrap.fromBackup was created.
 const ReasonBootstrap = "Bootstrap"
 
