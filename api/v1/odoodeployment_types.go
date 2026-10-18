@@ -760,6 +760,8 @@ type OdooBackupScheduleStatus struct {
 	DrillDue *metav1.Time `json:"drillDue,omitempty"`
 	// LastDrill is the result of the latest restore drill.
 	LastDrill *OdooDrillResult `json:"lastDrill,omitempty"`
+	// LastSuccessfulDrillTime is when a restore drill last passed.
+	LastSuccessfulDrillTime *metav1.Time `json:"lastSuccessfulDrillTime,omitempty"`
 }
 
 // OdooDrillResult is the outcome of one restore drill.

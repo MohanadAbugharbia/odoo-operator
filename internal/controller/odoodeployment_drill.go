@@ -202,6 +202,7 @@ func (r *OdooDeploymentReconciler) recordDrill(s *reconcileState, outcome *odoov
 	od.Status.Backup.LastDrill = outcome
 	od.Status.Backup.DrillDue = nil
 	if outcome.Succeeded {
+		od.Status.Backup.LastSuccessfulDrillTime = outcome.CompletedAt
 		r.event(od, corev1.EventTypeNormal, ReasonDrillSucceeded, outcome.Message)
 	} else {
 		r.event(od, corev1.EventTypeWarning, ReasonDrillFailed, outcome.Message)

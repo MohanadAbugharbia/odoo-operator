@@ -59,7 +59,7 @@ func (r *OdooDeploymentReconciler) scheduleBackups(ctx context.Context, s *recon
 	drillExpr := strings.TrimSpace(od.Spec.Backup.Drill.Schedule)
 	tz := zoneOrUTC(od.Spec.Backup.TimeZone)
 	if expr == "" && drillExpr == "" {
-		*st = odoov1.OdooBackupScheduleStatus{LastDrill: st.LastDrill}
+		*st = odoov1.OdooBackupScheduleStatus{LastDrill: st.LastDrill, LastSuccessfulDrillTime: st.LastSuccessfulDrillTime}
 		meta.RemoveStatusCondition(&od.Status.Conditions, odoov1.ConditionBackupSchedule)
 		return 0, false, nil
 	}

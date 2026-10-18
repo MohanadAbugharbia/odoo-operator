@@ -1858,6 +1858,11 @@ spec:
                       whether it took a backup then or skipped it.
                     format: date-time
                     type: string
+                  lastSuccessfulDrillTime:
+                    description: LastSuccessfulDrillTime is when a restore drill last
+                      passed.
+                    format: date-time
+                    type: string
                   nextDrillTime:
                     description: NextDrillTime is when the next drill is due.
                     format: date-time

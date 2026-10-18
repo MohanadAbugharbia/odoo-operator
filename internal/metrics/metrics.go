@@ -36,6 +36,7 @@ import (
 // Labels shared by the per-OdooDeployment series.
 const (
 	labelNamespace = "namespace"
+	labelStore     = "store"
 	labelName      = "name"
 	labelKind      = "kind"
 	labelResult    = "result"

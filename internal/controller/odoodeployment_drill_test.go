@@ -135,6 +135,7 @@ var _ = Describe("Restore drills", func() {
 		Expect(d.Message).To(ContainSubstring("already missing"))
 		Expect(d.Job).To(BeEmpty())
 		Expect(d.CompletedAt).NotTo(BeNil())
+		Expect(od.Status.Backup.LastSuccessfulDrillTime).To(Equal(d.CompletedAt))
 		Expect(od.Status.Backup.DrillDue).To(BeNil())
 		Eventually(h.drillJobs).Should(BeEmpty())
 	})
