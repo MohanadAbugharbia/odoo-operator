@@ -127,3 +127,14 @@ jobs:
       - uses: actions/attest-build-provenance@v3
         with:
           subject-checksums: ./dist/digests.txt
+
+  # The documentation of this release, as <major.minor> and "latest". A
+  # release made with GITHUB_TOKEN triggers no workflow, so it is called here.
+  docs:
+    needs: [create-version, release]
+    if: github.event.inputs.draft != 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/docs.yml
+    with:
+      version: ${{ needs.create-version.outputs.next_version }}

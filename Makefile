@@ -156,6 +156,30 @@ lint: golangci-lint ## Run golangci-lint linter
 lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 	$(GOLANGCI_LINT) run --fix
 
+##@ Documentation
+
+DOCS_VENV ?= $(LOCALBIN)/docs-venv
+
+.PHONY: docs-reference
+docs-reference: crd-ref-docs ## Generate docs/reference (API from api/v1, metrics from internal/metrics).
+	$(CRD_REF_DOCS) --source-path=./api --config=hack/docs/crd-ref-docs.yaml --renderer=markdown --output-path=docs/reference/api.md
+	go run ./hack/docs docs/reference/metrics.md
+
+.PHONY: docs-venv
+docs-venv: $(DOCS_VENV) ## Create the Python environment the docs are built with (bin/docs-venv).
+$(DOCS_VENV): docs/requirements.txt
+	python3 -m venv $(DOCS_VENV)
+	$(DOCS_VENV)/bin/pip install --quiet -r docs/requirements.txt
+	touch $(DOCS_VENV)
+
+.PHONY: docs-build
+docs-build: docs-venv ## Build the documentation site into site/, failing on any warning.
+	$(DOCS_VENV)/bin/mkdocs build --strict
+
+.PHONY: docs-serve
+docs-serve: docs-venv ## Serve the documentation site on http://127.0.0.1:8000 with live reload.
+	$(DOCS_VENV)/bin/mkdocs serve
+
 ##@ Build
 
 .PHONY: build
@@ -244,12 +268,14 @@ KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
+CRD_REF_DOCS ?= $(LOCALBIN)/crd-ref-docs
 
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.4.3
 CONTROLLER_TOOLS_VERSION ?= v0.19.0
 ENVTEST_VERSION ?= release-0.19
 GOLANGCI_LINT_VERSION ?= v2.13.2
+CRD_REF_DOCS_VERSION ?= v0.3.0
 
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
@@ -270,6 +296,11 @@ $(ENVTEST): $(LOCALBIN)
 golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
 $(GOLANGCI_LINT): $(LOCALBIN)
 	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/v2/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
+
+.PHONY: crd-ref-docs
+crd-ref-docs: $(CRD_REF_DOCS) ## Download crd-ref-docs locally if necessary.
+$(CRD_REF_DOCS): $(LOCALBIN)
+	$(call go-install-tool,$(CRD_REF_DOCS),github.com/elastic/crd-ref-docs,$(CRD_REF_DOCS_VERSION))
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary
