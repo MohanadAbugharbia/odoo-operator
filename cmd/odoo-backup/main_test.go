@@ -291,3 +291,30 @@ func TestMainProcess(t *testing.T) {
 		}
 	}
 }
+
+func TestRunExport(t *testing.T) {
+	ctx := context.Background()
+	for _, args := range [][]string{
+		nil,
+		{"--output", "x.zip", "--target", "remote:"},
+		{"--no-such-flag"},
+	} {
+		if code := run(ctx, "export", args); code != 2 {
+			t.Errorf("export %q = %d, want 2", args, code)
+		}
+	}
+	// Without a repository the snapshot cannot be found; nothing is written.
+	t.Setenv("RESTIC_REPOSITORY", filepath.Join(t.TempDir(), "none"))
+	t.Setenv("RESTIC_PASSWORD", "x")
+	out := filepath.Join(t.TempDir(), "out.zip")
+	log := filepath.Join(t.TempDir(), "log")
+	if code := run(ctx, "export", []string{"--output", out, "--termination-log", log}); code != 1 {
+		t.Fatalf("export from a missing repository = %d, want 1", code)
+	}
+	if r := readResult(t, log); r.OK || r.Step != result.StepFetch {
+		t.Fatalf("result = %+v", r)
+	}
+	if entries, _ := os.ReadDir(filepath.Dir(out)); len(entries) != 0 {
+		t.Fatalf("a failed export left %v", entries)
+	}
+}

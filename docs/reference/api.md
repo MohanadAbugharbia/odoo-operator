@@ -50,6 +50,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `store` _string_ | Store is the OdooBackupStore holding the copy. |  |  |
 | `snapshotID` _string_ | SnapshotID of the copy in that store's repository; empty when the<br />copy failed. |  |  |
+| `file` _string_ | File is the copy in a store of format zip: the Odoo zip's path below<br />the store's root. |  |  |
 | `error` _string_ | Error says why the copy failed. |  |  |
 
 
@@ -84,7 +85,7 @@ _Underlying type:_ _string_
 BackupStoreFormat is how backups are kept in a store.
 
 _Validation:_
-- Enum: [restic]
+- Enum: [restic zip]
 
 _Appears in:_
 - [OdooBackupStoreSpec](#odoobackupstorespec)
@@ -92,6 +93,7 @@ _Appears in:_
 | Field | Description |
 | --- | --- |
 | `restic` | BackupStoreFormatRestic keeps one encrypted, deduplicated restic<br />repository per OdooDeployment.<br /> |
+| `zip` | BackupStoreFormatZip keeps every backup as the zip Odoo's database<br />manager makes, unencrypted and not deduplicated, in one folder per<br />OdooDeployment. A zip store only receives copies.<br /> |
 
 
 #### BeforeUpgrade
@@ -498,12 +500,12 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `format` _[BackupStoreFormat](#backupstoreformat)_ | Format is how backups are kept. restic: one encrypted, deduplicated<br />repository per OdooDeployment at &lt;path>/&lt;namespace>/&lt;deployment>/. | restic | Enum: [restic] <br /> |
+| `format` _[BackupStoreFormat](#backupstoreformat)_ | Format is how backups are kept. restic: one encrypted, deduplicated<br />repository per OdooDeployment at &lt;path>/&lt;namespace>/&lt;deployment>/.<br />zip: every backup as the zip Odoo's database manager makes, at<br />&lt;path>/&lt;namespace>/&lt;deployment>/&lt;db>_&lt;YYYY-MM-DD_HH-MM-SS>.zip (UTC),<br />unencrypted; a zip store can only be a copy store (not the first in<br />spec.backup.stores) and needs no encryptionKeySecret. | restic | Enum: [restic zip] <br /> |
 | `s3` _[S3Store](#s3store)_ | S3 stores backups in an S3 bucket. |  |  |
 | `sftp` _[SFTPStore](#sftpstore)_ | SFTP stores backups on an SSH server. |  |  |
 | `nfs` _[NFSStore](#nfsstore)_ | NFS stores backups on an NFS export. |  |  |
 | `pvc` _[PVCStore](#pvcstore)_ | PVC stores backups on a PersistentVolumeClaim. |  |  |
-| `encryptionKeySecret` _[SecretKeySelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#secretkeyselector-v1-core)_ | EncryptionKeySecret is the restic password that encrypts every<br />backup in the store. Without it no backup can be read: keep a copy<br />outside the cluster. A readOnly store that only holds Odoo zip or<br />.dump files does not need one. |  | Optional: \{\} <br /> |
+| `encryptionKeySecret` _[SecretKeySelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#secretkeyselector-v1-core)_ | EncryptionKeySecret is the restic password that encrypts every<br />backup in the store. Without it no backup can be read: keep a copy<br />outside the cluster. A readOnly store that only holds Odoo zip or<br />.dump files, and a store of format zip, do not need one. |  | Optional: \{\} <br /> |
 | `readOnly` _boolean_ | ReadOnly stores are only read from: OdooRestores and<br />spec.bootstrap.fromBackup take backups from them, but no backup or<br />copy is ever written there, they are never checked or pruned, and<br />their probe only lists the store. Read-only credentials are enough,<br />and restic reads the repositories without locking them. |  |  |
 | `check` _[StoreCheck](#storecheck)_ | Check reads the store's repositories back on a schedule (restic check)<br />to find damage before a restore needs them. |  | Optional: \{\} <br /> |
 | `prune` _[StoreSchedule](#storeschedule)_ | Prune frees the space of the backups retention has removed, on a<br />schedule (restic prune). |  | Optional: \{\} <br /> |

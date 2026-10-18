@@ -37,9 +37,9 @@ type Retention struct {
 
 // applyRetention forgets the instance's snapshots in r's repository that the
 // policy no longer keeps, never current (the snapshot just written), and
-// returns their IDs. Snapshots are only forgotten: the space comes back
-// when the store is pruned.
-func applyRetention(ctx context.Context, e *Env, rs *restic.Restic, host, current string, ret *Retention) ([]string, error) {
+// returns them. Snapshots are only forgotten: the space comes back when the
+// store is pruned.
+func applyRetention(ctx context.Context, e *Env, rs *restic.Restic, host, current string, ret *Retention) ([]restic.Snapshot, error) {
 	snaps, err := rs.Snapshots(ctx, host, layout.TagDeployment+host)
 	if err != nil {
 		return nil, err
@@ -71,18 +71,36 @@ func applyRetention(ctx context.Context, e *Env, rs *restic.Restic, host, curren
 		e.logf("retention: keeping all %d snapshot(s)", kept)
 		return nil, nil
 	}
+	byID := make(map[string]restic.Snapshot, len(snaps))
+	for _, s := range snaps {
+		byID[s.ID] = s
+	}
 	ids := make([]string, 0, len(forget))
 	names := make([]string, 0, len(forget))
+	forgotten := make([]restic.Snapshot, 0, len(forget))
 	for _, f := range forget {
 		if f.ID == current {
 			return nil, fmt.Errorf("retention chose the snapshot just written (%s); nothing was forgotten", current)
 		}
 		ids = append(ids, f.ID)
 		names = append(names, f.Backup)
+		forgotten = append(forgotten, byID[f.ID])
 	}
 	e.logf("retention: keeping %d snapshot(s), forgetting %d: %s", kept, len(ids), strings.Join(names, ", "))
 	if err := rs.Forget(ctx, ids...); err != nil {
 		return nil, err
 	}
-	return ids, nil
+	return forgotten, nil
+}
+
+// snapshotIDs are the IDs of snaps.
+func snapshotIDs(snaps []restic.Snapshot) []string {
+	if len(snaps) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(snaps))
+	for _, s := range snaps {
+		ids = append(ids, s.ID)
+	}
+	return ids
 }

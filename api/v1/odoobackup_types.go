@@ -139,6 +139,9 @@ type BackupCopy struct {
 	// SnapshotID of the copy in that store's repository; empty when the
 	// copy failed.
 	SnapshotID string `json:"snapshotID,omitempty"`
+	// File is the copy in a store of format zip: the Odoo zip's path below
+	// the store's root.
+	File string `json:"file,omitempty"`
 	// Error says why the copy failed.
 	Error string `json:"error,omitempty"`
 }

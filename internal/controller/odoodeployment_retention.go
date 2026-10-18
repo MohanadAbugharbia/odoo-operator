@@ -117,7 +117,7 @@ func (r *OdooDeploymentReconciler) copyStores(ctx context.Context, od *odoov1.Od
 func mergeCopies(skipped []odoov1.BackupCopy, reported []result.Copy) []odoov1.BackupCopy {
 	out := append([]odoov1.BackupCopy(nil), skipped...)
 	for _, c := range reported {
-		out = append(out, odoov1.BackupCopy{Store: c.Store, SnapshotID: c.SnapshotID, Error: c.Error})
+		out = append(out, odoov1.BackupCopy{Store: c.Store, SnapshotID: c.SnapshotID, File: c.File, Error: c.Error})
 	}
 	return out
 }

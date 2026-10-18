@@ -50,7 +50,7 @@ type ProbeOptions struct {
 func Probe(ctx context.Context, o ProbeOptions) result.Result {
 	bin := o.Rclone
 	if bin == "" {
-		bin = "rclone"
+		bin = defaultRclone
 	}
 	token := make([]byte, 8)
 	if _, err := rand.Read(token); err != nil {

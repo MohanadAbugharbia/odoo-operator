@@ -117,7 +117,9 @@ type Result struct {
 type Copy struct {
 	Store      string `json:"store"`
 	SnapshotID string `json:"snapshotID,omitempty"`
-	Error      string `json:"error,omitempty"`
+	// File is the zip a store of format zip got, below its root.
+	File  string `json:"file,omitempty"`
+	Error string `json:"error,omitempty"`
 }
 
 // Failed returns a failed Result.
@@ -204,7 +206,8 @@ func copyErrorsOver(cs []Copy, n int) bool {
 func shortCopies(cs []Copy) []Copy {
 	out := make([]Copy, 0, len(cs))
 	for _, c := range cs {
-		out = append(out, Copy{Store: truncate(c.Store, 64), SnapshotID: truncate(c.SnapshotID, 64), Error: truncate(c.Error, 64)})
+		out = append(out, Copy{Store: truncate(c.Store, 64), SnapshotID: truncate(c.SnapshotID, 64),
+			File: truncate(c.File, 256), Error: truncate(c.Error, 64)})
 	}
 	return out
 }

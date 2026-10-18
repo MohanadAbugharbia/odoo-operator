@@ -41,6 +41,11 @@ The words these pages use, and what each one means here.
     (restores and bootstraps with `from`), never writes, locks, checks or
     prunes it. See [Read-only stores](../guides/backup-stores.md#read-only-stores).
 
+**Zip store**
+:   A store with `format: zip`: it takes copies of backups as Odoo zips,
+    which any Odoo loads, instead of restic snapshots. See [Zip
+    stores](../guides/backup-stores.md#zip-stores).
+
 **Backup file**
 :   A backup made by Odoo's database manager rather than by the operator: a
     `.zip` (`dump.sql`, `manifest.json`, `filestore/`) or a `.dump`
@@ -61,7 +66,7 @@ The words these pages use, and what each one means here.
 
 **Copy**
 :   The same snapshot copied (`restic copy`) to every store after the first in
-    `spec.backup.stores`.
+    `spec.backup.stores`; in a zip store, the snapshot written as an Odoo zip.
 
 **Prune**
 :   Freeing the space of forgotten snapshots in a store (`restic prune`).

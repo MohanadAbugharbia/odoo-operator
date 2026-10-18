@@ -94,7 +94,7 @@ spec:
                   EncryptionKeySecret is the restic password that encrypts every
                   backup in the store. Without it no backup can be read: keep a copy
                   outside the cluster. A readOnly store that only holds Odoo zip or
-                  .dump files does not need one.
+                  .dump files, and a store of format zip, do not need one.
                 properties:
                   key:
                     description: The key of the secret to select from.  Must be a
@@ -121,8 +121,13 @@ spec:
                 description: |-
                   Format is how backups are kept. restic: one encrypted, deduplicated
                   repository per OdooDeployment at <path>/<namespace>/<deployment>/.
+                  zip: every backup as the zip Odoo's database manager makes, at
+                  <path>/<namespace>/<deployment>/<db>_<YYYY-MM-DD_HH-MM-SS>.zip (UTC),
+                  unencrypted; a zip store can only be a copy store (not the first in
+                  spec.backup.stores) and needs no encryptionKeySecret.
                 enum:
                 - restic
+                - zip
                 type: string
               nfs:
                 description: NFS stores backups on an NFS export.
@@ -355,11 +360,21 @@ spec:
               rule: '(has(self.s3) ? 1 : 0) + (has(self.sftp) ? 1 : 0) + (has(self.nfs)
                 ? 1 : 0) + (has(self.pvc) ? 1 : 0) == 1'
             - message: encryptionKeySecret is required unless the store is readOnly
+                or of format zip
               rule: has(self.encryptionKeySecret) || (has(self.readOnly) && self.readOnly)
+                || (has(self.format) && self.format == 'zip')
             - message: a readOnly store is never checked or pruned
               rule: '!has(self.readOnly) || !self.readOnly || ((!has(self.check) ||
                 !has(self.check.schedule) || size(self.check.schedule) == 0) && (!has(self.prune)
                 || !has(self.prune.schedule) || size(self.prune.schedule) == 0))'
+            - message: a zip store has no repositories to check or prune
+              rule: '!has(self.format) || self.format != ''zip'' || ((!has(self.check)
+                || !has(self.check.schedule) || size(self.check.schedule) == 0) &&
+                (!has(self.prune) || !has(self.prune.schedule) || size(self.prune.schedule)
+                == 0))'
+            - message: format is immutable
+              rule: '(has(self.format) ? self.format : ''restic'') == (has(oldSelf.format)
+                ? oldSelf.format : ''restic'')'
           status:
             description: OdooBackupStoreStatus reports whether the store can be reached.
             properties:

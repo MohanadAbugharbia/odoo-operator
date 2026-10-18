@@ -1124,3 +1124,47 @@ func TestAllJobsInvariants(t *testing.T) {
 		}
 	}
 }
+
+// A zip store gets the store's root to write the zip into, and no restic
+// repository; a restic copy store keeps its own.
+func TestBackupJobCopies(t *testing.T) {
+	zipStore := sftpStore()
+	zipStore.Name = "zips"
+	zipStore.Spec.Format = odoov1.BackupStoreFormatZip
+	zipStore.Spec.EncryptionKeySecret = nil
+	resticStore := nfsStore()
+	p := params(s3Store())
+	p.Copies = []*odoov1.OdooBackupStore{zipStore, resticStore}
+	job, err := BackupJob(p, &odoov1.OdooBackup{ObjectMeta: metav1.ObjectMeta{Name: "b"}}, "manual", 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkPodWiring(t, job.Spec.Template.Spec)
+	cmd := command(job)
+	var copies []string
+	for i, a := range cmd {
+		if a == "--copy" {
+			copies = append(copies, cmd[i+1])
+		}
+	}
+	if !slices.Equal(copies, []string{"zips", "nfs"}) {
+		t.Errorf("copies = %q", copies)
+	}
+	env := job.Spec.Template.Spec.Containers[0].Env
+	loc, err := LocateCopy(zipStore, "", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plain(t, env, "COPY1_ZIP_TARGET"); got != loc.ProbeTarget || got == "" {
+		t.Errorf("COPY1_ZIP_TARGET = %q, want %q", got, loc.ProbeTarget)
+	}
+	m := envMap(env)
+	for _, n := range []string{"COPY1_RESTIC_REPOSITORY", "COPY1_RESTIC_PASSWORD_FILE", "COPY2_ZIP_TARGET"} {
+		if _, ok := m[n]; ok {
+			t.Errorf("%s is set", n)
+		}
+	}
+	if plain(t, env, "COPY2_RESTIC_REPOSITORY") == "" {
+		t.Error("the restic copy has no repository")
+	}
+}

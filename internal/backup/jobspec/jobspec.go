@@ -575,11 +575,20 @@ func BackupJob(p Params, backup *odoov1.OdooBackup, kind string, attempt int32, 
 	}, loc.Mounts...)
 	env := append(baseEnv(), loc.Env...)
 	for i, store := range p.Copies {
-		copyLoc, err := LocateCopy(store, layout.Repository(od.Namespace, od.Name), i+1)
+		repo := layout.Repository(od.Namespace, od.Name)
+		zipStore := store.Spec.Format == odoov1.BackupStoreFormatZip
+		if zipStore {
+			repo = ""
+		}
+		copyLoc, err := LocateCopy(store, repo, i+1)
 		if err != nil {
 			return batchv1.Job{}, err
 		}
 		command = append(command, "--copy", store.Name)
+		if zipStore {
+			// The agent writes the zip into <root>/<namespace>/<name>/.
+			env = append(env, plainEnv(fmt.Sprintf("COPY%d_ZIP_TARGET", i+1), copyLoc.ProbeTarget))
+		}
 		env = append(env, copyLoc.Env...)
 		volumes = append(volumes, copyLoc.Volumes...)
 		mounts = append(mounts, copyLoc.Mounts...)

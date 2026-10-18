@@ -1218,6 +1218,37 @@ var _ = Describe("Backup CRD admission", func() {
 			})), "a readOnly store is never checked or pruned")
 		})
 
+		It("keeps zips without a key, never checks or prunes them, and never changes format", func() {
+			zip := func(s *odoov1.OdooBackupStoreSpec) {
+				s.PVC, s.EncryptionKeySecret, s.Format = pvc, nil, odoov1.BackupStoreFormatZip
+			}
+			st := store(zip)
+			t.create(st)
+			expectInvalid(k8sClient.Create(ctx, store(func(s *odoov1.OdooBackupStoreSpec) {
+				zip(s)
+				s.Check.Schedule = "@weekly"
+			})), "a zip store has no repositories to check or prune")
+			expectInvalid(k8sClient.Create(ctx, store(func(s *odoov1.OdooBackupStoreSpec) {
+				zip(s)
+				s.Prune.Schedule = "@weekly"
+			})), "a zip store has no repositories to check or prune")
+			expectInvalid(k8sClient.Create(ctx, store(func(s *odoov1.OdooBackupStoreSpec) {
+				zip(s)
+				s.Format = "tar"
+			})), "format")
+
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(st), st)).To(Succeed())
+			st.Spec.Format = odoov1.BackupStoreFormatRestic
+			st.Spec.EncryptionKeySecret = &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "k"}, Key: "password"}
+			expectInvalid(k8sClient.Update(ctx, st), "format is immutable")
+
+			restic := store(func(s *odoov1.OdooBackupStoreSpec) { s.PVC = pvc })
+			t.create(restic)
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(restic), restic)).To(Succeed())
+			restic.Spec.Format = odoov1.BackupStoreFormatZip
+			expectInvalid(k8sClient.Update(ctx, restic), "format is immutable")
+		})
+
 		DescribeTable("requires exactly one kind of store",
 			func(mutate func(*odoov1.OdooBackupStoreSpec)) {
 				expectInvalid(k8sClient.Create(ctx, store(mutate)), "set exactly one of s3, sftp, nfs, pvc")

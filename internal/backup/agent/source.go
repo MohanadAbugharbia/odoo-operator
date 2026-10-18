@@ -129,9 +129,12 @@ func IsBackupFile(name string) bool {
 }
 
 // rcloneRun runs rclone and returns its stdout.
+// defaultRclone is the rclone executable when none is given.
+const defaultRclone = "rclone"
+
 func rcloneRun(ctx context.Context, bin string, args ...string) ([]byte, error) {
 	if bin == "" {
-		bin = "rclone"
+		bin = defaultRclone
 	}
 	cmd := exec.CommandContext(ctx, bin, append([]string{"--retries", "3", "--low-level-retries", "5"}, args...)...)
 	cmd.Env = os.Environ()

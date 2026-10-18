@@ -250,16 +250,19 @@ func Backup(ctx context.Context, e *Env, o BackupOptions) result.Result {
 
 	// Retention runs only once the new snapshot is known to be good, and a
 	// failure leaves the backup taken.
+	var forgotten []restic.Snapshot
 	if o.Retention != nil {
-		forgotten, err := applyRetention(ctx, e, e.Restic, host, up.Summary.SnapshotID, o.Retention)
+		forgotten, err = applyRetention(ctx, e, e.Restic, host, up.Summary.SnapshotID, o.Retention)
 		if err != nil {
 			e.logf("retention failed: %v", err)
 			res.RetentionError = tail(err.Error())
 		}
-		res.Forgotten = forgotten
+		res.Forgotten = snapshotIDs(forgotten)
 	}
 	if len(o.Copies) > 0 {
-		res.Copies = copyAll(ctx, e, o.Copies, host, o.Backup, up.Summary.SnapshotID, o.Retention)
+		var warnings []string
+		res.Copies, warnings = copyAll(ctx, e, o.Copies, host, o.Backup, up.Summary.SnapshotID, o.Retention, forgotten)
+		res.Warnings = append(res.Warnings, warnings...)
 	}
 	return res
 }

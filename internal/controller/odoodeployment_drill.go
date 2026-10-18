@@ -103,7 +103,8 @@ func (r *OdooDeploymentReconciler) driveDrill(ctx context.Context, s *reconcileS
 	}
 
 	if op.Job == "" {
-		src, refusal, err := r.backupSource(ctx, od, b, func(msg string) {
+		// A drill checks a restic snapshot: a zip copy is not one.
+		src, refusal, err := r.backupSource(ctx, od, b, false, func(msg string) {
 			r.event(od, corev1.EventTypeWarning, ReasonRestoreFromCopy, "The drill restores the copy in store "+msg)
 		})
 		if err != nil {

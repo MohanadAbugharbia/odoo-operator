@@ -98,6 +98,8 @@ deleted (see below).
 | `Failed`, "job … failed at step …" | The Job failed at that step (connect, dump, filestore, upload, verify…). | `kubectl -n <ns> logs job/<job>`; the Job is kept until its TTL. Create a new OdooBackup to retry; a scheduled backup tries again at its next time. |
 | `CompletedWithWarnings` | The backup is good, but some attachments were in neither the filestore nor the previous backup. | `status.missingFileNames` lists them. |
 | `PartiallyCompleted` | The backup is in the first store, but a copy failed. | `status.copies` says why; fix the copy's store. |
+| `Failed`, "keeps zip files and only takes copies" | The first store in `spec.backup.stores` is a zip store. | List a restic store first and the zip store after it. |
+| `CompletedWithWarnings`, "could not delete …, whose backups retention forgot" | A zip store refused to delete the zip of a forgotten backup. | Check the store's credentials allow deleting; delete the named zips by hand. The next backup does not try again. |
 
 A failed backup is final: the operator does not retry it. The
 `BackupFailed`, `BackupCopyFailed` and `RetentionFailed` events, and the

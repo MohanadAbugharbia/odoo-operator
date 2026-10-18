@@ -203,6 +203,26 @@ var _ = Describe("Restore drills", func() {
 		Expect(claims).To(Equal([]string{"offsite"}), "only the copy's store is mounted")
 	})
 
+	It("passes over a zip copy for a restic copy", func() {
+		start()
+		zips, second := h.zipStore(), h.secondStore()
+		h.setStoreReady(h.store, false)
+		h.setStoreReady(zips, true)
+		h.setStoreReady(second, true)
+		h.completedBackup()
+		b := h.backup("one")
+		b.Status.Copies = []odoov1.BackupCopy{
+			{Store: zips, File: ns + "/x/prod_2026-10-18_01-00-00.zip"},
+			{Store: second, SnapshotID: "fedcba9876543210"},
+		}
+		Expect(k8sClient.Status().Update(ctx, b)).To(Succeed())
+		h.reconcile()
+		jobs := h.drillJobs()
+		Expect(jobs).To(HaveLen(1))
+		load := container(jobs[0].Spec.Template.Spec.InitContainers, "load")
+		Expect(strings.Join(load.Command, " ")).To(ContainSubstring("--snapshot fedcba9876543210"))
+	})
+
 	It("waits for a backup in the queue, then drills it", func() {
 		start()
 		h.setStoreReady(h.store, true)

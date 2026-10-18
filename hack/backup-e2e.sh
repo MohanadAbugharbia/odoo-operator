@@ -4,10 +4,11 @@
 # server and a PVC store. It backs up, changes the data, restores, undoes the
 # restore and checks the database and filestore at every step; then runs
 # scheduled backups with retention and a copy, a restore drill through the
-# real Odoo image, a store check and prune, and a failed upgrade undone with
-# the backup taken before it. Last, a second instance starts from Odoo's own
-# backup file (bootstrap, neutralized) and restores the first instance's
-# repository from a readOnly store.
+# real Odoo image, a store check and prune, backups copied as Odoo zips that
+# Odoo's own CLI loads, and a failed upgrade undone with the backup taken
+# before it. Last, a second instance starts from Odoo's own backup file
+# (bootstrap, neutralized) and restores the first instance's repository from
+# a readOnly store.
 #
 #   kind create cluster && hack/backup-e2e.sh
 set -Eeuo pipefail
@@ -198,6 +199,94 @@ kubectl -n "$NS" patch odoobackupstore s3 --type=merge -p '{"spec":{"check":{"sc
 wait_for odoobackupstore/s3 .status.lastPrune.result Passed 900
 wait_for odoobackupstore/s3 .status.lastCheck.result Passed 900
 kubectl -n "$NS" patch odoobackupstore s3 --type=merge -p '{"spec":{"check":{"schedule":""},"prune":{"schedule":""}}}'
+
+log "scheduled backups copied as Odoo zips into a zip store, which Odoo's own CLI loads"
+cat <<YAML | kubectl apply -f -
+apiVersion: odoo.abugharbia.com/v1
+kind: OdooBackupStore
+metadata: { name: zips, namespace: $NS }
+spec:
+  pvc: { claimName: e2e-backups, subPath: zips }
+  format: zip
+YAML
+wait_for odoobackupstore/zips .status.ready true 420
+ls_zips() { # the instance's folder in the zip store, one name per line
+	k delete pod e2e-ls-zips --ignore-not-found --wait=true >/dev/null
+	cat <<YAML | kubectl apply -f - >/dev/null
+apiVersion: v1
+kind: Pod
+metadata: { name: e2e-ls-zips, namespace: $NS }
+spec:
+  restartPolicy: Never
+  containers:
+    - name: ls
+      image: busybox:1.37
+      command: ["sh", "-c", "ls -A /pvc/zips/$NS/$OD 2>/dev/null; true"]
+      volumeMounts: [{ name: pvc, mountPath: /pvc, readOnly: true }]
+  volumes: [{ name: pvc, persistentVolumeClaim: { claimName: e2e-backups } }]
+YAML
+	wait_for pod/e2e-ls-zips .status.phase Succeeded 300 >/dev/null
+	k logs e2e-ls-zips
+}
+zip_of() { k get odoobackup "$1" -o jsonpath='{.status.copies[?(@.store=="zips")].file}'; }
+k patch odoodeployment "$OD" --type=merge -p '{"spec":{"backup":{"stores":["s3","zips"],"schedule":"* * * * *",
+  "retention":{"last":1,"daily":0,"weekly":0,"monthly":0}}}}'
+deadline=$((SECONDS + 900))
+first="" first_zip=""
+while :; do
+	[ $SECONDS -ge $deadline ] && fail "retention never deleted the first backup copied as a zip ($first)"
+	if [ -z "$first" ]; then
+		for b in $(k get odoobackup -l odoo.abugharbia.com/backup-kind=scheduled -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | sort); do
+			z="$(zip_of "$b")"
+			if [ -n "$z" ]; then first="$b" first_zip="$z"; break; fi
+		done
+	elif ! k get odoobackup "$first" >/dev/null 2>&1; then
+		break
+	fi
+	sleep 10
+done
+k patch odoodeployment "$OD" --type=merge -p '{"spec":{"backup":{"schedule":""}}}'
+while [ "$(k get odoodeployment "$OD" -o jsonpath='{.status.currentOperation.kind}')" = backup ]; do
+	[ $SECONDS -ge $deadline ] && fail "a backup is still running"
+	sleep 5
+done
+newest="$(k get odoobackup -l odoo.abugharbia.com/backup-kind=scheduled -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | sort | tail -1)"
+wait_for odoobackup/"$newest" .status.phase Completed 600
+zip="$(zip_of "$newest")"
+case "$zip" in "$NS/$OD/${DB}_"*.zip) ;; *) fail "$newest records zip '$zip'" ;; esac
+zips="$(ls_zips)"
+echo "$zips"
+printf '%s\n' "$zips" | grep -qx "$(basename "$zip")" || fail "the zip of $newest is not in the store"
+! printf '%s\n' "$zips" | grep -qx "$(basename "$first_zip")" || fail "the zip of $first stayed after retention deleted it"
+! printf '%s\n' "$zips" | grep -q partial || fail "a partial upload was left in the store"
+
+secret="$(k get odoodeployment "$OD" -o jsonpath='{.status.odooConfigSecretName}')"
+sha="$(printf '%s' after-pvc | sha1sum | cut -c1-40)"
+cat <<YAML | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata: { name: e2e-odoo-load, namespace: $NS }
+spec:
+  restartPolicy: Never
+  containers:
+    - name: odoo
+      image: odoo:18
+      command: ["sh", "-c", "odoo db -c /opt/odoo/odoo.conf -D /tmp/data load ${DB}_zipload /pvc/zips/$zip &&
+        cat /tmp/data/filestore/${DB}_zipload/${sha:0:2}/$sha"]
+      volumeMounts:
+        - { name: pvc, mountPath: /pvc, readOnly: true }
+        - { name: config, mountPath: /opt/odoo, readOnly: true }
+  volumes:
+    - { name: pvc, persistentVolumeClaim: { claimName: e2e-backups } }
+    - { name: config, secret: { secretName: $secret } }
+YAML
+wait_for pod/e2e-odoo-load .status.phase Succeeded 600
+[ "$(k logs e2e-odoo-load | tail -1)" = after-pvc ] || { k logs e2e-odoo-load | tail -40; fail "odoo db load did not bring the attachment file back"; }
+[ "$(psql_q 'SELECT word FROM e2e_marker' "${DB}_zipload")" = after-pvc ] || fail "odoo db load did not bring the data back"
+psql_q "DROP DATABASE ${DB}_zipload" postgres
+k patch odoodeployment "$OD" --type=merge -p '{"spec":{"backup":{"stores":["s3"]}}}'
+k delete pod e2e-odoo-load e2e-ls-zips
+k delete odoobackupstore zips
 k get odoobackupstore s3 -o jsonpath='{.status.lastCheck.message}{"\n"}{.status.lastPrune.message}{"\n"}'
 
 log "a backup before an upgrade, the upgrade failing, and the way back"

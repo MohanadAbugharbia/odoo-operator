@@ -19,7 +19,10 @@ package agent
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"path"
+	"strings"
 
 	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/layout"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/restic"
@@ -32,16 +35,26 @@ type CopyTarget struct {
 	Store string
 	// Restic runs restic against the instance's repository in that store.
 	Restic *restic.Restic
+	// ZipTarget, for a store of format zip, is the store's root as rclone
+	// names it: the backup is written there as an Odoo zip instead.
+	ZipTarget string
+	// Rclone is the rclone executable; "rclone" when empty.
+	Rclone string
 }
 
 // CopyTargetsFromEnv builds the targets of a backup Job's --copy stores:
 // the n-th store's repository and password file are in COPY<n>_RESTIC_REPOSITORY
 // and COPY<n>_RESTIC_PASSWORD_FILE (jobspec.LocateCopy), and restic is
-// otherwise run as for the instance's own store.
+// otherwise run as for the instance's own store. A zip store has
+// COPY<n>_ZIP_TARGET instead.
 func CopyTargetsFromEnv(base *restic.Restic, stores []string) ([]CopyTarget, error) {
 	out := make([]CopyTarget, 0, len(stores))
 	for i, store := range stores {
 		prefix := fmt.Sprintf("COPY%d_", i+1)
+		if target := os.Getenv(prefix + "ZIP_TARGET"); target != "" {
+			out = append(out, CopyTarget{Store: store, ZipTarget: target})
+			continue
+		}
 		repo, pw := os.Getenv(prefix+"RESTIC_REPOSITORY"), os.Getenv(prefix+"RESTIC_PASSWORD_FILE")
 		if repo == "" || pw == "" {
 			return nil, fmt.Errorf("copy to %s needs %sRESTIC_REPOSITORY and %sRESTIC_PASSWORD_FILE", store, prefix, prefix)
@@ -92,17 +105,85 @@ func copySnapshot(ctx context.Context, e *Env, t CopyTarget, host, backup, id st
 	return copyID, nil
 }
 
-// copyAll copies the new snapshot to every target, one after the other.
-func copyAll(ctx context.Context, e *Env, targets []CopyTarget, host, backup, id string, ret *Retention) []result.Copy {
+// copyAll copies the new snapshot to every target, one after the other. A
+// zip store gets the snapshot as an Odoo zip, and loses the zips of the
+// snapshots retention forgot; failing to delete one is a warning.
+func copyAll(ctx context.Context, e *Env, targets []CopyTarget, host, backup, id string, ret *Retention,
+	forgotten []restic.Snapshot) ([]result.Copy, []string) {
 	out := make([]result.Copy, 0, len(targets))
+	var warnings []string
 	for _, t := range targets {
-		copyID, err := copySnapshot(ctx, e, t, host, backup, id, ret)
-		c := result.Copy{Store: t.Store, SnapshotID: copyID}
+		c := result.Copy{Store: t.Store}
+		var err error
+		if t.ZipTarget != "" {
+			c.File, err = copyZip(ctx, e, t, host, id)
+			if err == nil {
+				if werr := deleteZips(ctx, e, t, host, forgotten, path.Base(c.File)); werr != nil {
+					e.logf("copy to %s: %v", t.Store, werr)
+					warnings = append(warnings, fmt.Sprintf("store %s: %s", t.Store, tail(werr.Error())))
+				}
+			}
+		} else {
+			c.SnapshotID, err = copySnapshot(ctx, e, t, host, backup, id, ret)
+		}
 		if err != nil {
 			e.logf("copy to %s failed: %v", t.Store, err)
 			c.Error = tail(err.Error())
 		}
 		out = append(out, c)
 	}
-	return out
+	return out, warnings
+}
+
+// copyZip writes snapshot id as an Odoo zip into the instance's folder
+// (folder, <namespace>/<name>) of a zip store and returns its path there.
+func copyZip(ctx context.Context, e *Env, t CopyTarget, folder, id string) (string, error) {
+	snap, err := e.Restic.Snapshot(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	file := path.Join(folder, ZipName(e.Config.Name, snap.Time))
+	files, err := uploadZip(ctx, t.Rclone, joinTarget(t.ZipTarget, file), func(w io.Writer) (int, error) {
+		return writeOdooZip(ctx, e.Restic, snap, w)
+	})
+	if err != nil {
+		return "", err
+	}
+	e.logf("copy to %s: %s with %d filestore file(s)", t.Store, file, files)
+	return file, nil
+}
+
+// deleteZips deletes the zips of the forgotten snapshots from the
+// instance's folder of a zip store. Only the names this instance's backups
+// get are deleted, so nothing else in the folder is ever touched; nor is
+// keep, the zip just written, should a forgotten backup share its second.
+func deleteZips(ctx context.Context, e *Env, t CopyTarget, folder string, forgotten []restic.Snapshot, keep string) error {
+	want := map[string]bool{}
+	for _, s := range forgotten {
+		want[ZipName(e.Config.Name, s.Time)] = true
+	}
+	delete(want, keep)
+	if len(want) == 0 {
+		return nil
+	}
+	dir := joinTarget(t.ZipTarget, folder)
+	out, err := rcloneRun(ctx, t.Rclone, "lsf", "--files-only", dir)
+	if err != nil {
+		return fmt.Errorf("list the zips to delete: %w", err)
+	}
+	var failed []string
+	for _, name := range strings.Split(string(out), "\n") {
+		if !want[name] {
+			continue
+		}
+		if _, err := rcloneRun(ctx, t.Rclone, "deletefile", joinTarget(dir, name)); err != nil {
+			failed = append(failed, name)
+			continue
+		}
+		e.logf("copy to %s: deleted %s, whose backup retention forgot", t.Store, name)
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("could not delete %s, whose backups retention forgot", strings.Join(failed, ", "))
+	}
+	return nil
 }
