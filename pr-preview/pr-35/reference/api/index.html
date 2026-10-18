@@ -4162,7 +4162,7 @@ namespace name it in spec.backup.stores.</p>
 </tr>
 <tr>
 <td><code>ttlSecondsAfterFinished</code> <em>integer</em></td>
-<td></td>
+<td>TTLSecondsAfterFinished removes the instance's backup, restore and<br />drill Jobs that long after they finish. Init and upgrade Jobs get no<br />TTL: the operator deletes them when they succeed and keeps a failed one<br />until it is deleted, which is how it is retried.</td>
 <td>86400</td>
 <td>Minimum: 0 <br /></td>
 </tr>

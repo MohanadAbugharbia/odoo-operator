@@ -1425,7 +1425,7 @@
 </tr>
 <tr>
 <td><code>Failed</code></td>
-<td>Odoo is stopped and needs attention. Usually a maintenance Job failed: the <code>Degraded</code> condition names the Job and the <code>kubectl logs</code> command to read it. Deleting the Job retries it, and so does its <code>spec.jobs.ttlSecondsAfterFinished</code> (24 hours by default) running out, so read its log before then. Also <code>DatabaseNameChanged</code> (the name resolved from <code>spec.database.nameFromSecret</code> changed) and a restore abandoned in the middle of its swap (<code>RestoreIncomplete</code>).</td>
+<td>Odoo is stopped and needs attention. Usually a maintenance Job failed: the <code>Degraded</code> condition names the Job and the <code>kubectl logs</code> command to read it. The failed Job is kept until you delete it; deleting it retries it. Also <code>DatabaseNameChanged</code> (the name resolved from <code>spec.database.nameFromSecret</code> changed) and a restore abandoned in the middle of its swap (<code>RestoreIncomplete</code>).</td>
 </tr>
 </tbody>
 </table>

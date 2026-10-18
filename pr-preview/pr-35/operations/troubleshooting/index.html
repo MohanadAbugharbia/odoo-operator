@@ -1847,7 +1847,7 @@ fails.</p>
 <tr>
 <td>The init or upgrade Job failed</td>
 <td><code>InitJobFailed</code>, <code>UpgradeJobFailed</code>, <code>QuotaExceeded</code></td>
-<td>Read <code>kubectl -n &lt;ns&gt; logs job/&lt;job&gt;</code>, fix the cause, then <strong>delete the Job</strong> to retry: changing the spec alone does not. Left alone, the Job is deleted by its TTL (<code>spec.jobs.ttlSecondsAfterFinished</code>, a day by default) and then <strong>runs again by itself</strong>. A failed upgrade leaves Odoo stopped; restoring a backup replaces the failed Job (<a href="../../guides/restore/">Restore and undo</a>).</td>
+<td>Read <code>kubectl -n &lt;ns&gt; logs job/&lt;job&gt;</code>, fix the cause, then <strong>delete the Job</strong> to retry: changing the spec alone does not. The failed Job stays until you delete it, so it is never retried behind your back. A failed upgrade leaves Odoo stopped; restoring a backup replaces the failed Job (<a href="../../guides/restore/">Restore and undo</a>).</td>
 </tr>
 <tr>
 <td>The database name changed</td>
