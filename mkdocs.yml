@@ -62,6 +62,7 @@ nav:
       - Restore drills: guides/drills.md
       - Check and prune a store: guides/store-check-prune.md
       - Monitoring and alerts: guides/monitoring.md
+      - Grafana dashboard: guides/grafana-dashboard.md
       - Uninstall: guides/uninstall.md
   - Operations:
       - Upgrading the operator: operations/upgrading-the-operator.md

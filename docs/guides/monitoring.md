@@ -13,3 +13,7 @@ controller-runtime defaults (`controller_runtime_reconcile_*`, `workqueue_*`,
 not ready or fail their check or prune). Adjust the staleness thresholds to
 your schedules.
 
+## Dashboard
+
+A ready-made Grafana dashboard for these metrics is described in [Grafana
+dashboard](grafana-dashboard.md).
