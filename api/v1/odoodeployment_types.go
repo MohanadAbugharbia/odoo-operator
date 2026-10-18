@@ -164,6 +164,9 @@ const (
 	ReasonImagePullFailed = "ImagePullFailed"
 	// ReasonImageCheckFailed: the image pulled but `<odooCommand> --version` failed.
 	ReasonImageCheckFailed = "ImageCheckFailed"
+	// ReasonPreUpgradeBackupFailed: beforeUpgrade is Required and the backup
+	// before the upgrade failed, so the running image keeps serving.
+	ReasonPreUpgradeBackupFailed = "PreUpgradeBackupFailed"
 	// ReasonJobSuperseded: a Job stuck pulling an image was replaced because
 	// spec.image moved on.
 	ReasonJobSuperseded = "JobSuperseded"
@@ -467,6 +470,21 @@ type MaintenancePageConfig struct {
 	Logo string `json:"logo,omitempty"`
 }
 
+// BeforeUpgrade says whether a backup is taken before an upgrade.
+// +kubebuilder:validation:Enum=Off;BestEffort;Required
+type BeforeUpgrade string
+
+const (
+	// BeforeUpgradeOff upgrades without a backup first.
+	BeforeUpgradeOff BeforeUpgrade = "Off"
+	// BeforeUpgradeBestEffort takes a backup first and upgrades even when
+	// it fails.
+	BeforeUpgradeBestEffort BeforeUpgrade = "BestEffort"
+	// BeforeUpgradeRequired upgrades only after the backup succeeded; a
+	// failed backup keeps the running image.
+	BeforeUpgradeRequired BeforeUpgrade = "Required"
+)
+
 // BackupConsistency is how a backup keeps the database and the filestore
 // in step.
 // +kubebuilder:validation:Enum=Online;Offline
@@ -492,7 +510,8 @@ type OdooRestoreConfig struct {
 // OdooBackupRetention says which backups are kept. Scheduled backups are
 // thinned with restic's keep rules (daily: 7 keeps the newest backup of each
 // of the last 7 days that have one; a backup kept by any rule stays); manual
-// and pre-upgrade backups each keep their newest Manual. A backup with
+// backups keep their newest Manual and pre-upgrade backups their newest
+// PreUpgrade. A backup with
 // spec.keep, and the newest backup, are never deleted. Unset fields take the
 // defaults below.
 type OdooBackupRetention struct {
@@ -524,6 +543,11 @@ type OdooBackupRetention struct {
 	// Manual keeps the newest N manual backups; 0 keeps them all.
 	// +kubebuilder:validation:Minimum=0
 	Manual *int32 `json:"manual,omitempty"`
+	// PreUpgrade keeps the newest N backups taken before upgrades; 0 keeps
+	// them all.
+	// +kubebuilder:default=5
+	// +kubebuilder:validation:Minimum=0
+	PreUpgrade *int32 `json:"preUpgrade,omitempty"`
 	// KeepAll turns retention off: no backup is ever deleted.
 	KeepAll bool `json:"keepAll,omitempty"`
 }
@@ -545,6 +569,7 @@ type OdooBackupDrill struct {
 //
 // +kubebuilder:validation:XValidation:rule="!has(self.schedule) || size(self.schedule) == 0 || (has(self.stores) && size(self.stores) > 0)",message="spec.backup.schedule needs spec.backup.stores"
 // +kubebuilder:validation:XValidation:rule="!has(self.drill) || !has(self.drill.schedule) || size(self.drill.schedule) == 0 || (has(self.stores) && size(self.stores) > 0)",message="spec.backup.drill.schedule needs spec.backup.stores"
+// +kubebuilder:validation:XValidation:rule="!has(self.beforeUpgrade) || self.beforeUpgrade == 'Off' || (has(self.stores) && size(self.stores) > 0)",message="spec.backup.beforeUpgrade needs spec.backup.stores"
 type OdooBackupConfig struct {
 	// Stores are OdooBackupStores in this namespace. Backups are written to
 	// the first; the instance's repository is <path>/<namespace>/<name>/
@@ -574,6 +599,15 @@ type OdooBackupConfig struct {
 	// Drill restores the newest backup on a schedule to prove it works.
 	// +kubebuilder:validation:Optional
 	Drill OdooBackupDrill `json:"drill,omitempty"`
+
+	// BeforeUpgrade takes a backup before each upgrade (a new spec.image or
+	// spec.upgrade.token), with Odoo stopped so the backup holds the data
+	// exactly as the upgrade found it. Off (default) upgrades without one;
+	// BestEffort upgrades even when the backup fails; Required keeps the
+	// running image when it fails, until the failed OdooBackup is deleted
+	// (which tries again) or the upgrade target changes.
+	// +kubebuilder:default=Off
+	BeforeUpgrade BeforeUpgrade `json:"beforeUpgrade,omitempty"`
 
 	// Consistency: Online (default) backs up while Odoo keeps serving;
 	// Offline stops Odoo for the backup.
@@ -850,6 +884,11 @@ type OdooDeploymentStatus struct {
 	// +kubebuilder:validation:Optional
 	Backup OdooBackupScheduleStatus `json:"backup,omitempty"`
 
+	// PreUpgradeBackup is the backup spec.backup.beforeUpgrade takes before
+	// the pending upgrade. It is cleared once no upgrade is pending.
+	// +kubebuilder:validation:Optional
+	PreUpgradeBackup PreUpgradeBackupStatus `json:"preUpgradeBackup,omitempty"`
+
 	// LastMaintenanceDuration is how long the last successful upgrade Job
 	// took, from its creation to its completion. The maintenance page uses it
 	// to estimate the next one. Init Jobs are not counted: they run once and
@@ -865,6 +904,16 @@ type OdooDeploymentStatus struct {
 	// +listType=map
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// PreUpgradeBackupStatus names the backup taken before an upgrade.
+type PreUpgradeBackupStatus struct {
+	// Name of the OdooBackup.
+	// +kubebuilder:validation:Optional
+	Name string `json:"name,omitempty"`
+	// Target is the image and upgrade token it was taken for.
+	// +kubebuilder:validation:Optional
+	Target string `json:"target,omitempty"`
 }
 
 // +kubebuilder:object:root=true

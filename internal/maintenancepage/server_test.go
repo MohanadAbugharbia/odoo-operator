@@ -289,3 +289,44 @@ func TestImageTag(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusOfBackupsAndRestores(t *testing.T) {
+	started := metav1.NewTime(time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC))
+	od := func(phase string, applied string) *odoov1.OdooDeployment {
+		return &odoov1.OdooDeployment{
+			Spec: odoov1.OdooDeploymentSpec{Image: "registry.example.com/odoo:18.0-2"},
+			Status: odoov1.OdooDeploymentStatus{
+				Phase: phase, AppliedImage: applied, InitModulesInstalled: []string{"base"},
+				CurrentOperation: odoov1.OperationStatus{Kind: odoov1.OperationBackup, Name: "b", StartedAt: &started},
+			},
+		}
+	}
+
+	st := StatusOf(od(odoov1.PhaseBackingUp, "registry.example.com/odoo:18.0-2"))
+	if st.State != StateBackingUp || st.Job != "" || st.Version != "" || st.StartedAt == nil || !st.StartedAt.Equal(started.Time) {
+		t.Errorf("offline backup = %+v", st)
+	}
+	st = StatusOf(od(odoov1.PhaseBackingUp, "registry.example.com/odoo:18.0-1"))
+	if st.State != StateBackingUp || st.Job != "upgrade" || st.Version != "18.0-2" {
+		t.Errorf("backup before an upgrade = %+v", st)
+	}
+	tokenOnly := od(odoov1.PhaseBackingUp, "registry.example.com/odoo:18.0-2")
+	tokenOnly.Spec.Upgrade.Token = "2"
+	if st = StatusOf(tokenOnly); st.Job != "upgrade" {
+		t.Errorf("backup before a token upgrade = %+v", st)
+	}
+	st = StatusOf(od(odoov1.PhaseRestoring, "registry.example.com/odoo:18.0-2"))
+	if st.State != StateRestoring || st.Job != "" || st.StartedAt == nil {
+		t.Errorf("restore = %+v", st)
+	}
+}
+
+func TestEveryLanguageHasEveryMessage(t *testing.T) {
+	for lang, m := range messages {
+		for key := range messages["en"] {
+			if m[key] == "" {
+				t.Errorf("%s has no %s", lang, key)
+			}
+		}
+	}
+}

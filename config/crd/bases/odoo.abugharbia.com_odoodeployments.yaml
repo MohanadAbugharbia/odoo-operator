@@ -68,6 +68,20 @@ spec:
                     format: int64
                     minimum: 60
                     type: integer
+                  beforeUpgrade:
+                    default: "Off"
+                    description: |-
+                      BeforeUpgrade takes a backup before each upgrade (a new spec.image or
+                      spec.upgrade.token), with Odoo stopped so the backup holds the data
+                      exactly as the upgrade found it. Off (default) upgrades without one;
+                      BestEffort upgrades even when the backup fails; Required keeps the
+                      running image when it fails, until the failed OdooBackup is deleted
+                      (which tries again) or the upgrade target changes.
+                    enum:
+                    - "Off"
+                    - BestEffort
+                    - Required
+                    type: string
                   consistency:
                     default: Online
                     description: |-
@@ -207,6 +221,14 @@ spec:
                         format: int32
                         minimum: 0
                         type: integer
+                      preUpgrade:
+                        default: 5
+                        description: |-
+                          PreUpgrade keeps the newest N backups taken before upgrades; 0 keeps
+                          them all.
+                        format: int32
+                        minimum: 0
+                        type: integer
                       weekly:
                         default: 4
                         description: Weekly keeps the newest backup of each of the
@@ -263,6 +285,9 @@ spec:
                 - message: spec.backup.drill.schedule needs spec.backup.stores
                   rule: '!has(self.drill) || !has(self.drill.schedule) || size(self.drill.schedule)
                     == 0 || (has(self.stores) && size(self.stores) > 0)'
+                - message: spec.backup.beforeUpgrade needs spec.backup.stores
+                  rule: '!has(self.beforeUpgrade) || self.beforeUpgrade == ''Off''
+                    || (has(self.stores) && size(self.stores) > 0)'
               config:
                 default: {}
                 description: The configuration for the Odoo
@@ -2074,6 +2099,19 @@ spec:
                 - BackingUp
                 - Restoring
                 type: string
+              preUpgradeBackup:
+                description: |-
+                  PreUpgradeBackup is the backup spec.backup.beforeUpgrade takes before
+                  the pending upgrade. It is cleared once no upgrade is pending.
+                properties:
+                  name:
+                    description: Name of the OdooBackup.
+                    type: string
+                  target:
+                    description: Target is the image and upgrade token it was taken
+                      for.
+                    type: string
+                type: object
               readyReplicas:
                 description: ReadyReplicas mirrors the Deployment's available replicas.
                 format: int32

@@ -668,7 +668,10 @@ func (r *OdooDeploymentReconciler) startBackup(ctx context.Context, s *reconcile
 	if _, err := r.getStore(ctx, od.Namespace, od.Spec.Backup.Stores[0]); err != nil {
 		return fail(err.Error())
 	}
-	stop := od.Spec.Backup.ConsistencyValue() == odoov1.BackupConsistencyOffline
+	// A backup before an upgrade always stops Odoo: the upgrade stops it
+	// anyway, and nothing written after the backup is lost by going back.
+	stop := od.Spec.Backup.ConsistencyValue() == odoov1.BackupConsistencyOffline ||
+		backupKind(b) == odoov1.BackupKindPreUpgrade
 	if !stop {
 		_, rwop, err := r.pvcAccess(ctx, od)
 		if err != nil {

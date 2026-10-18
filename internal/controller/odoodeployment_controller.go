@@ -451,6 +451,17 @@ func (r *OdooDeploymentReconciler) reconcileNormal(ctx context.Context, s *recon
 		needJob, plainRoll = false, false
 	}
 
+	// spec.backup.beforeUpgrade: a backup of the running version first.
+	if !imageChanged && !tokenChanged {
+		od.Status.PreUpgradeBackup = odoov1.PreUpgradeBackupStatus{}
+	}
+	if (needJob || plainRoll) && (imageChanged || tokenChanged) {
+		result, proceed, err := r.preUpgradeBackup(ctx, s, work, configHash)
+		if err != nil || !proceed {
+			return result, err
+		}
+	}
+
 	if needJob {
 		return r.startMaintenanceJob(ctx, s, configHash, initModules, upgradeModules, firstBoot)
 	}

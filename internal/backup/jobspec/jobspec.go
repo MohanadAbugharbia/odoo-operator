@@ -393,7 +393,7 @@ func (r *Retention) args() []string {
 	}{
 		{"--keep-last", c.Last}, {"--keep-hourly", c.Hourly}, {"--keep-daily", c.Daily},
 		{"--keep-weekly", c.Weekly}, {"--keep-monthly", c.Monthly}, {"--keep-yearly", c.Yearly},
-		{"--keep-manual", c.Manual},
+		{"--keep-manual", c.Manual}, {"--keep-pre-upgrade", c.PreUpgrade},
 	} {
 		if k.n > 0 {
 			args = append(args, k.flag, strconv.Itoa(int(k.n)))

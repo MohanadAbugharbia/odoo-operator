@@ -28,6 +28,10 @@ const LabelBackupKind = "odoo.abugharbia.com/backup-kind"
 // with kind scheduled was created for.
 const AnnotationScheduledTime = "odoo.abugharbia.com/scheduled-time"
 
+// AnnotationUpgradeTarget is the upgrade a pre-upgrade OdooBackup was taken
+// for: spec.image and spec.upgrade.token, space-separated.
+const AnnotationUpgradeTarget = "odoo.abugharbia.com/upgrade-target"
+
 // Backup kinds, in the LabelBackupKind label and the restic "kind=" tag.
 const (
 	BackupKindManual     = "manual"

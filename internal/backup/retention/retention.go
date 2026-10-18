@@ -53,9 +53,10 @@ type Policy struct {
 	// Within keeps every snapshot taken less than this before the newest
 	// one, in restic's format (1y6m, 30d, 12h).
 	Within string
-	// Manual keeps the newest N manual backups, and separately the newest N
-	// pre-upgrade backups; 0 keeps them all.
+	// Manual keeps the newest N manual backups; 0 keeps them all.
 	Manual int
+	// PreUpgrade keeps the newest N pre-upgrade backups; 0 keeps them all.
+	PreUpgrade int
 	// Location is the time zone periods are counted in; UTC when nil.
 	Location *time.Location
 	// Now is the clock Within ignores snapshots after (time.Now when zero).
@@ -212,10 +213,13 @@ func Apply(p Policy, snaps []Snapshot, protect Protect) ([]Snapshot, []Decision,
 			applyRules(p, w, loc, sorted, idx, keep)
 		}
 	}
-	for _, kind := range []string{KindManual, KindPreUpgrade} {
-		for n, i := range groups[kind] {
-			if p.Manual == 0 || n < p.Manual {
-				keep(i, "manual")
+	for _, k := range []struct {
+		kind, why string
+		n         int
+	}{{KindManual, "manual", p.Manual}, {KindPreUpgrade, "pre-upgrade", p.PreUpgrade}} {
+		for n, i := range groups[k.kind] {
+			if k.n == 0 || n < k.n {
+				keep(i, k.why)
 			}
 		}
 	}

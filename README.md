@@ -95,7 +95,8 @@ spec:
   page with status 503, and every other request (RPC, assets, `/web/health`,
   service worker fetches) gets an empty 503. Nothing is cacheable.
 - The page shows the phase as steps (preparing the database, installing,
-  updating, starting), the elapsed time and, for upgrades, an estimate from
+  backing up, updating, restoring, starting), the elapsed time and, for
+  upgrades, an estimate from
   `status.lastMaintenanceDuration`. It polls `/__maintenance/status.json` and
   `/web/health` every 3 seconds, and reopens the URL that was asked for as soon
   as Odoo answers. A failed Job shows only "Please contact your
@@ -142,6 +143,19 @@ spec:
   the database.
 - For production set `onImageChange: false` and bump `spec.upgrade.token` to
   run the upgrade on demand.
+- **A backup before each upgrade.** With `spec.backup.beforeUpgrade` set to
+  `BestEffort` or `Required` (default `Off`; it needs `spec.backup.stores`),
+  a new image or upgrade token first gets an OdooBackup named
+  `<name>-pre-upgrade-<yyyymmdd-hhmmss>` (label
+  `odoo.abugharbia.com/backup-kind: pre-upgrade`), taken once the new image
+  has pulled. Odoo is stopped for it whatever `consistency` says, stays stopped
+  until the upgrade Job starts, and the maintenance page shows the backup as
+  the first step of the update. `status.preUpgradeBackup` names it. If it
+  fails, `BestEffort` upgrades anyway with a `PreUpgradeBackupFailed` warning
+  event; `Required` starts the old image again and sets `Degraded`
+  (`PreUpgradeBackupFailed`) with the backup's message, and tries again when
+  that OdooBackup is deleted or `spec.image` changes. Restoring it (below) is
+  the way back from an upgrade that went wrong.
 - `spec.jobs` bounds the Jobs (`activeDeadlineSeconds`, `ttlSecondsAfterFinished`,
   `backoffLimit`).
 
@@ -301,7 +315,8 @@ spec:
       weekly: 4
       monthly: 12
       within: 2d                      # also keep everything from the last 2 days (y, m, d, h)
-      manual: 10                      # newest manual and pre-upgrade backups kept; 0 (default) keeps all
+      manual: 10                      # newest manual backups kept; 0 (default) keeps all
+      preUpgrade: 5                   # newest pre-upgrade backups kept (default 5); 0 keeps all
     drill:
       schedule: "0 5 * * 0"           # restore drill, see below
 ```
@@ -316,8 +331,8 @@ with an event. `status.backup` shows the last and next scheduled times, and the
 Retention runs in the backup Job, after the new backup is verified. The keep
 rules are restic's (`last`, `hourly`, `daily`, `weekly`, `monthly`, `yearly`,
 `within`, with restic's meaning), but the periods are counted in `timeZone`,
-and they apply to scheduled backups; manual and pre-upgrade backups each keep
-their newest `manual`. Never deleted: the newest backup, a backup with
+and they apply to scheduled backups; manual backups keep their newest
+`manual`, and backups taken before upgrades their newest `preUpgrade`. Never deleted: the newest backup, a backup with
 `spec.keep: true` (it does not use up a slot of the rules either), a snapshot
 an unfinished restore needs, and snapshots the operator did not take. The
 OdooBackups of deleted snapshots are deleted too; a retention that fails leaves

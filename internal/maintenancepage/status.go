@@ -21,6 +21,11 @@ const (
 	StateUpdating = "updating"
 	// StateStarting: no Job is running, Odoo is starting.
 	StateStarting = "starting"
+	// StateBackingUp: Odoo is stopped for a backup; Job is "upgrade" when an
+	// upgrade follows it.
+	StateBackingUp = "backing-up"
+	// StateRestoring: Odoo is stopped while a backup is restored or undone.
+	StateRestoring = "restoring"
 	// StateFailed: the init or upgrade Job failed.
 	StateFailed = "failed"
 	// StateUnavailable: no status has been read yet.
@@ -38,7 +43,8 @@ type Status struct {
 	StartedAt *time.Time `json:"startedAt,omitempty"`
 	// ExpectedSeconds is how long the last upgrade took (updating only).
 	ExpectedSeconds int64 `json:"expectedSeconds,omitempty"`
-	// Version is the tag of the image being installed (updating only).
+	// Version is the tag of the image being installed (updating, and
+	// backing-up before an upgrade).
 	Version string `json:"version,omitempty"`
 	// Stale is set when the status could not be read just now and the state
 	// is the last one known.
@@ -74,6 +80,16 @@ func StatusOf(od *odoov1.OdooDeployment) Status {
 		if d := od.Status.LastMaintenanceDuration; d != nil {
 			st.ExpectedSeconds = int64(d.Seconds())
 		}
+	case odoov1.PhaseBackingUp:
+		st.State = StateBackingUp
+		st.Job, st.StartedAt = "", operationStart(od)
+		if od.Status.AppliedImage != od.Spec.Image || od.Status.AppliedUpgradeToken != od.Spec.Upgrade.Token {
+			st.Job = odoov1.JobKindUpgrade
+			st.Version = imageTag(od.Spec.Image)
+		}
+	case odoov1.PhaseRestoring:
+		st.State = StateRestoring
+		st.Job, st.StartedAt = "", operationStart(od)
 	case odoov1.PhaseRunning:
 		st.State = StateStarting
 		st.StartedAt = nil
@@ -86,6 +102,15 @@ func StatusOf(od *odoov1.OdooDeployment) Status {
 		st.StartedAt = nil
 	}
 	return st
+}
+
+// operationStart is when the backup or restore in progress started.
+func operationStart(od *odoov1.OdooDeployment) *time.Time {
+	if t := od.Status.CurrentOperation.StartedAt; t != nil {
+		u := t.UTC()
+		return &u
+	}
+	return nil
 }
 
 // imageTag returns the tag of an image reference ("" for a digest or none).
