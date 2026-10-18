@@ -465,7 +465,7 @@ func (r *OdooDeploymentReconciler) reconcileNormal(ctx context.Context, s *recon
 		}
 		backup, backupWait := work.nextBackup(now)
 		if backup != nil {
-			return r.startBackup(ctx, s, backup, configHash)
+			return r.startBackup(ctx, s, work, backup, configHash)
 		}
 		retryOperations = minPositive(cleanupWait, backupWait)
 	}

@@ -74,6 +74,13 @@ type Result struct {
 	RepairedFiles   int      `json:"repairedFiles,omitempty"`
 	MissingFiles    int      `json:"missingFiles,omitempty"`
 	MissingNames    []string `json:"missingNames,omitempty"`
+	// Forgotten are the IDs of the snapshots retention forgot in the
+	// instance's repository (at most retention.MaxForget, so the list is
+	// never trimmed).
+	Forgotten []string `json:"forgotten,omitempty"`
+	// RetentionError says why retention did not run; the backup itself
+	// succeeded.
+	RetentionError string `json:"retentionError,omitempty"`
 
 	// Restore.
 	// Image and UpgradeToken are what the backup's instance ran.
@@ -124,6 +131,8 @@ func Encode(r Result) []byte {
 			r.MissingModules = r.MissingModules[:len(r.MissingModules)/2]
 		case len(r.Error) > 512:
 			r.Error = r.Error[:512-len(errorCut)] + errorCut
+		case len(r.RetentionError) > 512:
+			r.RetentionError = r.RetentionError[:512-len(errorCut)] + errorCut
 		case len(r.Warnings) > 0 && len(r.Warnings[0]) > 512:
 			// A new slice: r shares its backing array with the caller's.
 			r.Warnings = append([]string{r.Warnings[0][:512-len("…")] + "…"}, r.Warnings[1:]...)
@@ -132,7 +141,8 @@ func Encode(r Result) []byte {
 			// here, so this fits even when every byte is JSON-escaped.
 			b, err := json.Marshal(Result{OK: r.OK, Step: truncate(r.Step, 64), Error: truncate(r.Error, 256),
 				Deferred: r.Deferred, SnapshotID: truncate(r.SnapshotID, 128),
-				LiveChanged: r.LiveChanged, PreviousKept: r.PreviousKept})
+				LiveChanged: r.LiveChanged, PreviousKept: r.PreviousKept, Forgotten: r.Forgotten,
+				RetentionError: truncate(r.RetentionError, 256)})
 			if err != nil || len(b) > MaxBytes {
 				return []byte(`{"ok":false,"error":"could not encode the result"}`)
 			}

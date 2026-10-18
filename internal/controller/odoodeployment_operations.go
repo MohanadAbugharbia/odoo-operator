@@ -76,6 +76,8 @@ const (
 	ReasonCleanupFailed       = "RestoreCleanupFailed"
 	ReasonBackupImageUnknown  = "BackupImageUnknown"
 	ReasonWaitingForOperation = "WaitingForOperation"
+	ReasonRetentionFailed     = "RetentionFailed"
+	ReasonBackupExpired       = "BackupExpired"
 )
 
 // instanceWork is every OdooBackup and OdooRestore of one instance, oldest first.
@@ -576,7 +578,7 @@ func (r *OdooDeploymentReconciler) observeOperation(ctx context.Context, s *reco
 		if b == nil {
 			return r.abandonOperation(ctx, s, "OdooBackup "+op.Name+" was deleted")
 		}
-		return r.driveBackup(ctx, s, b, configHash)
+		return r.driveBackup(ctx, s, w, b, configHash)
 	case odoov1.OperationRestore:
 		rs := w.restore(op.Name)
 		if rs == nil {
@@ -639,7 +641,7 @@ func (r *OdooDeploymentReconciler) stopOdoo(ctx context.Context, s *reconcileSta
 // ---- backups -------------------------------------------------------------------
 
 // startBackup claims the instance for backup b.
-func (r *OdooDeploymentReconciler) startBackup(ctx context.Context, s *reconcileState, b *odoov1.OdooBackup, configHash string) (ctrl.Result, error) {
+func (r *OdooDeploymentReconciler) startBackup(ctx context.Context, s *reconcileState, w instanceWork, b *odoov1.OdooBackup, configHash string) (ctrl.Result, error) {
 	od := s.od
 	fail := func(msg string) (ctrl.Result, error) {
 		r.objectEvent(b, corev1.EventTypeWarning, ReasonBackupFailed, msg)
@@ -671,7 +673,7 @@ func (r *OdooDeploymentReconciler) startBackup(ctx context.Context, s *reconcile
 		Kind: odoov1.OperationBackup, Name: b.Name, StoppedOdoo: stop, StartedAt: &now,
 	}
 	log.FromContext(ctx).Info("Starting backup", "backup", b.Name, "offline", stop)
-	result, _, err := r.driveBackup(ctx, s, b, configHash)
+	result, _, err := r.driveBackup(ctx, s, w, b, configHash)
 	return result, err
 }
 
@@ -685,7 +687,7 @@ func backupKind(b *odoov1.OdooBackup) string {
 // driveBackup moves the backup in status.currentOperation along.
 //
 //nolint:gocyclo // one switch over the backup job outcomes
-func (r *OdooDeploymentReconciler) driveBackup(ctx context.Context, s *reconcileState, b *odoov1.OdooBackup, configHash string) (ctrl.Result, bool, error) {
+func (r *OdooDeploymentReconciler) driveBackup(ctx context.Context, s *reconcileState, w instanceWork, b *odoov1.OdooBackup, configHash string) (ctrl.Result, bool, error) {
 	od := s.od
 	op := &od.Status.CurrentOperation
 	if op.StoppedOdoo {
@@ -719,6 +721,7 @@ func (r *OdooDeploymentReconciler) driveBackup(ctx context.Context, s *reconcile
 			}
 		}
 		params.Offline = op.StoppedOdoo
+		params.Retention = backupRetention(od, w)
 		attempt := b.Status.Attempts + 1
 		wait := od.Spec.Backup.ConsistencyValue() == odoov1.BackupConsistencyOnline && !op.StoppedOdoo
 		if b.Status.WaitingSince != nil && time.Since(b.Status.WaitingSince.Time) > cleanupWaitLimit {
@@ -817,9 +820,14 @@ func (r *OdooDeploymentReconciler) driveBackup(ctx context.Context, s *reconcile
 			phase = odoov1.BackupPhaseCompletedWithWarnings
 			msg += "; " + strings.Join(res.Warnings, "; ")
 		}
+		var warnings []string
+		if res.RetentionError != "" {
+			warnings = append(warnings, "retention did not run: "+res.RetentionError)
+		}
 		err := r.patchBackupStatus(ctx, b, func(st *odoov1.OdooBackupStatus) {
 			st.Phase = phase
 			st.Message = msg
+			st.Warnings = warnings
 			st.SnapshotID = res.SnapshotID
 			st.OdooVersion = res.OdooVersion
 			st.PgServerVersion = res.PgServerVersion
@@ -838,6 +846,10 @@ func (r *OdooDeploymentReconciler) driveBackup(ctx context.Context, s *reconcile
 		if err != nil {
 			return ctrl.Result{}, false, err
 		}
+		// Before the Job goes: its result is how a failed delete is retried.
+		if err := r.deleteForgotten(ctx, od, w, b.Status.Store, res.Forgotten); err != nil {
+			return ctrl.Result{}, false, err
+		}
 		if err := reconcileloops.DeleteMaintenanceJob(ctx, r.Client, out.job); err != nil {
 			return ctrl.Result{}, false, err
 		}
@@ -846,6 +858,9 @@ func (r *OdooDeploymentReconciler) driveBackup(ctx context.Context, s *reconcile
 			eventType = corev1.EventTypeWarning
 		}
 		r.objectEvent(b, eventType, ReasonBackupCompleted, msg)
+		for _, warning := range warnings {
+			r.objectEvent(b, corev1.EventTypeWarning, ReasonRetentionFailed, warning)
+		}
 		metrics.BackupFinished(backupKind(b), metrics.BackupSucceeded, took)
 		od.Status.CurrentOperation = odoov1.OperationStatus{}
 		return ctrl.Result{RequeueAfter: time.Second}, true, nil

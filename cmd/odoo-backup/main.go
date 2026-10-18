@@ -36,6 +36,7 @@ import (
 	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/pg"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/restic"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/result"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/schedule"
 )
 
 // version is set with -ldflags "-X main.version=...".
@@ -188,8 +189,38 @@ func runBackup(ctx context.Context, fs *flag.FlagSet, c *common, args []string) 
 	fs.StringVar(&o.Consistency, "consistency", "Online", "Online or Offline")
 	fs.BoolVar(&o.WaitForCleanup, "wait-for-cleanup", false, "defer while Odoo's filestore cleanup runs or is due")
 	fs.DurationVar(&o.CleanupWindow, "cleanup-window", 10*time.Minute, "how soon a due cleanup defers the backup")
+	var ret agent.Retention
+	var withRetention bool
+	var timeZone string
+	var protectBackups, protectSnapshots stringList
+	fs.BoolVar(&withRetention, "retention", false, "forget the snapshots the keep rules no longer keep after the backup")
+	fs.IntVar(&ret.Policy.Last, "keep-last", 0, "keep the newest N scheduled backups")
+	fs.IntVar(&ret.Policy.Hourly, "keep-hourly", 0, "keep the newest scheduled backup of each of the last N hours")
+	fs.IntVar(&ret.Policy.Daily, "keep-daily", 0, "keep the newest scheduled backup of each of the last N days")
+	fs.IntVar(&ret.Policy.Weekly, "keep-weekly", 0, "keep the newest scheduled backup of each of the last N weeks")
+	fs.IntVar(&ret.Policy.Monthly, "keep-monthly", 0, "keep the newest scheduled backup of each of the last N months")
+	fs.IntVar(&ret.Policy.Yearly, "keep-yearly", 0, "keep the newest scheduled backup of each of the last N years")
+	fs.StringVar(&ret.Policy.Within, "keep-within", "", "keep scheduled backups this close to the newest (1y6m, 30d)")
+	fs.IntVar(&ret.Policy.Manual, "keep-manual", 0, "keep the newest N manual (and N pre-upgrade) backups; 0 keeps all")
+	fs.StringVar(&timeZone, "time-zone", "UTC", "IANA time zone the periods are counted in")
+	fs.Var(&protectBackups, "protect-backup", "OdooBackup never forgotten (repeatable)")
+	fs.Var(&protectSnapshots, "protect-snapshot", "snapshot ID never forgotten (repeatable)")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if withRetention {
+		loc, err := schedule.Location(timeZone)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "backup: --time-zone:", err)
+			return 2
+		}
+		ret.Policy.Location = loc
+		if err := ret.Policy.Validate(); err != nil {
+			fmt.Fprintln(os.Stderr, "backup:", err)
+			return 2
+		}
+		ret.ProtectBackups, ret.ProtectSnapshots = protectBackups, protectSnapshots
+		o.Retention = &ret
 	}
 	if o.Namespace == "" || o.Deployment == "" || o.Backup == "" {
 		fmt.Fprintln(os.Stderr, "backup: --namespace, --deployment and --backup are required")

@@ -207,8 +207,8 @@ spec:
                       within:
                         description: |-
                           Within keeps every backup newer than this, counted from the newest
-                          backup, such as 30d, 2w or 1y6m (restic's duration format).
-                        pattern: ^([0-9]+[ymwdh])*$
+                          backup, such as 30d, 12h or 1y6m (restic's duration format).
+                        pattern: ^([0-9]+[ymdh])*$
                         type: string
                       yearly:
                         description: Yearly keeps the newest backup of each of the
@@ -248,11 +248,11 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: spec.backup.schedule needs spec.backup.stores
-                  rule: '!has(self.schedule) || self.schedule == '''' || (has(self.stores)
+                  rule: '!has(self.schedule) || size(self.schedule) == 0 || (has(self.stores)
                     && size(self.stores) > 0)'
                 - message: spec.backup.drill.schedule needs spec.backup.stores
-                  rule: '!has(self.drill) || !has(self.drill.schedule) || self.drill.schedule
-                    == '''' || (has(self.stores) && size(self.stores) > 0)'
+                  rule: '!has(self.drill) || !has(self.drill.schedule) || size(self.drill.schedule)
+                    == 0 || (has(self.stores) && size(self.stores) > 0)'
               config:
                 default: {}
                 description: The configuration for the Odoo

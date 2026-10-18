@@ -19,6 +19,7 @@ cd "$(dirname "$0")/.."
 mkdir -p bin
 CGO_ENABLED=0 go build -o bin/odoo-backup ./cmd/odoo-backup
 CGO_ENABLED=0 go test -c -cover -coverpkg=./internal/backup/... -o "$WORK/agent.test" ./internal/backup/agent/
+CGO_ENABLED=0 go test -c -o "$WORK/retention.test" ./internal/backup/retention/
 if [ -z "${SKIP_IMAGE_BUILD:-}" ]; then
 	docker build -q -t "$IMAGE" --build-arg TARGETPLATFORM=bin -f Dockerfile.backup . >/dev/null
 fi
@@ -55,7 +56,14 @@ done
 docker exec backup-it-sftp cat /etc/ssh/ssh_host_ed25519_key.pub |
 	awk '{print "backup-it-sftp " $1 " " $2}' >"$WORK/ssh/known_hosts"
 chmod 0644 "$WORK/ssh/known_hosts"
-cp "$WORK/agent.test" "$WORK/ssh/"
+cp "$WORK/agent.test" "$WORK/retention.test" "$WORK/ssh/"
+
+# The retention rules against restic's own forget, with the image's restic
+# (once: it does not depend on PostgreSQL).
+if [ "$PG_MAJOR" = 16 ]; then
+	docker run --rm --user 65532:65532 -v "$WORK/ssh:/it:ro" -w /tmp --entrypoint /it/retention.test "$IMAGE" \
+		-test.v -test.count=1 -test.run TestSameAsRestic
+fi
 
 # The tests run as an unprivileged user, as the Jobs do.
 docker run --rm --network "$NET" --user 65532:65532 -v "$WORK/ssh:/it:ro" -v "$PWD/cover:/cover" \

@@ -985,3 +985,29 @@ func (o *OdooBackupConfig) ActiveDeadlineSecondsValue() int64 {
 	}
 	return *o.ActiveDeadlineSeconds
 }
+
+// RetentionCounts are the keep counts of a retention with its defaults
+// filled in.
+type RetentionCounts struct {
+	Last, Hourly, Daily, Weekly, Monthly, Yearly, Manual int32
+}
+
+// Counts returns the keep counts, the defaults (daily 7, weekly 4,
+// monthly 12) standing in for unset fields.
+func (r *OdooBackupRetention) Counts() RetentionCounts {
+	val := func(p *int32, d int32) int32 {
+		if p == nil {
+			return d
+		}
+		return *p
+	}
+	return RetentionCounts{
+		Last:    val(r.Last, 0),
+		Hourly:  val(r.Hourly, 0),
+		Daily:   val(r.Daily, 7),
+		Weekly:  val(r.Weekly, 4),
+		Monthly: val(r.Monthly, 12),
+		Yearly:  val(r.Yearly, 0),
+		Manual:  val(r.Manual, 0),
+	}
+}

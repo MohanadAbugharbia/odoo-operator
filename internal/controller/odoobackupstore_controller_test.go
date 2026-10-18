@@ -1184,19 +1184,35 @@ var _ = Describe("Backup CRD admission", func() {
 			Expect(od.Spec.Backup.Restore.KeepPrevious.Duration).To(Equal(72 * time.Hour))
 		})
 
-		It("accepts one store and rejects two", func() {
-			err := k8sClient.Create(ctx, h.spec(func(od *odoov1.OdooDeployment) {
-				od.Spec.Backup.Stores = []string{"a", "b"}
-			}))
-			expectInvalid(err, "spec.backup.stores")
+		It("accepts up to four different stores", func() {
+			expectInvalid(k8sClient.Create(ctx, h.spec(func(od *odoov1.OdooDeployment) {
+				od.Spec.Backup.Stores = []string{"a", "b", "a"}
+			})), "must not repeat a store")
+			expectInvalid(k8sClient.Create(ctx, h.spec(func(od *odoov1.OdooDeployment) {
+				od.Spec.Backup.Stores = []string{"a", "b", "c", "d", "e"}
+			})), "spec.backup.stores")
 
 			h.create(func(od *odoov1.OdooDeployment) {
-				od.Spec.Backup.Stores = []string{"a"}
+				od.Spec.Backup.Stores = []string{"a", "b"}
 				od.Spec.Backup.Consistency = odoov1.BackupConsistencyOffline
 			})
 			od := h.get()
-			Expect(od.Spec.Backup.Stores).To(Equal([]string{"a"}))
+			Expect(od.Spec.Backup.Stores).To(Equal([]string{"a", "b"}))
 			Expect(od.Spec.Backup.Consistency).To(Equal(odoov1.BackupConsistencyOffline))
+			By("the retention defaults are filled in")
+			Expect(od.Spec.Backup.TimeZone).To(Equal("UTC"))
+			Expect(od.Spec.Backup.Retention.Counts()).To(Equal(odoov1.RetentionCounts{Daily: 7, Weekly: 4, Monthly: 12}))
+			Expect(*od.Spec.Backup.Retention.Daily).To(Equal(int32(7)))
+		})
+
+		It("rejects a keep-within that restic cannot read and a negative count", func() {
+			expectInvalid(k8sClient.Create(ctx, h.spec(func(od *odoov1.OdooDeployment) {
+				od.Spec.Backup.Retention.Within = "2w"
+			})), "spec.backup.retention.within")
+			neg := int32(-1)
+			expectInvalid(k8sClient.Create(ctx, h.spec(func(od *odoov1.OdooDeployment) {
+				od.Spec.Backup.Retention.Daily = &neg
+			})), "spec.backup.retention.daily")
 		})
 
 		It("rejects an unknown consistency and a too-short deadline", func() {

@@ -319,6 +319,27 @@ func (r *Restic) Snapshot(ctx context.Context, id string) (Snapshot, error) {
 	return snaps[0], nil
 }
 
+// Forget removes snapshots by ID. Their data stays in the repository until
+// a prune.
+func (r *Restic) Forget(ctx context.Context, ids ...string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := r.run(ctx, append([]string{"forget"}, ids...)...)
+	return err
+}
+
+// TagValue returns the value of the snapshot's tag with prefix (such as
+// "kind="), or "".
+func (s Snapshot) TagValue(prefix string) string {
+	for _, t := range s.Tags {
+		if strings.HasPrefix(t, prefix) {
+			return strings.TrimPrefix(t, prefix)
+		}
+	}
+	return ""
+}
+
 // Node is one entry of restic ls.
 type Node struct {
 	Name string `json:"name"`

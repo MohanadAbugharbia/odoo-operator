@@ -293,6 +293,45 @@ type Params struct {
 	// Offline is set when Odoo is stopped for the backup, whatever
 	// spec.backup.consistency says (a ReadWriteOncePod volume).
 	Offline bool
+	// Retention, when set, is applied by the backup Job after the backup.
+	Retention *Retention
+}
+
+// Retention is what a backup Job needs to thin the repository.
+type Retention struct {
+	Spec     odoov1.OdooBackupRetention
+	TimeZone string
+	// ProtectBackups are OdooBackups marked keep.
+	ProtectBackups []string
+	// ProtectSnapshots are snapshot IDs a pending restore needs.
+	ProtectSnapshots []string
+}
+
+func (r *Retention) args() []string {
+	c := r.Spec.Counts()
+	args := []string{"--retention", "--time-zone", r.TimeZone}
+	for _, k := range []struct {
+		flag string
+		n    int32
+	}{
+		{"--keep-last", c.Last}, {"--keep-hourly", c.Hourly}, {"--keep-daily", c.Daily},
+		{"--keep-weekly", c.Weekly}, {"--keep-monthly", c.Monthly}, {"--keep-yearly", c.Yearly},
+		{"--keep-manual", c.Manual},
+	} {
+		if k.n > 0 {
+			args = append(args, k.flag, strconv.Itoa(int(k.n)))
+		}
+	}
+	if r.Spec.Within != "" {
+		args = append(args, "--keep-within", r.Spec.Within)
+	}
+	for _, b := range r.ProtectBackups {
+		args = append(args, "--protect-backup", b)
+	}
+	for _, id := range r.ProtectSnapshots {
+		args = append(args, "--protect-snapshot", id)
+	}
+	return args
 }
 
 func (p Params) labels(kind string) map[string]string {
@@ -425,6 +464,9 @@ func BackupJob(p Params, backup *odoov1.OdooBackup, kind string, attempt int32, 
 	}
 	if waitForCleanup {
 		command = append(command, "--wait-for-cleanup")
+	}
+	if p.Retention != nil {
+		command = append(command, p.Retention.args()...)
 	}
 	command = append(command, p.commonArgs(loc)...)
 	volumes := append([]corev1.Volume{

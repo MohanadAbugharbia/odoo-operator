@@ -516,8 +516,8 @@ type OdooBackupRetention struct {
 	// +kubebuilder:validation:Minimum=0
 	Yearly *int32 `json:"yearly,omitempty"`
 	// Within keeps every backup newer than this, counted from the newest
-	// backup, such as 30d, 2w or 1y6m (restic's duration format).
-	// +kubebuilder:validation:Pattern=`^([0-9]+[ymwdh])*$`
+	// backup, such as 30d, 12h or 1y6m (restic's duration format).
+	// +kubebuilder:validation:Pattern=`^([0-9]+[ymdh])*$`
 	Within string `json:"within,omitempty"`
 	// Manual keeps the newest N manual backups; 0 keeps them all.
 	// +kubebuilder:validation:Minimum=0
@@ -536,8 +536,8 @@ type OdooBackupDrill struct {
 
 // OdooBackupConfig turns on backups of this instance.
 //
-// +kubebuilder:validation:XValidation:rule="!has(self.schedule) || self.schedule == '' || (has(self.stores) && size(self.stores) > 0)",message="spec.backup.schedule needs spec.backup.stores"
-// +kubebuilder:validation:XValidation:rule="!has(self.drill) || !has(self.drill.schedule) || self.drill.schedule == '' || (has(self.stores) && size(self.stores) > 0)",message="spec.backup.drill.schedule needs spec.backup.stores"
+// +kubebuilder:validation:XValidation:rule="!has(self.schedule) || size(self.schedule) == 0 || (has(self.stores) && size(self.stores) > 0)",message="spec.backup.schedule needs spec.backup.stores"
+// +kubebuilder:validation:XValidation:rule="!has(self.drill) || !has(self.drill.schedule) || size(self.drill.schedule) == 0 || (has(self.stores) && size(self.stores) > 0)",message="spec.backup.drill.schedule needs spec.backup.stores"
 type OdooBackupConfig struct {
 	// Stores are OdooBackupStores in this namespace. Backups are written to
 	// the first; the instance's repository is <path>/<namespace>/<name>/

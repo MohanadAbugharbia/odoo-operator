@@ -22,8 +22,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	// The operator image has no zoneinfo; embed it.
-	_ "time/tzdata"
+	_ "time/tzdata" // the operator image has no zoneinfo; embed it
 
 	"github.com/robfig/cron/v3"
 )

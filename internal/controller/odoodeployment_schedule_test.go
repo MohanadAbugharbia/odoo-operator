@@ -218,9 +218,9 @@ var _ = Describe("Scheduled backups", func() {
 			od.Spec.Backup.Stores = []string{"some-store"}
 			od.Spec.Backup.Schedule = "* * * * *"
 		})
-		_, od := hh.reconcile()
+		hh.reconcile()
 		clock = clock.Add(time.Hour)
-		_, od = hh.reconcile()
+		_, od := hh.reconcile()
 		Expect(od.Status.InitModulesInstalled).To(BeEmpty())
 		Expect(od.Status.Backup.Schedule).To(BeEmpty(), "the schedule has not started")
 		list := &odoov1.OdooBackupList{}
