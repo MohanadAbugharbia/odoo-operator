@@ -1,0 +1,318 @@
+/*
+Copyright 2025.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package controller
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/jobspec"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/controller/reconcileloops"
+	"github.com/MohanadAbugharbia/odoo-operator/pkg/utils"
+)
+
+// Store probe reasons.
+const (
+	ReasonStoreReachable    = "StoreReachable"
+	ReasonStoreUnreachable  = "StoreUnreachable"
+	ReasonStoreProbing      = "Probing"
+	ReasonStoreSecretBroken = "SecretMissing"
+	ReasonStoreInvalid      = "InvalidSpec"
+)
+
+// StoreProbeInterval is how often a store is probed again.
+const StoreProbeInterval = 6 * time.Hour
+
+// StoreRetryInterval is how soon a store whose last probe failed is probed
+// again, so a store that was down for a moment does not stay unready.
+const StoreRetryInterval = 2 * time.Minute
+
+// OdooBackupStoreReconciler probes stores: a short Job writes, reads and
+// deletes a file in the store and the result becomes status.ready.
+type OdooBackupStoreReconciler struct {
+	client.Client
+	Scheme    *runtime.Scheme
+	APIReader client.Reader
+	Recorder  record.EventRecorder
+	// Image returns the backup image.
+	Image func(context.Context) (string, error)
+	// Now is the clock; time.Now when nil.
+	Now func() time.Time
+}
+
+// +kubebuilder:rbac:groups=odoo.abugharbia.com,resources=odoobackupstores,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=odoo.abugharbia.com,resources=odoobackupstores/status,verbs=get;update;patch
+
+func (r *OdooBackupStoreReconciler) now() time.Time {
+	if r.Now == nil {
+		return time.Now()
+	}
+	return r.Now()
+}
+
+func (r *OdooBackupStoreReconciler) reader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
+}
+
+// probeInterval is StoreRetryInterval after a failed probe, else
+// StoreProbeInterval.
+func probeInterval(store *odoov1.OdooBackupStore) time.Duration {
+	if c := findCondition(store.Status.Conditions, odoov1.ConditionReady); c != nil &&
+		c.Status == metav1.ConditionFalse && c.Reason == ReasonStoreUnreachable {
+		return StoreRetryInterval
+	}
+	return StoreProbeInterval
+}
+
+// untilNextProbe is how long until the probe period of store ends.
+func (r *OdooBackupStoreReconciler) untilNextProbe(store *odoov1.OdooBackupStore) time.Duration {
+	now := r.now()
+	step := int64(probeInterval(store) / time.Second)
+	return time.Unix((now.Unix()/step+1)*step, 0).Sub(now)
+}
+
+// probeHash identifies what a probe tests: the spec, the Secrets' versions
+// and the probe period, so a change or the next period starts a new probe.
+func (r *OdooBackupStoreReconciler) probeHash(ctx context.Context, store *odoov1.OdooBackupStore) (string, error) {
+	spec, err := json.Marshal(store.Spec)
+	if err != nil {
+		return "", err
+	}
+	h := sha256.New()
+	h.Write(spec)
+	secrets := jobspec.StoreSecrets(store)
+	names := make([]string, 0, len(secrets))
+	for n := range secrets {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		secret := &corev1.Secret{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: store.Namespace, Name: n}, secret); err != nil {
+			return "", err
+		}
+		_, _ = fmt.Fprintf(h, "\x00%s=%s", n, secret.ResourceVersion)
+	}
+	interval := probeInterval(store)
+	period := r.now().Unix() / int64(interval/time.Second)
+	_, _ = fmt.Fprintf(h, "\x00%s/%s", strconv.FormatInt(period, 10), interval)
+	return hex.EncodeToString(h.Sum(nil))[:16], nil
+}
+
+// Reconcile probes the store when its spec, its Secrets or the probe period changed.
+func (r *OdooBackupStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	// Read past the cache: a cached store that still names a probe Job this
+	// reconciler already finished and deleted would start the probe again.
+	store := &odoov1.OdooBackupStore{}
+	if err := r.reader().Get(ctx, req.NamespacedName, store); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	if !store.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, nil
+	}
+	base := store.DeepCopy()
+	result, err := r.reconcile(ctx, store)
+	store.Status.ObservedGeneration = store.Generation
+	if !equality.Semantic.DeepEqual(base.Status, store.Status) {
+		if patchErr := r.Status().Patch(ctx, store, client.MergeFrom(base)); patchErr != nil && !apierrors.IsNotFound(patchErr) {
+			return ctrl.Result{}, patchErr
+		}
+	}
+	return result, err
+}
+
+func (r *OdooBackupStoreReconciler) setReady(store *odoov1.OdooBackupStore, ready bool, reason, message string) {
+	store.Status.Ready = ready
+	status := metav1.ConditionFalse
+	if ready {
+		status = metav1.ConditionTrue
+	}
+	utils.SetCondition(&store.Status.Conditions, odoov1.ConditionReady, status, reason, message, store.Generation)
+}
+
+func (r *OdooBackupStoreReconciler) reconcile(ctx context.Context, store *odoov1.OdooBackupStore) (ctrl.Result, error) {
+	if _, err := jobspec.Locate(store, ""); err != nil {
+		r.setReady(store, false, ReasonStoreInvalid, err.Error())
+		return ctrl.Result{}, nil
+	}
+	if err := checkStoreSecrets(ctx, r.Client, store); err != nil {
+		r.setReady(store, false, ReasonStoreSecretBroken, err.Error())
+		return ctrl.Result{RequeueAfter: time.Minute}, nil
+	}
+	hash, err := r.probeHash(ctx, store)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if store.Status.ProbedHash == hash && store.Status.ProbeJob == "" {
+		return ctrl.Result{RequeueAfter: r.untilNextProbe(store)}, nil
+	}
+	if store.Status.ProbeJob == "" || store.Status.ProbedHash != hash {
+		image, err := r.Image(ctx)
+		if err != nil {
+			r.setReady(store, store.Status.Ready, ReasonBackupImageUnknown, err.Error())
+			return ctrl.Result{RequeueAfter: time.Minute}, nil
+		}
+		job, err := jobspec.ProbeJob(image, store, hash)
+		if err != nil {
+			r.setReady(store, false, ReasonStoreInvalid, err.Error())
+			return ctrl.Result{}, nil
+		}
+		if err := controllerutil.SetControllerReference(store, &job, r.Scheme); err != nil {
+			return ctrl.Result{}, err
+		}
+		// A failed probe's Job is kept for its log until the next probe.
+		if err := r.deleteOldProbeJobs(ctx, store, job.Name); err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := r.Create(ctx, &job); err != nil && !apierrors.IsAlreadyExists(err) {
+			return ctrl.Result{}, fmt.Errorf("create probe job: %w", err)
+		}
+		store.Status.ProbeJob = job.Name
+		store.Status.ProbedHash = hash
+		if meta := findCondition(store.Status.Conditions, odoov1.ConditionReady); meta == nil {
+			r.setReady(store, false, ReasonStoreProbing, "job "+job.Name+" is probing the store")
+		}
+	}
+
+	od := &odoov1.OdooDeployment{}
+	od.Namespace = store.Namespace
+	od.Status.CurrentInitJob = odoov1.MaintenanceJobStatus{Name: store.Status.ProbeJob, Namespace: store.Namespace}
+	obs, err := reconcileloops.ObserveMaintenanceJob(ctx, r.Client, r.reader(), od)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	switch obs.State {
+	case reconcileloops.JobStateMissing:
+		store.Status.ProbeJob = ""
+		store.Status.ProbedHash = ""
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	case reconcileloops.JobStateActive:
+		if obs.ImagePullMessage != "" {
+			r.setReady(store, store.Status.Ready, ReasonStoreProbing, "probe job "+obs.Job.Name+" cannot start: "+obs.ImagePullMessage)
+		}
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+	probed := metav1.NewTime(r.now())
+	store.Status.LastProbeTime = &probed
+	out, err := (&OdooDeploymentReconciler{Client: r.Client, APIReader: r.APIReader}).observeJob(ctx, store.Namespace, obs.Job.Name)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if obs.State == reconcileloops.JobStateSucceeded && out.decoded && out.result.OK {
+		r.setReady(store, true, ReasonStoreReachable, "the store can be written to, read from and deleted from")
+		if err := reconcileloops.DeleteMaintenanceJob(ctx, r.Client, obs.Job); err != nil {
+			return ctrl.Result{}, err
+		}
+	} else {
+		msg := fmt.Sprintf("probe %s; inspect with: kubectl -n %s logs job/%s", failureText(out), store.Namespace, obs.Job.Name)
+		// Warn when the store stops being reachable or fails differently,
+		// not on every retry that fails the same way.
+		prev := findCondition(store.Status.Conditions, odoov1.ConditionReady)
+		if store.Status.Ready || prev == nil || !strings.HasPrefix(prev.Message, "probe "+failureText(out)+";") {
+			if r.Recorder != nil {
+				r.Recorder.Event(store, corev1.EventTypeWarning, ReasonStoreUnreachable, msg)
+			}
+		}
+		r.setReady(store, false, ReasonStoreUnreachable, msg)
+	}
+	store.Status.ProbeJob = ""
+	// The result may change the probe interval; the period the probe just
+	// covered counts as probed under the new one too.
+	if store.Status.ProbedHash, err = r.probeHash(ctx, store); err != nil {
+		return ctrl.Result{}, err
+	}
+	log.FromContext(ctx).Info("Probed backup store", "store", store.Name, "ready", store.Status.Ready)
+	return ctrl.Result{RequeueAfter: r.untilNextProbe(store)}, nil
+}
+
+// deleteOldProbeJobs deletes the store's probe Jobs other than keep.
+func (r *OdooBackupStoreReconciler) deleteOldProbeJobs(ctx context.Context, store *odoov1.OdooBackupStore, keep string) error {
+	jobs := &batchv1.JobList{}
+	if err := r.List(ctx, jobs, client.InNamespace(store.Namespace),
+		client.MatchingLabels{odoov1.LabelJobKind: jobspec.KindProbe, jobspec.LabelStore: store.Name}); err != nil {
+		return err
+	}
+	for i := range jobs.Items {
+		if jobs.Items[i].Name == keep || !metav1.IsControlledBy(&jobs.Items[i], store) {
+			continue
+		}
+		if err := reconcileloops.DeleteMaintenanceJob(ctx, r.Client, &jobs.Items[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func findCondition(conds []metav1.Condition, t string) *metav1.Condition {
+	for i := range conds {
+		if conds[i].Type == t {
+			return &conds[i]
+		}
+	}
+	return nil
+}
+
+// SetupWithManager sets up the controller with the Manager.
+func (r *OdooBackupStoreReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&odoov1.OdooBackupStore{}).
+		Owns(&batchv1.Job{}).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.storesUsingSecret)).
+		Named("odoobackupstore").
+		Complete(r)
+}
+
+// storesUsingSecret maps a Secret to the stores that read it.
+func (r *OdooBackupStoreReconciler) storesUsingSecret(ctx context.Context, obj client.Object) []reconcile.Request {
+	stores := &odoov1.OdooBackupStoreList{}
+	if err := r.List(ctx, stores, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for i := range stores.Items {
+		if _, ok := jobspec.StoreSecrets(&stores.Items[i])[obj.GetName()]; ok {
+			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&stores.Items[i])})
+		}
+	}
+	return reqs
+}

@@ -26,4 +26,10 @@ resources:
 - odoodeployment_viewer_role.yaml
 - odoodployment_editor_role.yaml
 - odoodployment_viewer_role.yaml
+- odoobackupstore_editor_role.yaml
+- odoobackupstore_viewer_role.yaml
+- odoobackup_editor_role.yaml
+- odoobackup_viewer_role.yaml
+- odoorestore_editor_role.yaml
+- odoorestore_viewer_role.yaml
 

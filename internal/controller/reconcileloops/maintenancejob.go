@@ -88,7 +88,7 @@ func ObserveMaintenanceJob(
 		return JobObservation{
 			State:          JobStateFailed,
 			Job:            job,
-			FailureMessage: strings.TrimSpace(failed.Reason + ": " + failed.Message),
+			FailureMessage: conditionText(failed),
 			QuotaMessage:   quotaMessage(ctx, reader, job),
 		}, nil
 	}
@@ -101,6 +101,16 @@ func ObserveMaintenanceJob(
 		obs.ImagePullMessage = imagePullMessage(ctx, reader, job)
 	}
 	return obs, nil
+}
+
+// conditionText is "reason: message" of a Job condition, leaving out the
+// parts that are empty, so a condition that says nothing reads as "".
+func conditionText(c *batchv1.JobCondition) string {
+	reason, message := strings.TrimSpace(c.Reason), strings.TrimSpace(c.Message)
+	if reason == "" || message == "" {
+		return reason + message
+	}
+	return reason + ": " + message
 }
 
 // quotaMessage returns the message of a FailedCreate event mentioning an

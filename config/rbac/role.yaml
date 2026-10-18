@@ -66,6 +66,29 @@ rules:
 - apiGroups:
   - odoo.abugharbia.com
   resources:
+  - odoobackups
+  - odoobackupstores
+  - odoorestores
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - odoo.abugharbia.com
+  resources:
+  - odoobackups/status
+  - odoobackupstores/status
+  - odoodeployments/status
+  - odoorestores/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - odoo.abugharbia.com
+  resources:
   - odoodeployments
   verbs:
   - create
@@ -79,13 +102,6 @@ rules:
   - odoo.abugharbia.com
   resources:
   - odoodeployments/finalizers
+  - odoorestores/finalizers
   verbs:
-  - update
-- apiGroups:
-  - odoo.abugharbia.com
-  resources:
-  - odoodeployments/status
-  verbs:
-  - get
-  - patch
   - update

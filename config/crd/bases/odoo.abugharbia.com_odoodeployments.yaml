@@ -55,6 +55,110 @@ spec:
           spec:
             description: OdooDeploymentSpec defines the desired state of OdooDeployment
             properties:
+              backup:
+                default: {}
+                description: |-
+                  Backup says where this instance's backups (OdooBackup) are written and
+                  how they and in-place restores (OdooRestore) run.
+                properties:
+                  activeDeadlineSeconds:
+                    default: 21600
+                    description: ActiveDeadlineSeconds bounds one backup or restore
+                      Job.
+                    format: int64
+                    minimum: 60
+                    type: integer
+                  consistency:
+                    default: Online
+                    description: |-
+                      Consistency: Online (default) backs up while Odoo keeps serving;
+                      Offline stops Odoo for the backup.
+                    enum:
+                    - Online
+                    - Offline
+                    type: string
+                  resources:
+                    description: Resources of the backup and restore Jobs.
+                    properties:
+                      claims:
+                        description: |-
+                          Claims lists the names of resources, defined in spec.resourceClaims,
+                          that are used by this container.
+
+                          This field depends on the
+                          DynamicResourceAllocation feature gate.
+
+                          This field is immutable. It can only be set for containers.
+                        items:
+                          description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                          properties:
+                            name:
+                              description: |-
+                                Name must match the name of one entry in pod.spec.resourceClaims of
+                                the Pod where this field is used. It makes that resource available
+                                inside a container.
+                              type: string
+                            request:
+                              description: |-
+                                Request is the name chosen for a request in the referenced claim.
+                                If empty, everything from the claim is made available, otherwise
+                                only the result of this request.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                      limits:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Limits describes the maximum amount of compute resources allowed.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                      requests:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Requests describes the minimum amount of compute resources required.
+                          If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                          otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                    type: object
+                  restore:
+                    default: {}
+                    description: Restore holds the defaults of in-place restores (OdooRestore).
+                    properties:
+                      keepPrevious:
+                        default: 72h
+                        description: |-
+                          KeepPrevious is how long the database and files a restore replaced
+                          are kept, so the restore can be undone.
+                        type: string
+                    type: object
+                  stores:
+                    description: |-
+                      Stores are OdooBackupStores in this namespace. Backups are written to
+                      the first; the instance's repository is <path>/<namespace>/<name>/
+                      inside it.
+                    items:
+                      minLength: 1
+                      type: string
+                    maxItems: 1
+                    type: array
+                    x-kubernetes-list-type: atomic
+                type: object
               config:
                 default: {}
                 description: The configuration for the Odoo
@@ -1688,6 +1792,34 @@ spec:
                       type: string
                     type: array
                 type: object
+              currentOperation:
+                description: CurrentOperation is the backup, restore or cleanup in
+                  progress.
+                properties:
+                  job:
+                    description: Job running it; empty while the operator is still
+                      stopping Odoo for it.
+                    type: string
+                  kind:
+                    description: 'Kind: backup, restore or cleanup.'
+                    enum:
+                    - backup
+                    - restore
+                    - cleanup
+                    type: string
+                  name:
+                    description: Name of the OdooBackup or OdooRestore.
+                    type: string
+                  startedAt:
+                    description: StartedAt is when the operation started.
+                    format: date-time
+                    type: string
+                  stoppedOdoo:
+                    description: |-
+                      StoppedOdoo is true when the operation scaled Odoo to zero and must
+                      bring it back.
+                    type: boolean
+                type: object
               database:
                 description: Database records the resolved database and who provisioned
                   it.
@@ -1757,6 +1889,8 @@ spec:
                 - Upgrading
                 - Running
                 - Failed
+                - BackingUp
+                - Restoring
                 type: string
               readyReplicas:
                 description: ReadyReplicas mirrors the Deployment's available replicas.

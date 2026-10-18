@@ -20,4 +20,31 @@ resources:
   kind: OdooDeployment
   path: github.com/MohanadAbugharbia/odoo-operator/api/v1
   version: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: abugharbia.com
+  group: odoo
+  kind: OdooBackupStore
+  path: github.com/MohanadAbugharbia/odoo-operator/api/v1
+  version: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: abugharbia.com
+  group: odoo
+  kind: OdooBackup
+  path: github.com/MohanadAbugharbia/odoo-operator/api/v1
+  version: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: abugharbia.com
+  group: odoo
+  kind: OdooRestore
+  path: github.com/MohanadAbugharbia/odoo-operator/api/v1
+  version: v1
 version: "3"

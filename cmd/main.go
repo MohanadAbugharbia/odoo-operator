@@ -117,8 +117,12 @@ func main() {
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
+	var backupImage string
 	flag.StringVar(&maintenancePageImage, "maintenance-page-image", "",
 		"Image that serves spec.maintenancePage. Defaults to the operator's own image, read from its pod.")
+	flag.StringVar(&backupImage, "backup-image", "",
+		"Image of the backup, restore and store probe Jobs. Defaults to the operator's own image "+
+			"repository with -backup appended, at the same tag.")
 	flag.Parse()
 
 	var zapLevel zapcore.Level
@@ -197,17 +201,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Without the flag the page runs from the operator's own image, looked up
-	// on the first reconcile that needs it and retried until it is found.
-	var lookupOwnImage func(context.Context) (string, error)
-	if maintenancePageImage == "" {
-		reader := mgr.GetAPIReader()
-		lookupOwnImage = func(ctx context.Context) (string, error) { return ownImage(ctx, reader) }
-	} else {
+	// Without the flags the page and the backup Jobs run from the operator's
+	// own image, looked up on the first reconcile that needs it and retried
+	// until it is found.
+	reader := mgr.GetAPIReader()
+	lookupOwnImage := func(ctx context.Context) (string, error) { return ownImage(ctx, reader) }
+	if maintenancePageImage != "" {
 		setupLog.Info("maintenance page image", "image", maintenancePageImage)
 	}
+	if backupImage != "" {
+		setupLog.Info("backup image", "image", backupImage)
+	}
 
-	if err = (&controller.OdooDeploymentReconciler{
+	odooReconciler := &controller.OdooDeploymentReconciler{
 		Client:               mgr.GetClient(),
 		Scheme:               mgr.GetScheme(),
 		APIReader:            mgr.GetAPIReader(),
@@ -215,8 +221,29 @@ func main() {
 		Recorder:             mgr.GetEventRecorderFor("odoodeployment-controller"),
 		MaintenancePageImage: maintenancePageImage,
 		OwnImage:             lookupOwnImage,
-	}).SetupWithManager(mgr); err != nil {
+		BackupImage:          backupImage,
+		Version:              version,
+	}
+	if err = odooReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "OdooDeployment")
+		os.Exit(1)
+	}
+	if err = (&controller.OdooBackupStoreReconciler{
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		APIReader: mgr.GetAPIReader(),
+		Recorder:  mgr.GetEventRecorderFor("odoobackupstore-controller"),
+		Image:     odooReconciler.BackupImageLookup,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "OdooBackupStore")
+		os.Exit(1)
+	}
+	if err = (&controller.OdooBackupReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "OdooBackup")
+		os.Exit(1)
+	}
+	if err = (&controller.OdooRestoreReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "OdooRestore")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder

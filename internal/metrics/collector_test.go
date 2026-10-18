@@ -78,9 +78,11 @@ odoo_operator_deployment_job_start_timestamp_seconds{kind="upgrade",name="ababie
 odoo_operator_deployment_last_upgrade_duration_seconds{name="ababiel-pr-1",namespace="ababiel-preview"} 95
 # HELP odoo_operator_deployment_phase 1 for the OdooDeployment's current status.phase, 0 for the others.
 # TYPE odoo_operator_deployment_phase gauge
+odoo_operator_deployment_phase{name="ababiel-pr-1",namespace="ababiel-preview",phase="BackingUp"} 0
 odoo_operator_deployment_phase{name="ababiel-pr-1",namespace="ababiel-preview",phase="Failed"} 0
 odoo_operator_deployment_phase{name="ababiel-pr-1",namespace="ababiel-preview",phase="Initializing"} 0
 odoo_operator_deployment_phase{name="ababiel-pr-1",namespace="ababiel-preview",phase="Pending"} 0
+odoo_operator_deployment_phase{name="ababiel-pr-1",namespace="ababiel-preview",phase="Restoring"} 0
 odoo_operator_deployment_phase{name="ababiel-pr-1",namespace="ababiel-preview",phase="Running"} 0
 odoo_operator_deployment_phase{name="ababiel-pr-1",namespace="ababiel-preview",phase="Upgrading"} 1
 # HELP odoo_operator_deployment_replicas_desired spec.replicas: Odoo pods the OdooDeployment runs outside maintenance.
