@@ -1275,6 +1275,10 @@ in these jobs:</p>
   backup images (amd64 and arm64) tagged <code>sha-&lt;head sha&gt;</code> and <code>pr-&lt;number&gt;</code>, so
   a branch can be tried on a real cluster before it is released.</li>
 </ul>
+<p>A change that touches only documentation (<code>docs/</code>, Markdown files,
+<code>mkdocs.yml</code>, <code>LICENSE</code> or the Docs workflow) skips all of these: the first
+job, <strong>Changes</strong>, sees that no other file changed. The skipped jobs count as
+passed.</p>
 <p><code>.github/workflows/docs.yml</code> builds this site on every pull request and
 publishes it; see <a href="../docs/">Writing the docs</a>.</p>
 <h2 id="test-results">Test results<a class="headerlink" href="#test-results" title="Permanent link">&para;</a></h2>
