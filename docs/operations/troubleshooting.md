@@ -11,26 +11,27 @@ kubectl -n <ns> get odoobackup,odoorestore,odoobackupstore
 
 When something is wrong, the instance's **`Degraded`** condition is `True`
 and its reason names the problem; a failed Job's event and message include
-the `kubectl logs` command to read it. The tables below list every reason
-the operator sets.
+the `kubectl logs` command to read it.
 
 ## The instance
 
 ### Stuck in Pending
 
-The operator has not got past the database yet. Read the `Degraded` reason:
+Read the `Degraded` reason:
 
 | Reason | Meaning | Fix | Retried |
 |---|---|---|---|
 | `InvalidSpec` | A key in `spec.config.extraOptions` is not a valid option name (`^[a-z_][a-z0-9_]*$`). | Fix the key. | On the spec change |
-| `DatabaseConnectionFailed` ("could not resolve…") | A Secret or key named by `spec.database.*FromSecret` is missing, or `passwordFromSecret` is not set. | Create the Secret or key. | Every 30 s, and when the Secret changes |
+| `DatabaseConnectionFailed` ("could not resolve…") | A Secret or key named by `spec.database.*FromSecret` (or `passwordFromSecret`) does not exist. | Create the Secret or key. | Every 30 s, and when the Secret changes |
 | `DatabaseConnectionFailed` | PostgreSQL is unreachable or refuses the credentials. | Fix the host, credentials or network. | Every 30 s |
+| `DatabaseProvisioning` | The operator is about to create the database. | — | Every 10 s |
 | `DatabaseCreateFailed` | `CREATE DATABASE` failed. | Give the role `CREATEDB`, or create the database yourself. | Every 30 s |
 | `DatabaseMissing` | The database does not exist and `createPolicy` is `Never`. | Create it, or set `createPolicy: IfNotExists`. | Every minute |
 | `QuotaExceeded` | A ResourceQuota rejected the init Job's pod. | Raise the quota or lower `spec.resources`. | Every 15 s |
 
-Until the database is settled the instance has no Services and no
-maintenance page yet.
+The Services and the maintenance page already exist, except when the reason
+is `InvalidSpec` or the "could not resolve…" form of
+`DatabaseConnectionFailed`.
 
 ### Stuck in Initializing or Upgrading
 
@@ -78,7 +79,10 @@ set `--maintenance-page-image` ([Operator flags](../reference/operator-flags.md)
 `JobCreationFailed` and `ReconcileFailed` mean a Kubernetes API call failed;
 the message carries the API error (often RBAC, a quota or an invalid field).
 They are retried with backoff. `BackupImageUnknown` means the operator could
-not derive the backup image: set `--backup-image`.
+not derive the backup image: set `--backup-image`. `DrillRunning` as a
+`Degraded` reason means the drill Job's pod cannot start (an image pull or a
+quota); `Deleting` and `DatabaseDropFailed` appear while the instance is
+deleted (see below).
 
 ## Backups
 
@@ -118,7 +122,8 @@ example alerts, report failures.
 A `Schedules` condition that is `False` (`InvalidSchedule`) means
 `spec.check.schedule` or `spec.prune.schedule` does not parse. Checks and
 prunes run only while the store is ready; a failed one keeps its Job (named
-in `status.lastCheck.job` or `status.lastPrune.job`) until the next run.
+in `status.lastCheck.job` or `status.lastPrune.job`) for a day, its TTL, or
+until the next run if that comes sooner.
 
 ## Restore drills
 
@@ -136,8 +141,10 @@ instance's pods to stop, including running backup, restore, drill and
 cleanup Jobs (up to their deadline), and then drops the database. A
 `DatabaseDropFailed` event means the drop keeps failing (retried every 30
 seconds): fix the database access, or set `deletionPolicy: Retain` to skip
-the drop. A database the operator did not create is never dropped
-(`DatabaseDropRefused`, `DatabaseNotDropped`).
+the drop. A database the operator did not create is never dropped. A
+`DatabaseDropRefused` event means the database no longer carries the
+operator's owner tag; `DatabaseNotDropped` that the connection could not be
+resolved, so the operator could not drop it.
 
 An OdooRestore stays until its cleanup has deleted the data it kept, or until
 its instance is gone.

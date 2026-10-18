@@ -44,8 +44,9 @@ restic snapshots
 For AWS itself the repository is
 `s3:s3.amazonaws.com/<bucket>/<path>/<namespace>/<name>`; for an SFTP, NFS or
 volume store point restic at the same folder on that server or volume. Each
-snapshot is tagged with the OdooBackup that took it (`backup=…`) and its kind
-(`kind=scheduled` or `kind=manual`).
+snapshot is tagged with its instance (`deployment=<namespace>/<name>`), the
+OdooBackup that took it (`backup=…`) and its kind (`kind=scheduled`,
+`manual` or `pre-upgrade`).
 
 Pick one, and read what it was taken with:
 
@@ -115,8 +116,7 @@ kubectl -n shop get odoorestore recover -w
 kubectl -n shop get odoodeployment my-odoo
 ```
 
-The restore ends `Completed` (or `CompletedWithWarnings`; read
-`status.warnings`). The empty database it replaced is kept as
+The restore ends `Completed`; any warnings are in `status.warnings`. The empty database it replaced is kept as
 `<db>_prev_<suffix>` for `keepPrevious`, then deleted.
 
 ## 5. Check Odoo
@@ -129,8 +129,8 @@ the Ingress at the new instance.
 Set the schedule again. Before you remove `keepAll`, know that retention on
 the new instance applies to the old snapshots too: they carry the same host
 and tags, so the daily, weekly and monthly rules thin them like new ones.
-To keep a particular old backup, note its snapshot ID, or keep `keepAll` until
-you have new backups you trust.
+Old snapshots cannot be pinned one by one, so keep `keepAll: true` until you
+no longer need them.
 
 ## Restoring from a copy
 

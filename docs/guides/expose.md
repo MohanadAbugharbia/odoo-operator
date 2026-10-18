@@ -56,6 +56,7 @@ included, on port 8069: the `/websocket` rule is then not needed.
 
 `spec.config.proxyMode` is `true` by default: Odoo then trusts the
 `X-Forwarded-For`, `X-Forwarded-Host` and `X-Forwarded-Proto` headers for the
-client address, host and scheme. Behind an Ingress controller that sets them,
-keep it on; reaching Odoo directly, without a proxy that sets them, turn it
+client address, host and scheme (Odoo applies them only when the proxy also
+sends `X-Forwarded-Host`; ingress-nginx does). Behind an Ingress controller
+that sets them, keep it on; reaching Odoo directly, without a proxy that sets them, turn it
 off.

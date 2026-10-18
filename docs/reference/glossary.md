@@ -6,8 +6,9 @@ The words these pages use, and what each one means here.
 :   One Odoo installation: an `OdooDeployment` and everything it owns (its
     database, filestore volume, Deployment, Services and Jobs). Its
     `metadata.name`, written `<name>` in these pages, names all of them:
-    `<name>-http`, `<name>-init`, `<name>-admin-password`. (`spec.name` is a
-    separate label; the generated names use `metadata.name`.)
+    `<name>-http`, `<name>-init`, `<name>-admin-password` (unless
+    `spec.config.adminPasswordSecretName` names another Secret).
+    `spec.name` is required but not used.
 
 **Store**
 :   An `OdooBackupStore`: a place backups go (an S3 bucket, an SFTP server,

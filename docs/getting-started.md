@@ -33,10 +33,11 @@ This installs the four CRDs (`OdooDeployment`, `OdooBackupStore`,
 ## 2. Run the sample
 
 !!! warning "The sample installs CloudNativePG"
-    `config/samples` also applies the [CloudNativePG](https://cloudnative-pg.io/)
-    operator, cluster-wide, to run a one-instance PostgreSQL cluster. Skip the
-    sample on a cluster that already runs CloudNativePG, and point an
-    `OdooDeployment` at your own PostgreSQL instead.
+    `config/samples` also installs the [CloudNativePG](https://cloudnative-pg.io/)
+    operator, to run a one-instance PostgreSQL cluster: the operator itself
+    into `odoo-sample`, its CRDs and webhook configurations cluster-wide.
+    Skip the sample on a cluster that already runs CloudNativePG, and point
+    an `OdooDeployment` at your own PostgreSQL instead.
 
 ```sh
 kubectl create namespace odoo-sample
@@ -143,9 +144,11 @@ spec:
 kubectl -n odoo-sample get odoobackup first -w
 ```
 
+(The snapshot ID is shortened here; kubectl shows all 64 characters.)
+
 ```text
-NAME    INSTANCE                PHASE       SNAPSHOT     STORE   COMPLETED   AGE
-first   odoodeployment-sample   Completed   3f9c2a1b…    local   20s         1m
+NAME    INSTANCE                PHASE       SNAPSHOT        STORE   COMPLETED   AGE
+first   odoodeployment-sample   Completed   3f9c2a1b5e…     local   20s         1m
 ```
 
 A store inside the cluster disappears with it. For real backups, follow [Set
@@ -154,10 +157,13 @@ up production backups](guides/production-backups.md).
 ## 6. Clean up
 
 ```sh
+kubectl -n odoo-sample delete odoodeployment odoodeployment-sample   # first, while PostgreSQL runs: drops its database
+kubectl kustomize config/samples | kubectl delete --ignore-not-found -f -
 kubectl delete namespace odoo-sample
 ```
 
-The sample's `deletionPolicy: Delete` drops the database with the instance.
+The second command removes everything the sample installed, including the
+CloudNativePG CRDs and webhook configurations it put cluster-wide.
 To remove the operator too, see [Uninstall](guides/uninstall.md).
 
 ## Next steps
