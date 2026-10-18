@@ -645,17 +645,20 @@ type Drill struct {
 
 // drillScript runs "odoo shell" on the restored database when the load
 // succeeded: Odoo loads its registry, reads records of core models through
-// the ORM and reads attachments from the scratch filestore. It records how
-// that ended, exiting 0 either way so the last step always drops the scratch
+// the ORM and reads attachments from the scratch filestore, which must give
+// every byte of the file (a missing file the load step already judged). It
+// records how that ended, exiting 0 either way so the last step always drops the scratch
 // database. The file names are the agent's (agent.DrillLoadedFile and the
 // rest).
 const drillScript = `[ -f "$DRILL_ROOT/loaded" ] || exit 0
 "$@" >"$DRILL_ROOT/odoo.log" 2>&1 <<'PY'
+import os
 for model in ("res.company", "res.users", "res.partner"):
     env[model].sudo().with_context(active_test=False).search([], limit=1).read()
 atts = env["ir.attachment"].sudo().search(
     [("store_fname", "!=", False), "|", ("res_field", "=", False), ("res_field", "!=", False)], limit=20)
-bad = [a.store_fname for a in atts if len(a.raw or b"") != a.file_size]
+paths = {a: a._full_path(a.store_fname) for a in atts}
+bad = [a.store_fname for a, p in paths.items() if os.path.isfile(p) and len(a.raw or b"") != os.path.getsize(p)]
 if bad:
     raise SystemExit("Odoo cannot read %d attachment(s), e.g. %s" % (len(bad), ", ".join(bad[:3])))
 print("drill: Odoo read core records and %d attachments" % len(atts))
