@@ -47,6 +47,7 @@ const (
 	StepSwap      = "swap"
 	StepCleanup   = "cleanup"
 	StepProbe     = "probe"
+	StepStoreTask = "store-task"
 )
 
 // Result is the outcome of one Job.
@@ -83,6 +84,14 @@ type Result struct {
 	RetentionError string `json:"retentionError,omitempty"`
 	// Copies are the copies of the new snapshot in the other stores.
 	Copies []Copy `json:"copies,omitempty"`
+
+	// Store check or prune.
+	// Repositories is how many instance repositories the task went
+	// through; StoredBytes how much they hold together.
+	Repositories int   `json:"repositories,omitempty"`
+	StoredBytes  int64 `json:"storedBytes,omitempty"`
+	// RepositoryErrors are the repositories that failed, as "<repo>: <error>".
+	RepositoryErrors []string `json:"repositoryErrors,omitempty"`
 
 	// Restore.
 	// Image and UpgradeToken are what the backup's instance ran.
@@ -134,6 +143,10 @@ func Encode(r Result) []byte {
 		switch {
 		case len(r.MissingNames) > 0:
 			r.MissingNames = r.MissingNames[:len(r.MissingNames)/2]
+		case len(r.RepositoryErrors) > 1:
+			r.RepositoryErrors = r.RepositoryErrors[:len(r.RepositoryErrors)/2]
+		case len(r.RepositoryErrors) == 1 && len(r.RepositoryErrors[0]) > 512:
+			r.RepositoryErrors = []string{r.RepositoryErrors[0][:512-len(errorCut)] + errorCut}
 		case len(r.Warnings) > 2 || (len(r.Warnings) == 2 && r.Warnings[1] != moreWarnings):
 			r.Warnings = append(r.Warnings[:len(r.Warnings)/2:len(r.Warnings)/2], moreWarnings)
 		case len(r.MissingModules) > 0:
@@ -159,7 +172,8 @@ func Encode(r Result) []byte {
 			b, err := json.Marshal(Result{OK: r.OK, Step: truncate(r.Step, 64), Error: truncate(r.Error, 256),
 				Deferred: r.Deferred, SnapshotID: truncate(r.SnapshotID, 128),
 				LiveChanged: r.LiveChanged, PreviousKept: r.PreviousKept, Forgotten: r.Forgotten,
-				RetentionError: truncate(r.RetentionError, 256), Copies: shortCopies(r.Copies)})
+				RetentionError: truncate(r.RetentionError, 256), Copies: shortCopies(r.Copies),
+				Repositories: r.Repositories, StoredBytes: r.StoredBytes})
 			if err != nil || len(b) > MaxBytes {
 				return []byte(`{"ok":false,"error":"could not encode the result"}`)
 			}

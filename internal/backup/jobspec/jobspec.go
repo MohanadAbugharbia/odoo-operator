@@ -43,6 +43,8 @@ const (
 	KindRestore = "restore"
 	KindCleanup = "cleanup"
 	KindProbe   = "store-probe"
+	KindCheck   = "store-check"
+	KindPrune   = "store-prune"
 )
 
 // Labels on backup Jobs.
@@ -77,6 +79,8 @@ const (
 	cleanupBackoff  = int32(2)
 	probeDeadline   = int64(300)
 	cleanupDeadline = int64(3600)
+	// storeTaskDeadline bounds a check or prune of a whole store.
+	storeTaskDeadline = int64(6 * 3600)
 )
 
 // Location is how a Job reaches one store: environment, volumes and restic
@@ -650,16 +654,69 @@ func ProbeJob(image string, store *odoov1.OdooBackupStore, hash string) (batchv1
 	if err != nil {
 		return batchv1.Job{}, err
 	}
-	labels := map[string]string{odoov1.LabelJobKind: KindProbe, LabelStore: store.Name}
 	resources := corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("32Mi")},
 		Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("256Mi")},
 	}
+	return storeJob(image, store, ProbeJobName(store, hash), KindProbe, loc,
+		[]string{toolBinary, "probe", "--target", loc.ProbeTarget}, resources, probeDeadline, 3600), nil
+}
+
+// StoreTaskJobName is the Job of a store's check or prune for one
+// scheduled time.
+func StoreTaskJobName(store *odoov1.OdooBackupStore, kind string, scheduled string) string {
+	return jobName(store.Name, strings.TrimPrefix(kind, "store-"), 0, store.Namespace, scheduled)
+}
+
+// StoreTask is a check or prune over some of a store's repositories.
+type StoreTask struct {
+	// Kind is KindCheck or KindPrune.
+	Kind string
+	// Scheduled identifies the scheduled time the task runs for.
+	Scheduled string
+	// Repositories are instance folders (layout.Repository) in the store.
+	Repositories []string
+	// Part is the part of the data a check reads ("3/7"), "all", or "" for
+	// the structure only.
+	Part string
+}
+
+// StoreTaskJob renders the Job that checks or prunes a store's repositories.
+func StoreTaskJob(image string, store *odoov1.OdooBackupStore, task StoreTask) (batchv1.Job, error) {
+	loc, err := Locate(store, "")
+	if err != nil {
+		return batchv1.Job{}, err
+	}
+	command := []string{toolBinary, strings.TrimPrefix(task.Kind, "store-")}
+	if task.Kind == KindCheck && task.Part != "" {
+		command = append(command, "--read-data", task.Part)
+	}
+	for _, o := range loc.ResticOptions {
+		command = append(command, "--restic-option", o)
+	}
+	for _, repo := range task.Repositories {
+		repoLoc, err := Locate(store, repo)
+		if err != nil {
+			return batchv1.Job{}, err
+		}
+		command = append(command, "--repository", repo+"="+repoLoc.Repository)
+	}
+	resources := corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("256Mi")},
+		Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("2Gi")},
+	}
+	return storeJob(image, store, StoreTaskJobName(store, task.Kind, task.Scheduled), task.Kind, loc,
+		command, resources, storeTaskDeadline, defaultTTL), nil
+}
+
+func storeJob(image string, store *odoov1.OdooBackupStore, name, kind string, loc Location, command []string,
+	resources corev1.ResourceRequirements, deadline int64, ttl int32) batchv1.Job {
+	labels := map[string]string{odoov1.LabelJobKind: kind, LabelStore: store.Name}
 	if store.Spec.Resources != nil {
 		resources = *store.Spec.Resources.DeepCopy()
 	}
 	return batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: ProbeJobName(store, hash), Namespace: store.Namespace, Labels: labels},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: store.Namespace, Labels: labels},
 		Spec: batchv1.JobSpec{
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
@@ -668,7 +725,7 @@ func ProbeJob(image string, store *odoov1.OdooBackupStore, hash string) (batchv1
 						Name:                     ContainerName,
 						Image:                    image,
 						ImagePullPolicy:          corev1.PullIfNotPresent,
-						Command:                  []string{toolBinary, "probe", "--target", loc.ProbeTarget},
+						Command:                  command,
 						Env:                      append(baseEnv(), loc.Env...),
 						VolumeMounts:             append([]corev1.VolumeMount{{Name: volTmp, MountPath: tmpDir}}, loc.Mounts...),
 						Resources:                resources,
@@ -689,8 +746,8 @@ func ProbeJob(image string, store *odoov1.OdooBackupStore, hash string) (batchv1
 				},
 			},
 			BackoffLimit:            ptr(int32(0)),
-			ActiveDeadlineSeconds:   ptr(probeDeadline),
-			TTLSecondsAfterFinished: ptr(int32(3600)),
+			ActiveDeadlineSeconds:   ptr(deadline),
+			TTLSecondsAfterFinished: ptr(ttl),
 		},
-	}, nil
+	}
 }

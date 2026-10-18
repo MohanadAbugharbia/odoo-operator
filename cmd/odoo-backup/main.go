@@ -51,6 +51,8 @@ commands:
   cleanup   delete the data a restore replaced
   prepare   create the instance's filestore folder if it is missing
   probe     check that a store can be written, read and deleted from
+  check     check the store's repositories (restic check)
+  prune     free the space of forgotten snapshots (restic prune)
   version   print the version
 `
 
@@ -163,6 +165,8 @@ func run(ctx context.Context, command string, args []string) int {
 			return 1
 		}
 		return 0
+	case agent.TaskCheck, agent.TaskPrune:
+		return runStoreTask(ctx, fs, command, args)
 	case "probe":
 		target := fs.String("target", "", "the store root, as rclone names it")
 		terminationLog := fs.String("termination-log", layout.TerminationLog, "where the result is written")
@@ -266,6 +270,30 @@ func runRestore(ctx context.Context, fs *flag.FlagSet, c *common, command string
 		return finish(c.terminationLog, result.Failed(result.StepConnect, err))
 	}
 	return finish(c.terminationLog, agent.Restore(ctx, e, o))
+}
+
+func runStoreTask(ctx context.Context, fs *flag.FlagSet, task string, args []string) int {
+	var repos, options stringList
+	readData := fs.String("read-data", "", "check: part of the data to read back (3/7, or all)")
+	resticBin := fs.String("restic", "restic", "restic executable")
+	retryLock := fs.Duration("retry-lock", 2*time.Hour, "how long restic waits for a repository lock")
+	terminationLog := fs.String("termination-log", layout.TerminationLog, "where the result is written")
+	fs.Var(&repos, "repository", "<namespace>/<deployment>=<restic repository> (repeatable)")
+	fs.Var(&options, "restic-option", "restic -o option (repeatable)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	o := agent.StoreTaskOptions{Task: task, ReadData: *readData}
+	for _, r := range repos {
+		name, url, ok := strings.Cut(r, "=")
+		if !ok || name == "" || url == "" {
+			fmt.Fprintf(os.Stderr, "%s: --repository %q is not <name>=<repository>\n", task, r)
+			return 2
+		}
+		o.Repositories = append(o.Repositories, agent.Repository{Name: name, URL: url})
+	}
+	base := &restic.Restic{Bin: *resticBin, Options: options, RetryLock: *retryLock, Log: os.Stderr}
+	return finish(*terminationLog, agent.StoreTask(ctx, base, agent.NewLogger(os.Stderr), o))
 }
 
 func runCleanup(ctx context.Context, fs *flag.FlagSet, c *common, args []string) int {

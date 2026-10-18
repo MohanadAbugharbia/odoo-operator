@@ -57,10 +57,7 @@ func (r *OdooDeploymentReconciler) scheduleBackups(ctx context.Context, s *recon
 	st := &od.Status.Backup
 	expr := strings.TrimSpace(od.Spec.Backup.Schedule)
 	drillExpr := strings.TrimSpace(od.Spec.Backup.Drill.Schedule)
-	tz := od.Spec.Backup.TimeZone
-	if tz == "" {
-		tz = "UTC"
-	}
+	tz := zoneOrUTC(od.Spec.Backup.TimeZone)
 	if expr == "" && drillExpr == "" {
 		*st = odoov1.OdooBackupScheduleStatus{LastDrill: st.LastDrill}
 		meta.RemoveStatusCondition(&od.Status.Conditions, odoov1.ConditionBackupSchedule)
@@ -219,4 +216,12 @@ func scheduledBackupName(instance string, local time.Time) string {
 		instance = strings.TrimRight(instance[:max], "-.")
 	}
 	return instance + suffix
+}
+
+// zoneOrUTC is a schedule's time zone, UTC when unset.
+func zoneOrUTC(tz string) string {
+	if tz == "" {
+		return "UTC"
+	}
+	return tz
 }

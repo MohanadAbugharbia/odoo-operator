@@ -38,10 +38,7 @@ func backupRetention(od *odoov1.OdooDeployment, w instanceWork) *jobspec.Retenti
 	if spec.KeepAll {
 		return nil
 	}
-	tz := od.Spec.Backup.TimeZone
-	if tz == "" {
-		tz = "UTC"
-	}
+	tz := zoneOrUTC(od.Spec.Backup.TimeZone)
 	ret := &jobspec.Retention{Spec: spec, TimeZone: tz}
 	for i := range w.backups {
 		b := &w.backups[i]

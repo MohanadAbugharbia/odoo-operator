@@ -370,6 +370,43 @@ func (r *Restic) CopyFrom(ctx context.Context, src *Restic, id string) error {
 	return err
 }
 
+// Check checks the repository's structure and, with readData ("3/7" for a
+// part, "all" for everything), reads the data back.
+func (r *Restic) Check(ctx context.Context, readData string) error {
+	args := []string{"check"}
+	switch readData {
+	case "":
+	case "all":
+		args = append(args, "--read-data")
+	default:
+		args = append(args, "--read-data-subset="+readData)
+	}
+	_, err := r.run(ctx, args...)
+	return err
+}
+
+// Prune deletes the data no snapshot refers to any more.
+func (r *Restic) Prune(ctx context.Context) error {
+	_, err := r.run(ctx, "prune")
+	return err
+}
+
+// RawDataSize is how many bytes the repository holds, after deduplication
+// and compression.
+func (r *Restic) RawDataSize(ctx context.Context) (int64, error) {
+	out, err := r.run(ctx, "stats", "--mode", "raw-data", jsonFlag)
+	if err != nil {
+		return 0, err
+	}
+	var st struct {
+		TotalSize int64 `json:"total_size"`
+	}
+	if err := json.Unmarshal(out, &st); err != nil {
+		return 0, fmt.Errorf("restic stats: %w", err)
+	}
+	return st.TotalSize, nil
+}
+
 // Forget removes snapshots by ID. Their data stays in the repository until
 // a prune.
 func (r *Restic) Forget(ctx context.Context, ids ...string) error {
