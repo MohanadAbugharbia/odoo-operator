@@ -1,23 +1,30 @@
 # Continuous integration
 
-`.github/workflows/ci.yml` runs on every pull request and on pushes to `main`,
-in these jobs:
+`.github/workflows/ci.yml` runs on pull requests and on pushes to `main`. Its
+first job, **Changes**, decides which of the others run, so a pull request
+pays only for the tests its change needs:
 
-- **Unit and envtest** — `make test` (the envtest suites against a real API
-  server), a check that the generated files in `api/v1/zz_generated.deepcopy.go`,
-  `config/crd` and `config/rbac` are in sync with the types, and a
-  `make build-installer` of the release bundle.
-- **Backup on PostgreSQL 16–18** — `hack/backup-it.sh` once per major.
-- **Backup e2e (kind)** — `hack/backup-e2e.sh`.
-- **Lint** — `make lint` (golangci-lint).
-- **Images** — on pull requests from this repository, pushes the operator and
-  backup images (amd64 and arm64) tagged `sha-<head sha>` and `pr-<number>`, so
-  a branch can be tried on a real cluster before it is released.
+| Job | What it runs | Runs on a pull request | Runs on `main` |
+|---|---|---|---|
+| **Unit and envtest** | `make test` (the envtest suites against a real API server), a check that `api/v1/zz_generated.deepcopy.go`, `config/crd` and `config/rbac` are in sync with the types, and a `make build-installer` of the release bundle | when anything but docs changed | when anything but docs changed |
+| **Lint** | `make lint` (golangci-lint) | when anything but docs changed | when anything but docs changed |
+| **Backup on PostgreSQL 16–18** | `hack/backup-it.sh` once per major | when backup code changed, or with `full-ci` or `backup-ci` | when anything but docs changed |
+| **Backup e2e (kind)** | `hack/backup-e2e.sh` | when backup code changed, or with `full-ci` or `backup-ci` | when anything but docs changed |
+| **Images** | pushes the operator and backup images (amd64 and arm64) tagged `sha-<head sha>` and `pr-<number>`, to try a branch on a real cluster | with `full-ci` or `images-ci`, and only from this repository | never |
 
-A change that touches only documentation (`docs/`, Markdown files,
-`mkdocs.yml`, `LICENSE` or the Docs workflow) skips all of these: the first
-job, **Changes**, sees that no other file changed. The skipped jobs count as
-passed.
+- **Docs** means `docs/`, Markdown files, `mkdocs.yml`, `LICENSE` and the Docs
+  workflow. A docs-only change skips every job here.
+- **Backup code** is the list in the `backup` filter of the Changes job: the
+  backup agent and its image, the backup and restore types, CRDs and RBAC,
+  the backup controllers and the instance work queue, schedules, `go.mod` and
+  `go.sum`, and `ci.yml` itself. A backup-related change outside that list is
+  still caught by the full run on `main`; add the path to the filter when that
+  happens.
+- **Labels.** `full-ci` runs everything, `backup-ci` the backup suite and
+  `images-ci` the images. Adding one of them runs CI again with it, and the
+  newer run replaces the one in progress. Other labels do not start CI.
+- A skipped job counts as passed, so these jobs can be required checks.
+- The Changes job's summary says what ran and why.
 
 `.github/workflows/docs.yml` builds this site on every pull request and
 publishes it; see [Writing the docs](docs.md).
