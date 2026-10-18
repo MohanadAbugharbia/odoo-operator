@@ -1,0 +1,4984 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A Kubernetes operator for the whole lifecycle of Odoo instances.">
+      
+      
+      
+        <link rel="canonical" href="https://odoo-operator.abugharbia.com/reference/api/">
+      
+      
+        <link rel="prev" href="../../operations/troubleshooting/">
+      
+      
+        <link rel="next" href="../metrics/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>API - Odoo Operator</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#api-reference" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Odoo Operator" class="md-header__button md-logo" aria-label="Odoo Operator" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Odoo Operator
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              API
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/MohanadAbugharbia/odoo-operator" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    MohanadAbugharbia/odoo-operator
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Odoo Operator" class="md-nav__button md-logo" aria-label="Odoo Operator" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Odoo Operator
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/MohanadAbugharbia/odoo-operator" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    MohanadAbugharbia/odoo-operator
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/lifecycle/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Lifecycle
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/databases/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Databases
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/backups/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    How backups work
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/expose/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Expose Odoo
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/upgrades/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Upgrade Odoo
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/maintenance-page/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Maintenance page
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/production-backups/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Set up production backups
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/backup-stores/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Set up a backup store
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/backups/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Take and schedule backups
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/restore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Restore and undo
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/disaster-recovery/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Recover onto a new cluster
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/drills/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Restore drills
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/store-check-prune/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Check and prune a store
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring and alerts
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/grafana-dashboard/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grafana dashboard
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/uninstall/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Uninstall
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operations
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operations/upgrading-the-operator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Upgrading the operator
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operations/troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#packages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Packages
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#odooabugharbiacomv1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        odoo.abugharbia.com/v1
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="odoo.abugharbia.com/v1">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#resource-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resource Types
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Resource Types">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#backupconsistency" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BackupConsistency
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backupcopy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BackupCopy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backupstoreformat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BackupStoreFormat
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#databasecreatepolicy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DatabaseCreatePolicy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deletionpolicy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DeletionPolicy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#maintenancejobstatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MaintenanceJobStatus
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#maintenancepageconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MaintenancePageConfig
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#maintenancepagetext" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MaintenancePageText
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nfsstore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NFSStore
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoobackup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooBackup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoobackupconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooBackupConfig
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoobackupdrill" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooBackupDrill
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoobackupretention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooBackupRetention
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoobackupschedulestatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooBackupScheduleStatus
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoobackupspec" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooBackupSpec
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoobackupstatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooBackupStatus
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoobackupstore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooBackupStore
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoobackupstorespec" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooBackupStoreSpec
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoobackupstorestatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooBackupStoreStatus
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odooconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooConfig
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoodatabaseconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooDatabaseConfig
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoodatabasestatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooDatabaseStatus
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoodeployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooDeployment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoodeploymentspec" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooDeploymentSpec
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoodeploymentstatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooDeploymentStatus
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoodrillresult" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooDrillResult
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoojobconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooJobConfig
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoooptionvalue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooOptionValue
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odooprobesconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooProbesConfig
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoorestore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooRestore
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoorestoreconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooRestoreConfig
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoorestorespec" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooRestoreSpec
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoorestorestatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooRestoreStatus
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odooupgradeconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooUpgradeConfig
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#operationstatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OperationStatus
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pvcstore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PVCStore
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#persistentvolumeclaimspec" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PersistentVolumeClaimSpec
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#restoreprevious" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RestorePrevious
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#s3store" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        S3Store
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sftpstore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SFTPStore
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#storecheck" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StoreCheck
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#storepath" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StorePath
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#storeschedule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StoreSchedule
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#storetaskstatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StoreTaskStatus
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../operator-flags/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operator flags
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../glossary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Glossary
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Contributing
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/development/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/ci/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Continuous integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/docs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Writing the docs
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#packages" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Packages
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#odooabugharbiacomv1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        odoo.abugharbia.com/v1
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="odoo.abugharbia.com/v1">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#resource-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resource Types
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Resource Types">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#backupconsistency" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BackupConsistency
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backupcopy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BackupCopy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backupstoreformat" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BackupStoreFormat
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#databasecreatepolicy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DatabaseCreatePolicy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deletionpolicy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DeletionPolicy
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#maintenancejobstatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MaintenanceJobStatus
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#maintenancepageconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MaintenancePageConfig
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#maintenancepagetext" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MaintenancePageText
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#nfsstore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        NFSStore
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoobackup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooBackup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoobackupconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooBackupConfig
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoobackupdrill" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooBackupDrill
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoobackupretention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooBackupRetention
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoobackupschedulestatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooBackupScheduleStatus
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoobackupspec" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooBackupSpec
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoobackupstatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooBackupStatus
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoobackupstore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooBackupStore
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoobackupstorespec" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooBackupStoreSpec
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoobackupstorestatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooBackupStoreStatus
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odooconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooConfig
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoodatabaseconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooDatabaseConfig
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoodatabasestatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooDatabaseStatus
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoodeployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooDeployment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoodeploymentspec" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooDeploymentSpec
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoodeploymentstatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooDeploymentStatus
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoodrillresult" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooDrillResult
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoojobconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooJobConfig
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoooptionvalue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooOptionValue
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odooprobesconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooProbesConfig
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoorestore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooRestore
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoorestoreconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooRestoreConfig
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoorestorespec" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooRestoreSpec
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odoorestorestatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooRestoreStatus
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#odooupgradeconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OdooUpgradeConfig
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#operationstatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OperationStatus
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pvcstore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PVCStore
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#persistentvolumeclaimspec" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PersistentVolumeClaimSpec
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#restoreprevious" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RestorePrevious
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#s3store" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        S3Store
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sftpstore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SFTPStore
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#storecheck" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StoreCheck
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#storepath" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StorePath
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#storeschedule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StoreSchedule
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#storetaskstatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StoreTaskStatus
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/MohanadAbugharbia/odoo-operator/edit/main/docs/reference/api.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="api-reference">API Reference<a class="headerlink" href="#api-reference" title="Permanent link">&para;</a></h1>
+<h2 id="packages">Packages<a class="headerlink" href="#packages" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="#odooabugharbiacomv1">odoo.abugharbia.com/v1</a></li>
+</ul>
+<h2 id="odooabugharbiacomv1">odoo.abugharbia.com/v1<a class="headerlink" href="#odooabugharbiacomv1" title="Permanent link">&para;</a></h2>
+<p>Package v1 contains API Schema definitions for the odoo v1 API group</p>
+<h3 id="resource-types">Resource Types<a class="headerlink" href="#resource-types" title="Permanent link">&para;</a></h3>
+<ul>
+<li><a href="#odoobackup">OdooBackup</a></li>
+<li><a href="#odoobackupstore">OdooBackupStore</a></li>
+<li><a href="#odoodeployment">OdooDeployment</a></li>
+<li><a href="#odoorestore">OdooRestore</a></li>
+</ul>
+<h4 id="backupconsistency">BackupConsistency<a class="headerlink" href="#backupconsistency" title="Permanent link">&para;</a></h4>
+<p><em>Underlying type:</em> <em>string</em></p>
+<p>BackupConsistency is how a backup keeps the database and the filestore
+in step.</p>
+<p><em>Validation:</em>
+- Enum: [Online Offline]</p>
+<p><em>Appears in:</em>
+- <a href="#odoobackupconfig">OdooBackupConfig</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Online</code></td>
+<td>BackupConsistencyOnline backs up while Odoo keeps serving: the dump and<br />the list of files come from one database snapshot, and files deleted<br />meanwhile are taken from the previous backup.<br /></td>
+</tr>
+<tr>
+<td><code>Offline</code></td>
+<td>BackupConsistencyOffline stops Odoo for the backup.<br /></td>
+</tr>
+</tbody>
+</table>
+<h4 id="backupcopy">BackupCopy<a class="headerlink" href="#backupcopy" title="Permanent link">&para;</a></h4>
+<p>BackupCopy is one copy of a backup in another store.</p>
+<p><em>Appears in:</em>
+- <a href="#odoobackupstatus">OdooBackupStatus</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>store</code> <em>string</em></td>
+<td>Store is the OdooBackupStore holding the copy.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>snapshotID</code> <em>string</em></td>
+<td>SnapshotID of the copy in that store's repository; empty when the<br />copy failed.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>error</code> <em>string</em></td>
+<td>Error says why the copy failed.</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="backupstoreformat">BackupStoreFormat<a class="headerlink" href="#backupstoreformat" title="Permanent link">&para;</a></h4>
+<p><em>Underlying type:</em> <em>string</em></p>
+<p>BackupStoreFormat is how backups are kept in a store.</p>
+<p><em>Validation:</em>
+- Enum: [restic]</p>
+<p><em>Appears in:</em>
+- <a href="#odoobackupstorespec">OdooBackupStoreSpec</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>restic</code></td>
+<td>BackupStoreFormatRestic keeps one encrypted, deduplicated restic<br />repository per OdooDeployment.<br /></td>
+</tr>
+</tbody>
+</table>
+<h4 id="databasecreatepolicy">DatabaseCreatePolicy<a class="headerlink" href="#databasecreatepolicy" title="Permanent link">&para;</a></h4>
+<p><em>Underlying type:</em> <em>string</em></p>
+<p>DatabaseCreatePolicy tells the operator what to do when the database named in
+spec.database does not exist.</p>
+<p><em>Validation:</em>
+- Enum: [IfNotExists Never]</p>
+<p><em>Appears in:</em>
+- <a href="#odoodatabaseconfig">OdooDatabaseConfig</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>IfNotExists</code></td>
+<td>DatabaseCreatePolicyIfNotExists creates the database when it is missing and<br />adopts it as an external database when it already exists.<br /></td>
+</tr>
+<tr>
+<td><code>Never</code></td>
+<td>DatabaseCreatePolicyNever never creates a database; a missing database is reported as Degraded.<br /></td>
+</tr>
+</tbody>
+</table>
+<h4 id="deletionpolicy">DeletionPolicy<a class="headerlink" href="#deletionpolicy" title="Permanent link">&para;</a></h4>
+<p><em>Underlying type:</em> <em>string</em></p>
+<p>DeletionPolicy tells the operator what to do with an owned resource when the
+OdooDeployment is deleted.</p>
+<p><em>Validation:</em>
+- Enum: [Retain Delete]</p>
+<p><em>Appears in:</em>
+- <a href="#odoodatabaseconfig">OdooDatabaseConfig</a>
+- <a href="#persistentvolumeclaimspec">PersistentVolumeClaimSpec</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Retain</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>Delete</code></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="maintenancejobstatus">MaintenanceJobStatus<a class="headerlink" href="#maintenancejobstatus" title="Permanent link">&para;</a></h4>
+<p>MaintenanceJobStatus records the maintenance Job (init or upgrade) the
+operator is waiting for. The JSON keys keep the 0.2.x names.</p>
+<p><em>Appears in:</em>
+- <a href="#odoodeploymentstatus">OdooDeploymentStatus</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>name</code> <em>string</em></td>
+<td>The name of the Job</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>jobNamespace</code> <em>string</em></td>
+<td>The namespace of the Job</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>kind</code> <em>string</em></td>
+<td>Kind is "init" or "upgrade"</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>image</code> <em>string</em></td>
+<td>Image the Job runs; becomes status.appliedImage on success</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>token</code> <em>string</em></td>
+<td>Token is the spec.upgrade.token the Job was created for; becomes status.appliedUpgradeToken on success</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>modules</code> <em>string array</em></td>
+<td>The list of modules that are being installed (-i)</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>upgradeModules</code> <em>string array</em></td>
+<td>The list of modules that are being upgraded (-u)</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>startedAt</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
+<td>StartedAt is when the operator created the Job.</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="maintenancepageconfig">MaintenancePageConfig<a class="headerlink" href="#maintenancepageconfig" title="Permanent link">&para;</a></h4>
+<p>MaintenancePageConfig controls the page the http Service serves while Odoo
+itself cannot answer: during the init and upgrade Jobs and until the
+Deployment has an available replica again.</p>
+<p><em>Appears in:</em>
+- <a href="#odoodeploymentspec">OdooDeploymentSpec</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>enabled</code> <em>boolean</em></td>
+<td>Enabled runs a small &lt;name&gt;-maintenance Deployment from the operator's<br />own image and points the http Service at it whenever Odoo has no<br />available replica (and spec.replicas is not 0). The poll Service always<br />stays on Odoo.</td>
+<td>false</td>
+<td></td>
+</tr>
+<tr>
+<td><code>title</code> <em><a href="#maintenancepagetext">MaintenancePageText</a></em></td>
+<td>Title is the product name the page shows ("Updating &lt;title&gt;").</td>
+<td>Odoo</td>
+<td>MaxLength: 64 <br />MinLength: 1 <br />Pattern: <code>^[^\n\r&lt;&gt;]*$</code> <br /></td>
+</tr>
+<tr>
+<td><code>titleTranslations</code> <em>object (keys:string, values:<a href="#maintenancepagetext">MaintenancePageText</a>)</em></td>
+<td>TitleTranslations replaces the title for a page language. The page is<br />shown in English or Arabic, picked from the browser's Accept-Language,<br />so the only key it reads today is "ar".</td>
+<td></td>
+<td>MaxProperties: 8 <br /></td>
+</tr>
+<tr>
+<td><code>accentColor</code> <em>string</em></td>
+<td>AccentColor is the page's accent, as #rrggbb.</td>
+<td>#714b67</td>
+<td>Pattern: <code>^#[0-9A-Fa-f]\{6\}$</code> <br /></td>
+</tr>
+<tr>
+<td><code>logo</code> <em>string</em></td>
+<td>Logo is shown instead of the title's initial. It must be a base64 data<br />URI: Odoo is not answering while the page is up, so the page cannot<br />load images from it.</td>
+<td></td>
+<td>MaxLength: 65536 <br />Pattern: <code>^data:image/(png\|jpeg\|gif\|webp\|svg\+xml);base64,[A-Za-z0-9+/]+=*$</code> <br /></td>
+</tr>
+</tbody>
+</table>
+<h4 id="maintenancepagetext">MaintenancePageText<a class="headerlink" href="#maintenancepagetext" title="Permanent link">&para;</a></h4>
+<p><em>Underlying type:</em> <em>string</em></p>
+<p>MaintenancePageText is one line of text shown on the maintenance page.</p>
+<p><em>Validation:</em>
+- MaxLength: 64
+- MinLength: 1
+- Pattern: <code>^[^\n\r&lt;&gt;]*$</code></p>
+<p><em>Appears in:</em>
+- <a href="#maintenancepageconfig">MaintenancePageConfig</a></p>
+<h4 id="nfsstore">NFSStore<a class="headerlink" href="#nfsstore" title="Permanent link">&para;</a></h4>
+<p>NFSStore is an NFS export, mounted into the backup Jobs. The nodes need an
+NFS client and a route to the server.</p>
+<p><em>Appears in:</em>
+- <a href="#odoobackupstorespec">OdooBackupStoreSpec</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>server</code> <em>string</em></td>
+<td>Server is the NFS server's host name or address.</td>
+<td></td>
+<td>MinLength: 1 <br /></td>
+</tr>
+<tr>
+<td><code>path</code> <em>string</em></td>
+<td>Path is the exported folder. Repositories go under &lt;path&gt;/&lt;namespace&gt;/&lt;deployment&gt;/.</td>
+<td></td>
+<td>Pattern: <code>^/</code> <br /></td>
+</tr>
+</tbody>
+</table>
+<h4 id="odoobackup">OdooBackup<a class="headerlink" href="#odoobackup" title="Permanent link">&para;</a></h4>
+<p>OdooBackup is one full backup of an OdooDeployment: its database and its
+filestore, taken together. Create one to take a backup now. It is not owned
+by the OdooDeployment, so deleting an instance never deletes its backups.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>apiVersion</code> <em>string</em></td>
+<td><code>odoo.abugharbia.com/v1</code></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>kind</code> <em>string</em></td>
+<td><code>OdooBackup</code></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>metadata</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#objectmeta-v1-meta">ObjectMeta</a></em></td>
+<td>Refer to Kubernetes API documentation for fields of <code>metadata</code>.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>spec</code> <em><a href="#odoobackupspec">OdooBackupSpec</a></em></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>status</code> <em><a href="#odoobackupstatus">OdooBackupStatus</a></em></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="odoobackupconfig">OdooBackupConfig<a class="headerlink" href="#odoobackupconfig" title="Permanent link">&para;</a></h4>
+<p>OdooBackupConfig turns on backups of this instance.</p>
+<p><em>Appears in:</em>
+- <a href="#odoodeploymentspec">OdooDeploymentSpec</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>stores</code> <em>string array</em></td>
+<td>Stores are OdooBackupStores in this namespace. Backups are written to<br />the first; the instance's repository is &lt;path&gt;/&lt;namespace&gt;/&lt;name&gt;/<br />inside it. Each backup is then copied to the other stores.</td>
+<td></td>
+<td>MaxItems: 4 <br />items:MinLength: 1 <br /></td>
+</tr>
+<tr>
+<td><code>schedule</code> <em>string</em></td>
+<td>Schedule takes a backup on a cron schedule ("0 3 * * *" or @daily), in<br />TimeZone. Empty (the default) takes no scheduled backups. A schedule<br />missed while the operator was down runs once when it is back.</td>
+<td></td>
+<td>MaxLength: 100 <br /></td>
+</tr>
+<tr>
+<td><code>timeZone</code> <em>string</em></td>
+<td>TimeZone of Schedule, the drill schedule and the retention rules, as an<br />IANA name such as Europe/Berlin.</td>
+<td>UTC</td>
+<td>MaxLength: 100 <br /></td>
+</tr>
+<tr>
+<td><code>retention</code> <em><a href="#odoobackupretention">OdooBackupRetention</a></em></td>
+<td>Retention says which backups are kept after each backup.</td>
+<td>{  }</td>
+<td></td>
+</tr>
+<tr>
+<td><code>drill</code> <em><a href="#odoobackupdrill">OdooBackupDrill</a></em></td>
+<td>Drill restores the newest backup on a schedule to prove it works.</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>consistency</code> <em><a href="#backupconsistency">BackupConsistency</a></em></td>
+<td>Consistency: Online (default) backs up while Odoo keeps serving;<br />Offline stops Odoo for the backup.</td>
+<td>Online</td>
+<td>Enum: [Online Offline] <br /></td>
+</tr>
+<tr>
+<td><code>restore</code> <em><a href="#odoorestoreconfig">OdooRestoreConfig</a></em></td>
+<td>Restore holds the defaults of in-place restores (OdooRestore).</td>
+<td>{  }</td>
+<td></td>
+</tr>
+<tr>
+<td><code>resources</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#resourcerequirements-v1-core">ResourceRequirements</a></em></td>
+<td>Resources of the backup and restore Jobs.</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>activeDeadlineSeconds</code> <em>integer</em></td>
+<td>ActiveDeadlineSeconds bounds one backup or restore Job.</td>
+<td>21600</td>
+<td>Minimum: 60 <br /></td>
+</tr>
+</tbody>
+</table>
+<h4 id="odoobackupdrill">OdooBackupDrill<a class="headerlink" href="#odoobackupdrill" title="Permanent link">&para;</a></h4>
+<p>OdooBackupDrill restores the newest backup on a schedule to prove it can
+be restored, without touching the running instance.</p>
+<p><em>Appears in:</em>
+- <a href="#odoobackupconfig">OdooBackupConfig</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>schedule</code> <em>string</em></td>
+<td>Schedule in cron format, in spec.backup.timeZone; empty turns drills off.</td>
+<td></td>
+<td>MaxLength: 100 <br /></td>
+</tr>
+<tr>
+<td><code>scratchSizeLimit</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#quantity-resource-api">Quantity</a></em></td>
+<td>ScratchSizeLimit caps the node disk the drill's scratch filestore<br />(an emptyDir) may use; unset leaves it uncapped. A drill that needs<br />more is evicted and reported failed.</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+</tbody>
+</table>
+<h4 id="odoobackupretention">OdooBackupRetention<a class="headerlink" href="#odoobackupretention" title="Permanent link">&para;</a></h4>
+<p>OdooBackupRetention says which backups are kept. Scheduled backups are
+thinned with restic's keep rules (daily: 7 keeps the newest backup of each
+of the last 7 days that have one; a backup kept by any rule stays); manual
+and pre-upgrade backups each keep their newest Manual. A backup with
+spec.keep, and the newest backup, are never deleted. Unset fields take the
+defaults below.</p>
+<p><em>Appears in:</em>
+- <a href="#odoobackupconfig">OdooBackupConfig</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>last</code> <em>integer</em></td>
+<td>Last keeps the newest N backups.</td>
+<td></td>
+<td>Minimum: 0 <br /></td>
+</tr>
+<tr>
+<td><code>hourly</code> <em>integer</em></td>
+<td>Hourly keeps the newest backup of each of the last N hours that have one.</td>
+<td></td>
+<td>Minimum: 0 <br /></td>
+</tr>
+<tr>
+<td><code>daily</code> <em>integer</em></td>
+<td>Daily keeps the newest backup of each of the last N days that have one.</td>
+<td>7</td>
+<td>Minimum: 0 <br /></td>
+</tr>
+<tr>
+<td><code>weekly</code> <em>integer</em></td>
+<td>Weekly keeps the newest backup of each of the last N weeks that have one.</td>
+<td>4</td>
+<td>Minimum: 0 <br /></td>
+</tr>
+<tr>
+<td><code>monthly</code> <em>integer</em></td>
+<td>Monthly keeps the newest backup of each of the last N months that have one.</td>
+<td>12</td>
+<td>Minimum: 0 <br /></td>
+</tr>
+<tr>
+<td><code>yearly</code> <em>integer</em></td>
+<td>Yearly keeps the newest backup of each of the last N years that have one.</td>
+<td></td>
+<td>Minimum: 0 <br /></td>
+</tr>
+<tr>
+<td><code>within</code> <em>string</em></td>
+<td>Within keeps every backup newer than this, counted from the newest<br />backup, such as 30d, 12h or 1y6m (restic's duration format).</td>
+<td></td>
+<td>Pattern: <code>^([0-9]+[ymdh])*$</code> <br /></td>
+</tr>
+<tr>
+<td><code>manual</code> <em>integer</em></td>
+<td>Manual keeps the newest N manual backups; 0 keeps them all.</td>
+<td></td>
+<td>Minimum: 0 <br /></td>
+</tr>
+<tr>
+<td><code>keepAll</code> <em>boolean</em></td>
+<td>KeepAll turns retention off: no backup is ever deleted.</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="odoobackupschedulestatus">OdooBackupScheduleStatus<a class="headerlink" href="#odoobackupschedulestatus" title="Permanent link">&para;</a></h4>
+<p>OdooBackupScheduleStatus reports the backup schedule and the last drill.</p>
+<p><em>Appears in:</em>
+- <a href="#odoodeploymentstatus">OdooDeploymentStatus</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>lastScheduleTime</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
+<td>LastScheduleTime is the latest scheduled time the operator has handled,<br />whether it took a backup then or skipped it.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>nextScheduleTime</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
+<td>NextScheduleTime is when the next scheduled backup is due.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>schedule</code> <em>string</em></td>
+<td>Schedule and TimeZone the times above were computed for.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>timeZone</code> <em>string</em></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>lastDrillScheduleTime</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
+<td>LastDrillScheduleTime is the latest drill time the operator has handled.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>nextDrillTime</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
+<td>NextDrillTime is when the next drill is due.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>drillSchedule</code> <em>string</em></td>
+<td>DrillSchedule the drill times above were computed for.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>drillDue</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
+<td>DrillDue is the scheduled time of a drill waiting in the instance's<br />queue.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>lastDrill</code> <em><a href="#odoodrillresult">OdooDrillResult</a></em></td>
+<td>LastDrill is the result of the latest restore drill.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>lastSuccessfulDrillTime</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
+<td>LastSuccessfulDrillTime is when a restore drill last passed.</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="odoobackupspec">OdooBackupSpec<a class="headerlink" href="#odoobackupspec" title="Permanent link">&para;</a></h4>
+<p>OdooBackupSpec names the instance to back up.</p>
+<p><em>Appears in:</em>
+- <a href="#odoobackup">OdooBackup</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>odooDeployment</code> <em>string</em></td>
+<td>OdooDeployment to back up, in the same namespace.</td>
+<td></td>
+<td>MaxLength: 253 <br />MinLength: 1 <br /></td>
+</tr>
+<tr>
+<td><code>keep</code> <em>boolean</em></td>
+<td>Keep marks a backup that retention never removes.</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+</tbody>
+</table>
+<h4 id="odoobackupstatus">OdooBackupStatus<a class="headerlink" href="#odoobackupstatus" title="Permanent link">&para;</a></h4>
+<p>OdooBackupStatus describes one backup.</p>
+<p><em>Appears in:</em>
+- <a href="#odoobackup">OdooBackup</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>phase</code> <em>string</em></td>
+<td>Phase: Pending, WaitingForFilestoreCleanup, Running, Completed,<br />CompletedWithWarnings, PartiallyCompleted (taken, but a copy to another<br />store failed) or Failed.</td>
+<td></td>
+<td>Enum: [Pending WaitingForFilestoreCleanup Running Completed CompletedWithWarnings PartiallyCompleted Failed] <br /></td>
+</tr>
+<tr>
+<td><code>message</code> <em>string</em></td>
+<td>Message explains the phase in a sentence.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>store</code> <em>string</em></td>
+<td>Store is the OdooBackupStore the backup was written to.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>repository</code> <em>string</em></td>
+<td>Repository is the restic repository inside the store, &lt;namespace&gt;/&lt;deployment&gt;.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>snapshotID</code> <em>string</em></td>
+<td>SnapshotID is the restic snapshot holding this backup.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>consistency</code> <em>string</em></td>
+<td>Consistency the backup was taken with: Online or Offline.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>job</code> <em>string</em></td>
+<td>Job is the Job taking the backup. Attempts counts the Jobs started for it.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>attempts</code> <em>integer</em></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>retryAfter</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
+<td>RetryAfter is when a backup that waited for Odoo's filestore cleanup<br />is tried again.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>waitingSince</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
+<td>WaitingSince is when the backup started waiting for Odoo's filestore<br />cleanup to finish.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>startedAt</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
+<td>StartedAt is when the backup Job was created.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>completedAt</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
+<td>CompletedAt is when the backup finished, successfully or not.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>image</code> <em>string</em></td>
+<td>Image is the Odoo image the instance ran when the backup was taken.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>odooVersion</code> <em>string</em></td>
+<td>OdooVersion is the Odoo series in the database, such as 18.0.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>pgServerVersion</code> <em>string</em></td>
+<td>PgServerVersion is the PostgreSQL server version, such as 16.4.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>databaseBytes</code> <em>integer</em></td>
+<td>DatabaseBytes is the size of the SQL dump.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>filestoreBytes</code> <em>integer</em></td>
+<td>FilestoreBytes is the size of the filestore.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>filestoreFiles</code> <em>integer</em></td>
+<td>FilestoreFiles is the number of files in the filestore.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>addedBytes</code> <em>integer</em></td>
+<td>AddedBytes is the new data this backup uploaded after deduplication<br />and compression.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>repairedFiles</code> <em>integer</em></td>
+<td>RepairedFiles counts attachments that were gone from the filestore<br />when the backup ran and were taken from the previous backup instead.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>missingFiles</code> <em>integer</em></td>
+<td>MissingFiles counts attachments the database refers to that are in<br />neither the filestore nor the previous backup.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>missingFileNames</code> <em>string array</em></td>
+<td>MissingFileNames lists the first missing files.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>copies</code> <em><a href="#backupcopy">BackupCopy</a> array</em></td>
+<td>Copies are the copies of this backup in the instance's other stores.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>warnings</code> <em>string array</em></td>
+<td>Warnings name what went wrong around a backup that was still taken,<br />such as retention that could not run.</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="odoobackupstore">OdooBackupStore<a class="headerlink" href="#odoobackupstore" title="Permanent link">&para;</a></h4>
+<p>OdooBackupStore is a place backups are kept: an S3 bucket, an SFTP server,
+an NFS export or a PersistentVolumeClaim. OdooDeployments in the same
+namespace name it in spec.backup.stores.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>apiVersion</code> <em>string</em></td>
+<td><code>odoo.abugharbia.com/v1</code></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>kind</code> <em>string</em></td>
+<td><code>OdooBackupStore</code></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>metadata</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#objectmeta-v1-meta">ObjectMeta</a></em></td>
+<td>Refer to Kubernetes API documentation for fields of <code>metadata</code>.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>spec</code> <em><a href="#odoobackupstorespec">OdooBackupStoreSpec</a></em></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>status</code> <em><a href="#odoobackupstorestatus">OdooBackupStoreStatus</a></em></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="odoobackupstorespec">OdooBackupStoreSpec<a class="headerlink" href="#odoobackupstorespec" title="Permanent link">&para;</a></h4>
+<p>OdooBackupStoreSpec is where backups are written to and read from.</p>
+<p><em>Appears in:</em>
+- <a href="#odoobackupstore">OdooBackupStore</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>format</code> <em><a href="#backupstoreformat">BackupStoreFormat</a></em></td>
+<td>Format is how backups are kept. restic: one encrypted, deduplicated<br />repository per OdooDeployment at &lt;path&gt;/&lt;namespace&gt;/&lt;deployment&gt;/.</td>
+<td>restic</td>
+<td>Enum: [restic] <br /></td>
+</tr>
+<tr>
+<td><code>s3</code> <em><a href="#s3store">S3Store</a></em></td>
+<td>S3 stores backups in an S3 bucket.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>sftp</code> <em><a href="#sftpstore">SFTPStore</a></em></td>
+<td>SFTP stores backups on an SSH server.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>nfs</code> <em><a href="#nfsstore">NFSStore</a></em></td>
+<td>NFS stores backups on an NFS export.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>pvc</code> <em><a href="#pvcstore">PVCStore</a></em></td>
+<td>PVC stores backups on a PersistentVolumeClaim.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>encryptionKeySecret</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#secretkeyselector-v1-core">SecretKeySelector</a></em></td>
+<td>EncryptionKeySecret is the restic password that encrypts every<br />backup in the store. Without it no backup can be read: keep a copy<br />outside the cluster.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>check</code> <em><a href="#storecheck">StoreCheck</a></em></td>
+<td>Check reads the store's repositories back on a schedule (restic check)<br />to find damage before a restore needs them.</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>prune</code> <em><a href="#storeschedule">StoreSchedule</a></em></td>
+<td>Prune frees the space of the backups retention has removed, on a<br />schedule (restic prune).</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>timeZone</code> <em>string</em></td>
+<td>TimeZone of the check and prune schedules, as an IANA name.</td>
+<td>UTC</td>
+<td>MaxLength: 100 <br /></td>
+</tr>
+<tr>
+<td><code>resources</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#resourcerequirements-v1-core">ResourceRequirements</a></em></td>
+<td>Resources of the Jobs that probe, check and prune the store.</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+</tbody>
+</table>
+<h4 id="odoobackupstorestatus">OdooBackupStoreStatus<a class="headerlink" href="#odoobackupstorestatus" title="Permanent link">&para;</a></h4>
+<p>OdooBackupStoreStatus reports whether the store can be reached.</p>
+<p><em>Appears in:</em>
+- <a href="#odoobackupstore">OdooBackupStore</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>observedGeneration</code> <em>integer</em></td>
+<td>ObservedGeneration is the generation the status describes.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>ready</code> <em>boolean</em></td>
+<td>Ready is true when the last probe could write to, read from and<br />delete a file in the store.</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>lastProbeTime</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
+<td>LastProbeTime is when the store was last probed.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>probeJob</code> <em>string</em></td>
+<td>ProbeJob is the Job probing the store right now.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>probedHash</code> <em>string</em></td>
+<td>ProbedHash identifies the spec and Secrets the last probe ran with.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>taskJob</code> <em>string</em></td>
+<td>TaskJob is the check or prune Job running right now; TaskKind says which.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>taskKind</code> <em>string</em></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>lastCheck</code> <em><a href="#storetaskstatus">StoreTaskStatus</a></em></td>
+<td>LastCheck and LastPrune are the outcomes of the latest check and prune.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>lastPrune</code> <em><a href="#storetaskstatus">StoreTaskStatus</a></em></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>lastCheckScheduleTime</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
+<td>LastCheckScheduleTime and LastPruneScheduleTime are the latest<br />scheduled times handled; NextCheckTime and NextPruneTime the next ones.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>lastPruneScheduleTime</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>nextCheckTime</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>nextPruneTime</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>checkRuns</code> <em>integer</em></td>
+<td>CheckRuns counts checks, to pick the part of the data the next reads.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>scheduleKey</code> <em>string</em></td>
+<td>Schedules the times above were computed for: check, prune and time zone.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>repositories</code> <em>integer</em></td>
+<td>Repositories is how many instance repositories the latest task saw,<br />StoredBytes how much they hold together.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>storedBytes</code> <em>integer</em></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>conditions</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#condition-v1-meta">Condition</a> array</em></td>
+<td>Conditions: Ready.</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="odooconfig">OdooConfig<a class="headerlink" href="#odooconfig" title="Permanent link">&para;</a></h4>
+<p><em>Appears in:</em>
+- <a href="#odoodeploymentspec">OdooDeploymentSpec</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>adminPasswordSecretName</code> <em>string</em></td>
+<td>The admin password to use for the Odoo application<br />The admin passowrd is used to create/copy or delete odoo databases<br />This can be left empty to generate a secure random password</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>debugMode</code> <em>boolean</em></td>
+<td>Enable debug mode for Odoo</td>
+<td>false</td>
+<td></td>
+</tr>
+<tr>
+<td><code>dataDir</code> <em>string</em></td>
+<td>The directory to use for the odoo filestore and session store</td>
+<td>/var/lib/odoo</td>
+<td></td>
+</tr>
+<tr>
+<td><code>withoutDemo</code> <em>boolean</em></td>
+<td>Install modules without demo data</td>
+<td>true</td>
+<td></td>
+</tr>
+<tr>
+<td><code>proxyMode</code> <em>boolean</em></td>
+<td>Proxy Mode for Odoo<br />This instructs Odoo to use the X-Forwarded-For header for the remote IP address</td>
+<td>true</td>
+<td></td>
+</tr>
+<tr>
+<td><code>workers</code> <em>integer</em></td>
+<td>Numer of process workers to use for Odoo. 0 runs the threaded server.</td>
+<td>2</td>
+<td>Minimum: 0 <br /></td>
+</tr>
+<tr>
+<td><code>limitRequest</code> <em>integer</em></td>
+<td>The maximum number of requests that the process can take</td>
+<td>8192</td>
+<td></td>
+</tr>
+<tr>
+<td><code>limitTimeReal</code> <em>integer</em></td>
+<td>The maximum real time in seconds that the process can take</td>
+<td>120</td>
+<td></td>
+</tr>
+<tr>
+<td><code>limitTimeCpu</code> <em>integer</em></td>
+<td>The maximum CPU time in seconds that the process can take</td>
+<td>60</td>
+<td></td>
+</tr>
+<tr>
+<td><code>limitMemorySoft</code> <em>integer</em></td>
+<td>The maximum memory in bytes that the process can take</td>
+<td>2147483648</td>
+<td></td>
+</tr>
+<tr>
+<td><code>limitMemoryHard</code> <em>integer</em></td>
+<td>The maximum memory in bytes that the process can take</td>
+<td>2684354560</td>
+<td></td>
+</tr>
+<tr>
+<td><code>maxCronThreads</code> <em>integer</em></td>
+<td>The maximum number of cron threads to use for Odoo</td>
+<td>1</td>
+<td>Minimum: 0 <br /></td>
+</tr>
+<tr>
+<td><code>extraAddonsPaths</code> <em>string array</em></td>
+<td>Extra addons paths for Odoo. Each entry must be an absolute path with no commas, spaces, newlines, or # characters.</td>
+<td></td>
+<td>Optional: {} <br />items:Pattern: <code>^/[^,\n\r# ]+$</code> <br /></td>
+</tr>
+<tr>
+<td><code>listDb</code> <em>boolean</em></td>
+<td>ListDb controls the database manager. When false (the default) the<br />rendered odoo.conf carries list_db = False and dbfilter = ^&lt;db_name&gt;$ so<br />the instance can only ever see its own database.</td>
+<td>false</td>
+<td></td>
+</tr>
+<tr>
+<td><code>dbFilter</code> <em>string</em></td>
+<td>DbFilter is written verbatim as dbfilter and replaces the derived<br />^&lt;db_name&gt;$ filter. Single line.</td>
+<td></td>
+<td>Pattern: <code>^[^\n\r]*$</code> <br /></td>
+</tr>
+<tr>
+<td><code>serverWideModules</code> <em>string array</em></td>
+<td>ServerWideModules is rendered as server_wide_modules (Odoo's default is base,web).</td>
+<td></td>
+<td>items:Pattern: <code>^[A-Za-z0-9_]+$</code> <br /></td>
+</tr>
+<tr>
+<td><code>loadLanguages</code> <em>string array</em></td>
+<td>LoadLanguages is passed as --load-language to maintenance Jobs that<br />install modules (-i), so translations are loaded at first boot.</td>
+<td></td>
+<td>items:Pattern: <code>^[a-z]\{2,3\}(_[A-Za-z0-9]\{2,4\})?$</code> <br /></td>
+</tr>
+<tr>
+<td><code>extraOptions</code> <em>object (keys:string, values:<a href="#odoooptionvalue">OdooOptionValue</a>)</em></td>
+<td>ExtraOptions are appended verbatim to the [options] section, sorted by<br />key. Keys must be odoo.conf option names (^[a-z_][a-z0-9_]*$, checked by<br />the operator, which reports Degraded/InvalidSpec otherwise); values must<br />be single line (enforced by the schema).</td>
+<td></td>
+<td>MaxProperties: 64 <br /></td>
+</tr>
+</tbody>
+</table>
+<h4 id="odoodatabaseconfig">OdooDatabaseConfig<a class="headerlink" href="#odoodatabaseconfig" title="Permanent link">&para;</a></h4>
+<p>OdooDatabaseConfig defines the database connection configuration for Odoo</p>
+<p><em>Appears in:</em>
+- <a href="#odoodeploymentspec">OdooDeploymentSpec</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>host</code> <em>string</em></td>
+<td>The database host to use for Odoo</td>
+<td>postgresql</td>
+<td></td>
+</tr>
+<tr>
+<td><code>hostFromSecret</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#secretkeyselector-v1-core">SecretKeySelector</a></em></td>
+<td>The database host to use for Odoo from a secret</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>port</code> <em>integer</em></td>
+<td>The database port to use for Odoo</td>
+<td>5432</td>
+<td></td>
+</tr>
+<tr>
+<td><code>portFromSecret</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#secretkeyselector-v1-core">SecretKeySelector</a></em></td>
+<td>The database port to use for Odoo from a secret</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>user</code> <em>string</em></td>
+<td>The database user to use for Odoo</td>
+<td>odoo</td>
+<td></td>
+</tr>
+<tr>
+<td><code>userFromSecret</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#secretkeyselector-v1-core">SecretKeySelector</a></em></td>
+<td>The database user to use for Odoo from a secret</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>passwordFromSecret</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#secretkeyselector-v1-core">SecretKeySelector</a></em></td>
+<td>The database password to use for Odoo</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>name</code> <em>string</em></td>
+<td>The database name to use for Odoo. Immutable: the operator only ever<br />drops the database it recorded in status.database, so renaming would<br />silently orphan it.</td>
+<td>odoo</td>
+<td>MaxLength: 63 <br />Pattern: <code>^[A-Za-z_][A-Za-z0-9_-]*$</code> <br /></td>
+</tr>
+<tr>
+<td><code>nameFromSecret</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#secretkeyselector-v1-core">SecretKeySelector</a></em></td>
+<td>The database name to use for Odoo from a secret. Immutable for the same reason as name.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>ssl</code> <em>boolean</em></td>
+<td>Whether or not to enable SSL for the database connection.<br />Rendered as db_sslmode = require (true) or disable (false).</td>
+<td>false</td>
+<td></td>
+</tr>
+<tr>
+<td><code>sslFromSecret</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#secretkeyselector-v1-core">SecretKeySelector</a></em></td>
+<td>Whether or not to enable SSL for the database connection from a secret</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>maxConn</code> <em>integer</em></td>
+<td>The database max connections to use for Odoo</td>
+<td>20</td>
+<td></td>
+</tr>
+<tr>
+<td><code>maxConnFromSecret</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#secretkeyselector-v1-core">SecretKeySelector</a></em></td>
+<td>The database max connections to use for Odoo from a secret</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>createPolicy</code> <em><a href="#databasecreatepolicy">DatabaseCreatePolicy</a></em></td>
+<td>CreatePolicy controls whether the operator creates the database when it<br />does not exist. A database that already exists is adopted as "external"<br />and is never dropped by the operator.</td>
+<td>IfNotExists</td>
+<td>Enum: [IfNotExists Never] <br /></td>
+</tr>
+<tr>
+<td><code>deletionPolicy</code> <em><a href="#deletionpolicy">DeletionPolicy</a></em></td>
+<td>DeletionPolicy controls whether a database the operator created is<br />dropped when the OdooDeployment is deleted. Databases the operator did<br />not create (status.database.provisionedBy: external) are always retained.</td>
+<td>Retain</td>
+<td>Enum: [Retain Delete] <br /></td>
+</tr>
+<tr>
+<td><code>maintenanceDatabase</code> <em>string</em></td>
+<td>MaintenanceDatabase is the database the operator connects to in order to<br />create or drop the Odoo database.</td>
+<td>postgres</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="odoodatabasestatus">OdooDatabaseStatus<a class="headerlink" href="#odoodatabasestatus" title="Permanent link">&para;</a></h4>
+<p>OdooDatabaseStatus records the database the operator resolved for this OdooDeployment.</p>
+<p><em>Appears in:</em>
+- <a href="#odoodeploymentstatus">OdooDeploymentStatus</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>name</code> <em>string</em></td>
+<td>Name of the database</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>host</code> <em>string</em></td>
+<td>Host the database was resolved on</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>provisionedBy</code> <em>string</em></td>
+<td>ProvisionedBy is "operator" when the operator created the database and<br />"external" when it adopted a pre-existing one. Only operator-provisioned<br />databases are ever dropped.</td>
+<td></td>
+<td>Enum: [operator external] <br /></td>
+</tr>
+<tr>
+<td><code>state</code> <em>string</em></td>
+<td>State is Provisioning while CREATE DATABASE is in flight and Ready afterwards.</td>
+<td></td>
+<td>Enum: [Provisioning Ready] <br /></td>
+</tr>
+<tr>
+<td><code>createdAt</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
+<td>CreatedAt is set when the operator created the database.</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="odoodeployment">OdooDeployment<a class="headerlink" href="#odoodeployment" title="Permanent link">&para;</a></h4>
+<p>OdooDeployment is the Schema for the odoodeployments API</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>apiVersion</code> <em>string</em></td>
+<td><code>odoo.abugharbia.com/v1</code></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>kind</code> <em>string</em></td>
+<td><code>OdooDeployment</code></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>metadata</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#objectmeta-v1-meta">ObjectMeta</a></em></td>
+<td>Refer to Kubernetes API documentation for fields of <code>metadata</code>.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>spec</code> <em><a href="#odoodeploymentspec">OdooDeploymentSpec</a></em></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>status</code> <em><a href="#odoodeploymentstatus">OdooDeploymentStatus</a></em></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="odoodeploymentspec">OdooDeploymentSpec<a class="headerlink" href="#odoodeploymentspec" title="Permanent link">&para;</a></h4>
+<p>OdooDeploymentSpec defines the desired state of OdooDeployment</p>
+<p><em>Appears in:</em>
+- <a href="#odoodeployment">OdooDeployment</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>name</code> <em>string</em></td>
+<td>The name of the OdooDployment</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>odooCommand</code> <em>string array</em></td>
+<td>The command that runs odoo inside the container, if not specified it will default to "odoo".<br />It replaces the image ENTRYPOINT.</td>
+<td>[odoo]</td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>replicas</code> <em>integer</em></td>
+<td>The number of replicas to run for the OdooDployment. 0 keeps the<br />database and filestore but runs no pods.</td>
+<td>1</td>
+<td>Minimum: 0 <br /></td>
+</tr>
+<tr>
+<td><code>image</code> <em>string</em></td>
+<td>The image to run for the OdooDployment</td>
+<td>odoo:18</td>
+<td></td>
+</tr>
+<tr>
+<td><code>imagePullPolicy</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#pullpolicy-v1-core">PullPolicy</a></em></td>
+<td>Image pull policy for the OdooDployment</td>
+<td>IfNotPresent</td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>imagePullSecrets</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#localobjectreference-v1-core">LocalObjectReference</a> array</em></td>
+<td>ImagePullSecrets is an optional list of references to secrets in the same namespace to use for pulling any of the images used by this OdooDeployment.<br />If specified, these secrets will be passed to individual puller implementations for them to use.</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>database</code> <em><a href="#odoodatabaseconfig">OdooDatabaseConfig</a></em></td>
+<td>The database configuration for the OdooDployment</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>config</code> <em><a href="#odooconfig">OdooConfig</a></em></td>
+<td>The configuration for the Odoo</td>
+<td>{  }</td>
+<td></td>
+</tr>
+<tr>
+<td><code>modules</code> <em>string array</em></td>
+<td>A list of modules to initialise the database with</td>
+<td>[base]</td>
+<td>MinItems: 1 <br />items:Pattern: <code>^[A-Za-z0-9_]+$</code> <br /></td>
+</tr>
+<tr>
+<td><code>odooFilestore</code> <em><a href="#persistentvolumeclaimspec">PersistentVolumeClaimSpec</a></em></td>
+<td>PersistentVolumeClaim defines the replicated volume specs</td>
+<td>{  }</td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>upgrade</code> <em><a href="#odooupgradeconfig">OdooUpgradeConfig</a></em></td>
+<td>Upgrade controls module upgrades on image or token changes.</td>
+<td>{  }</td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>jobs</code> <em><a href="#odoojobconfig">OdooJobConfig</a></em></td>
+<td>Jobs tunes the init and upgrade maintenance Jobs.</td>
+<td>{  }</td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>probes</code> <em><a href="#odooprobesconfig">OdooProbesConfig</a></em></td>
+<td>Probes controls the HTTP health probes of the Odoo container.</td>
+<td>{  }</td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>env</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#envvar-v1-core">EnvVar</a> array</em></td>
+<td>Env is added to the Odoo container (Deployment and Jobs).</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>envFrom</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#envfromsource-v1-core">EnvFromSource</a> array</em></td>
+<td>EnvFrom is added to the Odoo container (Deployment and Jobs).</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>resources</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#resourcerequirements-v1-core">ResourceRequirements</a></em></td>
+<td>Resources of the Odoo container (Deployment and Jobs).</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>podSecurityContext</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#podsecuritycontext-v1-core">PodSecurityContext</a></em></td>
+<td>PodSecurityContext of the Odoo pods (Deployment and Jobs). When unset the<br />operator uses runAsUser 100, runAsGroup 101, fsGroup 101, runAsNonRoot.</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>maintenancePage</code> <em><a href="#maintenancepageconfig">MaintenancePageConfig</a></em></td>
+<td>MaintenancePage serves a status page instead of an empty Service while<br />Odoo is being installed, upgraded or started.</td>
+<td>{  }</td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>backup</code> <em><a href="#odoobackupconfig">OdooBackupConfig</a></em></td>
+<td>Backup says where this instance's backups (OdooBackup) are written and<br />how they and in-place restores (OdooRestore) run.</td>
+<td>{  }</td>
+<td>Optional: {} <br /></td>
+</tr>
+</tbody>
+</table>
+<h4 id="odoodeploymentstatus">OdooDeploymentStatus<a class="headerlink" href="#odoodeploymentstatus" title="Permanent link">&para;</a></h4>
+<p>OdooDeploymentStatus defines the observed state of OdooDeployment</p>
+<p><em>Appears in:</em>
+- <a href="#odoodeployment">OdooDeployment</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>observedGeneration</code> <em>integer</em></td>
+<td>ObservedGeneration is the spec generation the status reflects.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>phase</code> <em>string</em></td>
+<td>Phase summarises the lifecycle: Pending, Initializing, Upgrading, Running, Failed.</td>
+<td></td>
+<td>Enum: [Pending Initializing Upgrading Running Failed BackingUp Restoring] <br /></td>
+</tr>
+<tr>
+<td><code>appliedImage</code> <em>string</em></td>
+<td>AppliedImage is the image the Deployment runs (the last image a<br />maintenance Job succeeded with, or spec.image for a plain roll-out).</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>appliedUpgradeToken</code> <em>string</em></td>
+<td>AppliedUpgradeToken is the spec.upgrade.token the last upgrade ran with.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>database</code> <em><a href="#odoodatabasestatus">OdooDatabaseStatus</a></em></td>
+<td>Database records the resolved database and who provisioned it.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>readyReplicas</code> <em>integer</em></td>
+<td>ReadyReplicas mirrors the Deployment's available replicas.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>odooConfigSecretName</code> <em>string</em></td>
+<td>The name of the Secret used to store the Odoo configuration file</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>odooDataPvcName</code> <em>string</em></td>
+<td>The name of the PVC used for the Odoo data</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>initModulesInstalled</code> <em>string array</em></td>
+<td></td>
+<td>{  }</td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>currentInitJob</code> <em><a href="#maintenancejobstatus">MaintenanceJobStatus</a></em></td>
+<td>The maintenance Job (init or upgrade) currently running</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>currentOperation</code> <em><a href="#operationstatus">OperationStatus</a></em></td>
+<td>CurrentOperation is the backup, restore or cleanup in progress.</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>backup</code> <em><a href="#odoobackupschedulestatus">OdooBackupScheduleStatus</a></em></td>
+<td>Backup reports the backup schedule and the last restore drill.</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>lastMaintenanceDuration</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#duration-v1-meta">Duration</a></em></td>
+<td>LastMaintenanceDuration is how long the last successful upgrade Job<br />took, from its creation to its completion. The maintenance page uses it<br />to estimate the next one. Init Jobs are not counted: they run once and<br />take far longer than an upgrade.</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>odooAdminSecretName</code> <em>string</em></td>
+<td>The secret name for the Odoo admin password</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>conditions</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#condition-v1-meta">Condition</a> array</em></td>
+<td></td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+</tbody>
+</table>
+<h4 id="odoodrillresult">OdooDrillResult<a class="headerlink" href="#odoodrillresult" title="Permanent link">&para;</a></h4>
+<p>OdooDrillResult is the outcome of one restore drill.</p>
+<p><em>Appears in:</em>
+- <a href="#odoobackupschedulestatus">OdooBackupScheduleStatus</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>backup</code> <em>string</em></td>
+<td>Backup is the OdooBackup the drill restored.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>snapshotID</code> <em>string</em></td>
+<td>SnapshotID is the snapshot the drill restored.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>succeeded</code> <em>boolean</em></td>
+<td>Succeeded is true when the backup restored, passed every check and<br />Odoo read it.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>message</code> <em>string</em></td>
+<td>Message explains a failure, or sums up a success.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>startedAt</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
+<td>StartedAt and CompletedAt bound the drill.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>completedAt</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>job</code> <em>string</em></td>
+<td>Job ran the drill; a failed drill's Job is kept for its log.</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="odoojobconfig">OdooJobConfig<a class="headerlink" href="#odoojobconfig" title="Permanent link">&para;</a></h4>
+<p>OdooJobConfig tunes the maintenance Jobs (init and upgrade).</p>
+<p><em>Appears in:</em>
+- <a href="#odoodeploymentspec">OdooDeploymentSpec</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>activeDeadlineSeconds</code> <em>integer</em></td>
+<td></td>
+<td>3600</td>
+<td>Minimum: 1 <br /></td>
+</tr>
+<tr>
+<td><code>ttlSecondsAfterFinished</code> <em>integer</em></td>
+<td></td>
+<td>86400</td>
+<td>Minimum: 0 <br /></td>
+</tr>
+<tr>
+<td><code>backoffLimit</code> <em>integer</em></td>
+<td></td>
+<td>2</td>
+<td>Minimum: 0 <br /></td>
+</tr>
+</tbody>
+</table>
+<h4 id="odoooptionvalue">OdooOptionValue<a class="headerlink" href="#odoooptionvalue" title="Permanent link">&para;</a></h4>
+<p><em>Underlying type:</em> <em>string</em></p>
+<p>OdooOptionValue is one odoo.conf value: a single line of at most 4096 characters.</p>
+<p><em>Validation:</em>
+- MaxLength: 4096
+- Pattern: <code>^[^\n\r]*$</code></p>
+<p><em>Appears in:</em>
+- <a href="#odooconfig">OdooConfig</a></p>
+<h4 id="odooprobesconfig">OdooProbesConfig<a class="headerlink" href="#odooprobesconfig" title="Permanent link">&para;</a></h4>
+<p>OdooProbesConfig controls the HTTP probes on the Odoo container.</p>
+<p><em>Appears in:</em>
+- <a href="#odoodeploymentspec">OdooDeploymentSpec</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>enabled</code> <em>boolean</em></td>
+<td>Enabled turns the default /web/health probes on or off.</td>
+<td>true</td>
+<td></td>
+</tr>
+<tr>
+<td><code>readiness</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#probe-v1-core">Probe</a></em></td>
+<td>Readiness replaces the default readiness probe when set.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>liveness</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#probe-v1-core">Probe</a></em></td>
+<td>Liveness replaces the default liveness probe when set.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>startup</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#probe-v1-core">Probe</a></em></td>
+<td>Startup replaces the default startup probe when set.</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="odoorestore">OdooRestore<a class="headerlink" href="#odoorestore" title="Permanent link">&para;</a></h4>
+<p>OdooRestore replaces an OdooDeployment's database and filestore with a
+backup, in place. Odoo is stopped while it runs; the replaced data is kept
+for keepPrevious so the restore can be undone.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>apiVersion</code> <em>string</em></td>
+<td><code>odoo.abugharbia.com/v1</code></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>kind</code> <em>string</em></td>
+<td><code>OdooRestore</code></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>metadata</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#objectmeta-v1-meta">ObjectMeta</a></em></td>
+<td>Refer to Kubernetes API documentation for fields of <code>metadata</code>.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>spec</code> <em><a href="#odoorestorespec">OdooRestoreSpec</a></em></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>status</code> <em><a href="#odoorestorestatus">OdooRestoreStatus</a></em></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="odoorestoreconfig">OdooRestoreConfig<a class="headerlink" href="#odoorestoreconfig" title="Permanent link">&para;</a></h4>
+<p>OdooRestoreConfig holds the defaults of in-place restores.</p>
+<p><em>Appears in:</em>
+- <a href="#odoobackupconfig">OdooBackupConfig</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>keepPrevious</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#duration-v1-meta">Duration</a></em></td>
+<td>KeepPrevious is how long the database and files a restore replaced<br />are kept, so the restore can be undone.</td>
+<td>72h</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="odoorestorespec">OdooRestoreSpec<a class="headerlink" href="#odoorestorespec" title="Permanent link">&para;</a></h4>
+<p>OdooRestoreSpec says which backup replaces an instance's data.</p>
+<p><em>Appears in:</em>
+- <a href="#odoorestore">OdooRestore</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>odooDeployment</code> <em>string</em></td>
+<td>OdooDeployment whose database and filestore are replaced, in the same namespace.</td>
+<td></td>
+<td>MaxLength: 253 <br />MinLength: 1 <br /></td>
+</tr>
+<tr>
+<td><code>backup</code> <em>string</em></td>
+<td>Backup is the OdooBackup to restore.</td>
+<td></td>
+<td>MinLength: 1 <br /></td>
+</tr>
+<tr>
+<td><code>snapshotID</code> <em>string</em></td>
+<td>SnapshotID is a restic snapshot in the instance's own repository on<br />its first store (spec.backup.stores[0]), for a backup that has no<br />OdooBackup any more.</td>
+<td></td>
+<td>Pattern: <code>^[0-9a-f]\{8,64\}$</code> <br /></td>
+</tr>
+<tr>
+<td><code>undo</code> <em>string</em></td>
+<td>Undo reverses the OdooRestore of this name: the database and files it<br />replaced go back in place, and the ones it restored are kept as the<br />previous data of this restore. Refused once that data has been<br />removed (keepPrevious passed) or when another restore ran on the<br />instance since.</td>
+<td></td>
+<td>MinLength: 1 <br /></td>
+</tr>
+<tr>
+<td><code>keepPrevious</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#duration-v1-meta">Duration</a></em></td>
+<td>KeepPrevious is how long the replaced database and files are kept<br />for an undo. Overrides spec.backup.restore.keepPrevious.</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+</tbody>
+</table>
+<h4 id="odoorestorestatus">OdooRestoreStatus<a class="headerlink" href="#odoorestorestatus" title="Permanent link">&para;</a></h4>
+<p>OdooRestoreStatus describes the restore.</p>
+<p><em>Appears in:</em>
+- <a href="#odoorestore">OdooRestore</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>phase</code> <em>string</em></td>
+<td>Phase: Pending, Stopping (Odoo is being stopped), Restoring,<br />Completed or Failed.</td>
+<td></td>
+<td>Enum: [Pending Stopping Restoring Completed Failed] <br /></td>
+</tr>
+<tr>
+<td><code>message</code> <em>string</em></td>
+<td>Message explains the phase in a sentence.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>suffix</code> <em>string</em></td>
+<td>Suffix names the database and filestore folders of this restore:<br />&lt;db&gt;<em>restore</em>&lt;suffix&gt; while restoring, &lt;db&gt;<em>prev</em>&lt;suffix&gt; for the<br />data it replaced.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>store</code> <em>string</em></td>
+<td>Store and SnapshotID are the backup that was restored.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>snapshotID</code> <em>string</em></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>image</code> <em>string</em></td>
+<td>Image is the Odoo image recorded in the backup; the instance is<br />started on it.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>odooVersion</code> <em>string</em></td>
+<td>OdooVersion is the Odoo series in the backup.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>job</code> <em>string</em></td>
+<td>Job is the Job running the restore. Attempts counts the Jobs that<br />ran it.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>attempts</code> <em>integer</em></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>liveChanged</code> <em>boolean</em></td>
+<td>LiveChanged is true once the restore may have renamed the live<br />database or files; from then on it is finished by retrying, never<br />abandoned.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>retryAfter</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
+<td>RetryAfter is when the next attempt (of the restore or its cleanup)<br />starts after a failed one.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>startedAt</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>completedAt</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>previous</code> <em><a href="#restoreprevious">RestorePrevious</a></em></td>
+<td>Previous is the data this restore replaced.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>cleanedUp</code> <em>boolean</em></td>
+<td>CleanedUp is true once the cleanup Job deleted what the restore left<br />behind (the replaced data once keepPrevious passed, any half-restored<br />copy, its journal). CleanupAttempts counts its Jobs.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>cleanupAttempts</code> <em>integer</em></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>warnings</code> <em>string array</em></td>
+<td>Warnings found while checking the restored data.</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="odooupgradeconfig">OdooUpgradeConfig<a class="headerlink" href="#odooupgradeconfig" title="Permanent link">&para;</a></h4>
+<p>OdooUpgradeConfig describes how module upgrades (-u) are triggered.</p>
+<p><em>Appears in:</em>
+- <a href="#odoodeploymentspec">OdooDeploymentSpec</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>modules</code> <em>string array</em></td>
+<td>Modules to upgrade (-u) when an upgrade is triggered. Empty means the new<br />image is rolled out without running a maintenance Job.</td>
+<td></td>
+<td>items:Pattern: <code>^[A-Za-z0-9_]+$</code> <br /></td>
+</tr>
+<tr>
+<td><code>onImageChange</code> <em>boolean</em></td>
+<td>OnImageChange triggers an upgrade whenever spec.image changes.</td>
+<td>true</td>
+<td></td>
+</tr>
+<tr>
+<td><code>token</code> <em>string</em></td>
+<td>Token triggers an upgrade whenever its value changes; use it to run<br />upgrades on demand (e.g. for production, together with onImageChange: false).</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="operationstatus">OperationStatus<a class="headerlink" href="#operationstatus" title="Permanent link">&para;</a></h4>
+<p>OperationStatus records the backup, restore or cleanup Job an instance is
+running. Only one Job (init, upgrade, backup, restore or cleanup) runs per
+instance at a time.</p>
+<p><em>Appears in:</em>
+- <a href="#odoodeploymentstatus">OdooDeploymentStatus</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>kind</code> <em>string</em></td>
+<td>Kind: backup, restore, cleanup or drill.</td>
+<td></td>
+<td>Enum: [backup restore cleanup drill] <br /></td>
+</tr>
+<tr>
+<td><code>name</code> <em>string</em></td>
+<td>Name of the OdooBackup or OdooRestore.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>job</code> <em>string</em></td>
+<td>Job running it; empty while the operator is still stopping Odoo for it.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>stoppedOdoo</code> <em>boolean</em></td>
+<td>StoppedOdoo is true when the operation scaled Odoo to zero and must<br />bring it back.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>startedAt</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
+<td>StartedAt is when the operation started.</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="pvcstore">PVCStore<a class="headerlink" href="#pvcstore" title="Permanent link">&para;</a></h4>
+<p>PVCStore is a PersistentVolumeClaim in the store's namespace, mounted into
+the backup Jobs. A ReadWriteOnce claim only works when the Jobs can run on
+the node that has it attached.</p>
+<p><em>Appears in:</em>
+- <a href="#odoobackupstorespec">OdooBackupStoreSpec</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>claimName</code> <em>string</em></td>
+<td>ClaimName of the PersistentVolumeClaim.</td>
+<td></td>
+<td>MinLength: 1 <br /></td>
+</tr>
+<tr>
+<td><code>subPath</code> <em><a href="#storepath">StorePath</a></em></td>
+<td>SubPath is a folder inside the claim. Repositories go under &lt;subPath&gt;/&lt;namespace&gt;/&lt;deployment&gt;/.</td>
+<td></td>
+<td>MaxLength: 512 <br />Pattern: <code>^/?([A-Za-z0-9._~+@=-]+(/[A-Za-z0-9._~+@=-]+)*/?)?$</code> <br /></td>
+</tr>
+</tbody>
+</table>
+<h4 id="persistentvolumeclaimspec">PersistentVolumeClaimSpec<a class="headerlink" href="#persistentvolumeclaimspec" title="Permanent link">&para;</a></h4>
+<p><em>Appears in:</em>
+- <a href="#odoodeploymentspec">OdooDeploymentSpec</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>size</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#quantity-resource-api">Quantity</a></em></td>
+<td>StorageSize defines the size of the new persistent volume claim</td>
+<td>10Gi</td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>storageClassName</code> <em>string</em></td>
+<td>StorageClass is the storageClassName used to create a new persistent volume claim</td>
+<td>standard</td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>accessModes</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#persistentvolumeaccessmode-v1-core">PersistentVolumeAccessMode</a> array</em></td>
+<td>AccessMode defines the access mode of the new persistent volume claim</td>
+<td>[ReadWriteOnce]</td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>deletionPolicy</code> <em><a href="#deletionpolicy">DeletionPolicy</a></em></td>
+<td>DeletionPolicy controls whether the filestore PVC is garbage collected<br />with the OdooDeployment (Delete) or left behind (Retain, the default).</td>
+<td>Retain</td>
+<td>Enum: [Retain Delete] <br /></td>
+</tr>
+</tbody>
+</table>
+<h4 id="restoreprevious">RestorePrevious<a class="headerlink" href="#restoreprevious" title="Permanent link">&para;</a></h4>
+<p>RestorePrevious is the data an OdooRestore replaced.</p>
+<p><em>Appears in:</em>
+- <a href="#odoorestorestatus">OdooRestoreStatus</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>state</code> <em>string</em></td>
+<td>State: Kept, Removed, Undone or None.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>database</code> <em>string</em></td>
+<td>Database is the replaced database's name while it is kept.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>filestore</code> <em>string</em></td>
+<td>Filestore is the replaced filestore folder, under &lt;dataDir&gt;/filestore/.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>keptUntil</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
+<td>KeptUntil is when the replaced data is deleted.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>undoneBy</code> <em>string</em></td>
+<td>UndoneBy is the OdooRestore that put the data back.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>image</code> <em>string</em></td>
+<td>Image and UpgradeToken are what the instance ran on the replaced<br />data; an undo starts Odoo on them again.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>upgradeToken</code> <em>string</em></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="s3store">S3Store<a class="headerlink" href="#s3store" title="Permanent link">&para;</a></h4>
+<p>S3Store is an S3 bucket, on AWS or any S3-compatible service.</p>
+<p><em>Appears in:</em>
+- <a href="#odoobackupstorespec">OdooBackupStoreSpec</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>endpoint</code> <em>string</em></td>
+<td>Endpoint of an S3-compatible service, such as https://s3.example.com.<br />Leave it out for AWS.</td>
+<td></td>
+<td>Pattern: <code>^https?://[^/\s]+/?$</code> <br /></td>
+</tr>
+<tr>
+<td><code>region</code> <em>string</em></td>
+<td>Region of the bucket. Optional for most S3-compatible services.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>bucket</code> <em>string</em></td>
+<td>Bucket holding the backups.</td>
+<td></td>
+<td>MaxLength: 63 <br />MinLength: 3 <br />Pattern: <code>^[a-z0-9][a-z0-9.-]*[a-z0-9]$</code> <br /></td>
+</tr>
+<tr>
+<td><code>path</code> <em><a href="#storepath">StorePath</a></em></td>
+<td>Path inside the bucket. Repositories go under &lt;path&gt;/&lt;namespace&gt;/&lt;deployment&gt;/.</td>
+<td></td>
+<td>MaxLength: 512 <br />Pattern: <code>^/?([A-Za-z0-9._~+@=-]+(/[A-Za-z0-9._~+@=-]+)*/?)?$</code> <br /></td>
+</tr>
+<tr>
+<td><code>forcePathStyle</code> <em>boolean</em></td>
+<td>ForcePathStyle addresses the bucket as &lt;endpoint&gt;/&lt;bucket&gt; instead of<br />&lt;bucket&gt;.&lt;endpoint&gt;. Most S3-compatible services need it; AWS does not.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>credentialsSecret</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#localobjectreference-v1-core">LocalObjectReference</a></em></td>
+<td>CredentialsSecret holds AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="sftpstore">SFTPStore<a class="headerlink" href="#sftpstore" title="Permanent link">&para;</a></h4>
+<p>SFTPStore is a folder on an SSH server.</p>
+<p><em>Appears in:</em>
+- <a href="#odoobackupstorespec">OdooBackupStoreSpec</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>host</code> <em>string</em></td>
+<td>Host of the SSH server.</td>
+<td></td>
+<td>MinLength: 1 <br />Pattern: <code>^[A-Za-z0-9.:\[\]-]+$</code> <br /></td>
+</tr>
+<tr>
+<td><code>port</code> <em>integer</em></td>
+<td>Port of the SSH server.</td>
+<td>22</td>
+<td>Maximum: 65535 <br />Minimum: 1 <br /></td>
+</tr>
+<tr>
+<td><code>user</code> <em>string</em></td>
+<td>User to log in as.</td>
+<td></td>
+<td>MinLength: 1 <br />Pattern: <code>^[A-Za-z0-9._-]+$</code> <br /></td>
+</tr>
+<tr>
+<td><code>path</code> <em><a href="#storepath">StorePath</a></em></td>
+<td>Path on the server, relative to the user's home folder unless it<br />starts with "/". Repositories go under &lt;path&gt;/&lt;namespace&gt;/&lt;deployment&gt;/.</td>
+<td></td>
+<td>MaxLength: 512 <br />Pattern: <code>^/?([A-Za-z0-9._~+@=-]+(/[A-Za-z0-9._~+@=-]+)*/?)?$</code> <br /></td>
+</tr>
+<tr>
+<td><code>sshSecret</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#localobjectreference-v1-core">LocalObjectReference</a></em></td>
+<td>SSHSecret holds the private key and the server's host key<br />(known_hosts). The private key is under id_ed25519 or, as in Secrets of<br />type kubernetes.io/ssh-auth, ssh-privatekey (id_ed25519 wins when both<br />are set). Any unencrypted Ed25519, ECDSA or RSA key works, in OpenSSH or<br />PEM format; keys with a passphrase do not. The host key is always<br />checked.</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="storecheck">StoreCheck<a class="headerlink" href="#storecheck" title="Permanent link">&para;</a></h4>
+<p>StoreCheck checks the store's repositories on a schedule.</p>
+<p><em>Appears in:</em>
+- <a href="#odoobackupstorespec">OdooBackupStoreSpec</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>schedule</code> <em>string</em></td>
+<td>Schedule in cron format ("0 5 * * 0" or @weekly); empty turns checks off.</td>
+<td></td>
+<td>MaxLength: 100 <br /></td>
+</tr>
+<tr>
+<td><code>readDataParts</code> <em>integer</em></td>
+<td>ReadDataParts: each check reads one of this many parts of the stored<br />data, the next part on the next run, so all data is read every<br />ReadDataParts checks. 1 reads everything every time; 0 reads only the<br />repository structure.</td>
+<td>7</td>
+<td>Maximum: 100 <br />Minimum: 0 <br /></td>
+</tr>
+</tbody>
+</table>
+<h4 id="storepath">StorePath<a class="headerlink" href="#storepath" title="Permanent link">&para;</a></h4>
+<p><em>Underlying type:</em> <em>string</em></p>
+<p>StorePath is a folder inside a store: relative segments separated by "/",
+never "..". A leading "/" makes an SFTP path absolute; elsewhere it is
+ignored.</p>
+<p><em>Validation:</em>
+- MaxLength: 512
+- Pattern: <code>^/?([A-Za-z0-9._~+@=-]+(/[A-Za-z0-9._~+@=-]+)*/?)?$</code></p>
+<p><em>Appears in:</em>
+- <a href="#pvcstore">PVCStore</a>
+- <a href="#s3store">S3Store</a>
+- <a href="#sftpstore">SFTPStore</a></p>
+<h4 id="storeschedule">StoreSchedule<a class="headerlink" href="#storeschedule" title="Permanent link">&para;</a></h4>
+<p>StoreSchedule runs a store-wide task on a schedule.</p>
+<p><em>Appears in:</em>
+- <a href="#odoobackupstorespec">OdooBackupStoreSpec</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>schedule</code> <em>string</em></td>
+<td>Schedule in cron format ("0 4 * * 0" or @weekly); empty turns it off.</td>
+<td></td>
+<td>MaxLength: 100 <br /></td>
+</tr>
+</tbody>
+</table>
+<h4 id="storetaskstatus">StoreTaskStatus<a class="headerlink" href="#storetaskstatus" title="Permanent link">&para;</a></h4>
+<p>StoreTaskStatus is the outcome of the latest check or prune of a store.</p>
+<p><em>Appears in:</em>
+- <a href="#odoobackupstorestatus">OdooBackupStoreStatus</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>time</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
+<td>Time the task finished.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>result</code> <em>string</em></td>
+<td>Result: Passed or Failed.</td>
+<td></td>
+<td>Enum: [Passed Failed] <br /></td>
+</tr>
+<tr>
+<td><code>message</code> <em>string</em></td>
+<td>Message sums up the outcome, or names what failed.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>job</code> <em>string</em></td>
+<td>Job that ran it; a failed task's Job is kept for its log.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>repositories</code> <em>string array</em></td>
+<td>Repositories the task went through.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>part</code> <em>string</em></td>
+<td>Part is the part of the data a check read, such as 3/7.</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../../operations/troubleshooting/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Troubleshooting">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Troubleshooting
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../metrics/" class="md-footer__link md-footer__link--next" aria-label="Next: Metrics">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Metrics
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      MIT License, © Mohanad Abugharbia
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.top", "navigation.footer", "content.code.copy", "content.action.edit", "search.highlight"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"provider": "mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
