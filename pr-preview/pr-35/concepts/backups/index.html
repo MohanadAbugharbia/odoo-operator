@@ -499,6 +499,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#taking-a-backup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Taking a backup
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#what-a-backup-holds" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -514,6 +525,17 @@
     <span class="md-ellipsis">
       
         Phases of an OdooBackup
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#restoring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Restoring
       
     </span>
   </a>
@@ -1269,6 +1291,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#taking-a-backup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Taking a backup
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#what-a-backup-holds" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1284,6 +1317,17 @@
     <span class="md-ellipsis">
       
         Phases of an OdooBackup
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#restoring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Restoring
       
     </span>
   </a>
@@ -1337,6 +1381,36 @@ per instance under <code>&lt;path&gt;/&lt;namespace&gt;/&lt;deployment&gt;/</cod
 in <code>encryptionKeySecret</code> (keep a copy of it outside the cluster: without it no
 backup can be read). The kinds of store and their settings are in <a href="../../guides/backup-stores/">Set up a
 backup store</a>.</p>
+<h2 id="taking-a-backup">Taking a backup<a class="headerlink" href="#taking-a-backup" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>flowchart LR
+  subgraph cluster[Kubernetes cluster]
+    op[odoo-operator&lt;br/&gt;one Job per instance at a time]
+    odoo[Odoo&lt;br/&gt;keeps running, unless offline]
+    job[backup Job]
+    pg[(PostgreSQL&lt;br/&gt;the instance's database)]
+    fs[(filestore volume)]
+  end
+  subgraph offsite[Stores]
+    store[(first store&lt;br/&gt;restic repository)]
+    copies[(other stores&lt;br/&gt;optional)]
+  end
+  op -- "on schedule or on demand" --&gt; job
+  op -. "stops it for an offline backup" .-&gt; odoo
+  odoo -- "writes attachments" --&gt; fs
+  job -- "1. dump, file list and row counts,&lt;br/&gt;one database snapshot" --&gt; pg
+  job -- "2. copy the files" --&gt; fs
+  job -- "3. one restic snapshot" --&gt; store
+  store -- "4. restic copy" --&gt; copies</code></pre>
+<ol>
+<li>The Job dumps the database and, from the same database snapshot, lists
+   the files the database refers to and counts each table's rows.</li>
+<li>It copies those files from the filestore. A file deleted since the dump
+   is taken from the previous backup.</li>
+<li>It writes <code>dump.sql</code>, <code>manifest.json</code> and <code>filestore/</code> as one restic
+   snapshot to the first store, then applies retention there.</li>
+<li>It copies the snapshot to every other store listed, and applies retention
+   in each.</li>
+</ol>
 <h2 id="what-a-backup-holds">What a backup holds<a class="headerlink" href="#what-a-backup-holds" title="Permanent link">&para;</a></h2>
 <p>A backup is one restic snapshot holding <code>dump.sql</code> (a plain <code>pg_dump</code>
 taken with a <code>pg_dump</code> of the server's major), <code>manifest.json</code> (Odoo's own
@@ -1387,6 +1461,43 @@ or <code>consistency: Offline</code>, Odoo is stopped while the backup runs.</p>
 </table>
 <p>Deleting an OdooBackup does not delete the snapshot, and deleting an
 instance never deletes its backups.</p>
+<h2 id="restoring">Restoring<a class="headerlink" href="#restoring" title="Permanent link">&para;</a></h2>
+<pre class="mermaid"><code>flowchart LR
+  subgraph cluster[Kubernetes cluster]
+    restore[OdooRestore&lt;br/&gt;names a backup]
+    op[odoo-operator]
+    odoo[Odoo&lt;br/&gt;scaled to 0]
+    job[restore Job]
+    pg[(PostgreSQL&lt;br/&gt;db_restore beside db)]
+    fs[(filestore volume&lt;br/&gt;db_restore beside db)]
+  end
+  store[(store holding&lt;br/&gt;the snapshot)]
+  restore --&gt; op
+  op -- "1. stop Odoo" --&gt; odoo
+  op --&gt; job
+  store -- "2. fetch the snapshot" --&gt; job
+  job -- "3. load dump.sql" --&gt; pg
+  job -- "4. write the files" --&gt; fs
+  job -- "5. check, then 6. swap&lt;br/&gt;database and files by renaming" --&gt; pg
+  op -- "7. start Odoo" --&gt; odoo</code></pre>
+<p>Nothing live changes until the swap:</p>
+<ol>
+<li>Odoo is stopped (the maintenance page shows, when enabled).</li>
+<li>The Job fetches the snapshot, from a copy in another store when the
+   backup's own store is not ready.</li>
+<li>It loads <code>dump.sql</code> into a new database, <code>&lt;db&gt;_restore_&lt;suffix&gt;</code>.</li>
+<li>It writes the files into <code>filestore/&lt;db&gt;_restore_&lt;suffix&gt;</code>, beside the
+   live ones.</li>
+<li>It checks the result: every table's row count against the backup, every
+   attachment's file, and a sample of files against their checksum. A failed
+   check stops the restore with the live data untouched.</li>
+<li>It swaps by renaming: the live database and files become
+   <code>&lt;db&gt;_prev_&lt;suffix&gt;</code>, kept for <code>keepPrevious</code> (72 hours by default) so the
+   restore can be undone, and the restored ones take their names.</li>
+<li>Odoo starts on the image recorded in the backup.</li>
+</ol>
+<p>The details, and how to undo a restore, are in
+<a href="../../guides/restore/">Restore and undo</a>.</p>
 <h2 id="the-backup-image">The backup image<a class="headerlink" href="#the-backup-image" title="Permanent link">&para;</a></h2>
 <p>The Jobs run <code>ghcr.io/mohanadabugharbia/odoo-operator-backup</code>
 at the operator's own tag (derived from the operator's image; <code>--backup-image</code>
