@@ -773,7 +773,7 @@ type OdooDrillResult struct {
 	// SnapshotID is the snapshot the drill restored.
 	SnapshotID string `json:"snapshotID,omitempty"`
 	// Succeeded is true when the backup restored, passed every check and
-	// Odoo loaded it.
+	// Odoo read it.
 	Succeeded bool `json:"succeeded"`
 	// Message explains a failure, or sums up a success.
 	Message string `json:"message,omitempty"`

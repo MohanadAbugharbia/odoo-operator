@@ -175,7 +175,7 @@ func drillSummary(b *odoov1.OdooBackup, snapshot string, res result.Result) stri
 	if b != nil {
 		name = b.Name + " "
 	}
-	msg := fmt.Sprintf("backup %s(snapshot %s) restored, passed its checks and Odoo loaded it", name, short(snapshot))
+	msg := fmt.Sprintf("backup %s(snapshot %s) restored, passed its checks and Odoo read it", name, short(snapshot))
 	if len(res.MissingModules) > 0 {
 		msg += "; it lacks modules " + strings.Join(res.MissingModules, ", ")
 	}

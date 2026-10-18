@@ -104,7 +104,7 @@ var _ = Describe("Restore drills", func() {
 		odoo := container(spec.InitContainers, "odoo")
 		Expect(odoo).NotTo(BeNil())
 		Expect(odoo.Image).To(Equal("odoo:18.0-backup"))
-		Expect(strings.Join(odoo.Command, " ")).To(ContainSubstring("--stop-after-init --no-http --max-cron-threads=0 -d " + scratch))
+		Expect(strings.Join(odoo.Command, " ")).To(ContainSubstring("odoo shell -c /opt/odoo/odoo.conf --no-http --max-cron-threads=0 -d " + scratch))
 		Expect(strings.Join(spec.Containers[0].Command, " ")).To(ContainSubstring("drill-finish"))
 		Expect(*job.Spec.BackoffLimit).To(BeZero())
 		for _, v := range spec.Volumes {
@@ -130,7 +130,7 @@ var _ = Describe("Restore drills", func() {
 		Expect(d.Succeeded).To(BeTrue())
 		Expect(d.Backup).To(Equal(b.Name))
 		Expect(d.SnapshotID).To(Equal(completedSnapshot))
-		Expect(d.Message).To(ContainSubstring("Odoo loaded it"))
+		Expect(d.Message).To(ContainSubstring("Odoo read it"))
 		Expect(d.Message).To(ContainSubstring("lacks modules sale"))
 		Expect(d.Message).To(ContainSubstring("already missing"))
 		Expect(d.Job).To(BeEmpty())

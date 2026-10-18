@@ -125,10 +125,11 @@ func TestDrillFinishWithoutLoad(t *testing.T) {
 }
 
 func TestOdooErrors(t *testing.T) {
-	if got := odooErrors("a\nb\nc\nd\ne\nf\ng"); got != "c\nd\ne\nf\ng" {
+	if got := odooErrors("a\nb\nc\nd\ne\nf\ng"); got != "e\nf\ng" {
 		t.Fatalf("last lines: %q", got)
 	}
-	if got := odooErrors("x\n2026 1 ERROR db m: boom\ny\n2026 1 CRITICAL db m: worse\n"); got != "2026 1 ERROR db m: boom\n2026 1 CRITICAL db m: worse" {
+	log := "x\n2026 1 ERROR db m: boom\ny\n2026 1 CRITICAL db m: worse\nTraceback (most recent call last):\n  ...\nKeyError: 'z'\n"
+	if got := odooErrors(log); got != "2026 1 ERROR db m: boom\n2026 1 CRITICAL db m: worse\nTraceback (most recent call last):\n...\nKeyError: 'z'" {
 		t.Fatalf("error lines: %q", got)
 	}
 }

@@ -41,8 +41,9 @@ import (
 //  1. DrillLoad restores the snapshot into the scratch database
 //     <db>_drill_<suffix> and the scratch folder, checks it as a restore
 //     would, and writes its outcome to DrillStateFile.
-//  2. The instance's Odoo image loads the registry of the scratch database
-//     (--stop-after-init) when the load succeeded, and writes its exit code
+//  2. The backup's Odoo image reads the scratch database (odoo shell: the
+//     registry, core records, attachments) when the load succeeded, and
+//     writes its exit code
 //     to DrillOdooExitFile and its log to DrillOdooLogFile.
 //  3. DrillFinish drops the scratch database and reports the whole drill.
 //
@@ -205,7 +206,7 @@ func DrillFinish(ctx context.Context, e *Env, o DrillOptions) result.Result {
 	return res
 }
 
-// odooOutcome reads how Odoo's registry load ended.
+// odooOutcome reads how Odoo's read of the restored database ended.
 func odooOutcome(root string) error {
 	code, err := os.ReadFile(filepath.Join(root, DrillOdooExitFile))
 	if errors.Is(err, os.ErrNotExist) {
@@ -222,11 +223,12 @@ func odooOutcome(root string) error {
 		return nil
 	}
 	log, _ := os.ReadFile(filepath.Join(root, DrillOdooLogFile))
-	return fmt.Errorf("the Odoo container could not load the restored database (exit code %d): %s", n, odooErrors(string(log)))
+	return fmt.Errorf("the Odoo container could not read the restored database (exit code %d): %s", n, odooErrors(string(log)))
 }
 
 // odooErrors picks the lines of an Odoo log that say what went wrong: its
-// ERROR and CRITICAL lines, or else its last lines.
+// first ERROR and CRITICAL lines, then its last lines (where a traceback
+// ends).
 func odooErrors(log string) string {
 	lines := strings.Split(strings.TrimSpace(log), "\n")
 	var picked []string
@@ -235,11 +237,15 @@ func odooErrors(log string) string {
 			picked = append(picked, strings.TrimSpace(l))
 		}
 	}
-	if len(picked) == 0 {
-		if len(lines) > 5 {
-			lines = lines[len(lines)-5:]
-		}
-		picked = lines
+	picked = limit(picked, 3)
+	last := lines
+	if len(last) > 3 {
+		last = last[len(last)-3:]
 	}
-	return tail(strings.Join(limit(picked, 5), "\n"))
+	for _, l := range last {
+		if l = strings.TrimSpace(l); l != "" && !contains(picked, l) {
+			picked = append(picked, l)
+		}
+	}
+	return tail(strings.Join(picked, "\n"))
 }

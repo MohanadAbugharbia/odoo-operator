@@ -643,11 +643,23 @@ type Drill struct {
 	ExpectModules []string
 }
 
-// drillScript runs Odoo when the load succeeded and records how it ended,
-// exiting 0 either way so the last step always drops the scratch database.
-// The file names are the agent's (agent.DrillLoadedFile and the rest).
+// drillScript runs "odoo shell" on the restored database when the load
+// succeeded: Odoo loads its registry, reads records of core models through
+// the ORM and reads attachments from the scratch filestore. It records how
+// that ended, exiting 0 either way so the last step always drops the scratch
+// database. The file names are the agent's (agent.DrillLoadedFile and the
+// rest).
 const drillScript = `[ -f "$DRILL_ROOT/loaded" ] || exit 0
-"$@" >"$DRILL_ROOT/odoo.log" 2>&1
+"$@" >"$DRILL_ROOT/odoo.log" 2>&1 <<'PY'
+for model in ("res.company", "res.users", "res.partner"):
+    env[model].sudo().with_context(active_test=False).search([], limit=1).read()
+atts = env["ir.attachment"].sudo().search(
+    [("store_fname", "!=", False), "|", ("res_field", "=", False), ("res_field", "!=", False)], limit=20)
+bad = [a.store_fname for a in atts if len(a.raw or b"") != a.file_size]
+if bad:
+    raise SystemExit("Odoo cannot read %d attachment(s), e.g. %s" % (len(bad), ", ".join(bad[:3])))
+print("drill: Odoo read core records and %d attachments" % len(atts))
+PY
 rc=$?
 cat "$DRILL_ROOT/odoo.log"
 echo "$rc" >"$DRILL_ROOT/odoo.exit"
@@ -655,7 +667,7 @@ exit 0`
 
 // DrillJob renders the Job of a restore drill: the backup agent restores
 // the snapshot into a scratch database and an emptyDir and checks it, the
-// instance's Odoo image loads it (--stop-after-init), and the agent drops
+// backup's Odoo image reads it (odoo shell), and the agent drops
 // the scratch database and reports. It never mounts the data volume.
 func DrillJob(p Params, d Drill) (batchv1.Job, error) {
 	od := p.Instance
@@ -691,7 +703,7 @@ func DrillJob(p Params, d Drill) (batchv1.Job, error) {
 	odooCmd := make([]string, 0, 13+len(od.Spec.OdooCommand))
 	odooCmd = append(odooCmd, "sh", "-c", drillScript, "sh")
 	odooCmd = append(odooCmd, od.Spec.OdooCommand...)
-	odooCmd = append(odooCmd, "-c", odoov1.OdooConfigFile, "--stop-after-init", "--no-http",
+	odooCmd = append(odooCmd, "shell", "-c", odoov1.OdooConfigFile, "--no-http",
 		"--max-cron-threads=0", "-d", scratch, "--data-dir", layout.DrillRoot)
 	odoo := corev1.Container{
 		Name:            "odoo",
