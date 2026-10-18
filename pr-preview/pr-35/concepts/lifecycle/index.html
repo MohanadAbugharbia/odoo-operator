@@ -1257,13 +1257,14 @@
 </tr>
 <tr>
 <td><code>Failed</code></td>
-<td>A maintenance Job failed. Inspect it with <code>kubectl logs job/&lt;name&gt;</code>; deleting the Job retries it.</td>
+<td>Odoo is stopped and needs attention. Usually a maintenance Job failed: the <code>Degraded</code> condition names the Job and the <code>kubectl logs</code> command to read it. Deleting the Job retries it, and so does its <code>spec.jobs.ttlSecondsAfterFinished</code> (24 hours by default) running out, so read its log before then. Also <code>DatabaseNameChanged</code> (the name resolved from <code>spec.database.nameFromSecret</code> changed) and a restore abandoned in the middle of its swap (<code>RestoreIncomplete</code>).</td>
 </tr>
 </tbody>
 </table>
 <p><code>status.currentInitJob.startedAt</code> records when the running Job was created and
 <code>status.lastMaintenanceDuration</code> how long the last successful upgrade took.</p>
-<p>Conditions: <code>Ready</code>, <code>DatabaseReady</code>, <code>Initialized</code> and <code>Degraded</code> (True only when
+<p>Conditions: <code>Ready</code>, <code>DatabaseReady</code>, <code>Initialized</code>, <code>BackupSchedule</code> (a backup
+or drill schedule that cannot be read) and <code>Degraded</code> (True only when
 something is wrong; its reason names the problem, e.g. <code>DatabaseMissing</code>,
 <code>InitJobFailed</code>, <code>QuotaExceeded</code>, <code>ImagePullFailed</code>, <code>DatabaseDropFailed</code>).</p>
 <p>The <code>&lt;name&gt;-http</code> and <code>&lt;name&gt;-poll</code> Services are created on the first

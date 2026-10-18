@@ -1234,7 +1234,8 @@ of deleted backups):</p>
 <span class="w">    </span><span class="nt">schedule</span><span class="p">:</span><span class="w"> </span><span class="s">"0</span><span class="nv"> </span><span class="s">2</span><span class="nv"> </span><span class="s">*</span><span class="nv"> </span><span class="s">*</span><span class="nv"> </span><span class="s">6"</span>
 <span class="w">  </span><span class="nt">timeZone</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Europe/Berlin</span>
 </code></pre></div>
-<p>One Job runs at a time per store, prune first when both are due, over the
+<p>Checks and prunes only run while the store is <code>Ready</code>. One Job runs at a
+time per store, prune first when both are due, over the
 repositories of every instance in the namespace that lists the store. The
 outcome is in <code>status.lastCheck</code> and <code>status.lastPrune</code> (with the part read,
 the repositories and what they hold); a failed task keeps its Job for its log

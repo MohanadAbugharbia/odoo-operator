@@ -771,6 +771,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#scrape-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scrape it
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#alerts" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1264,6 +1275,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#scrape-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scrape it
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#alerts" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1311,11 +1333,46 @@
 
 
 <h1 id="monitoring-and-alerts">Monitoring and alerts<a class="headerlink" href="#monitoring-and-alerts" title="Permanent link">&para;</a></h1>
-<p>The manager serves <code>/metrics</code> (by default on <code>:8443</code>, HTTPS, with Kubernetes
-authentication and authorization; <code>--metrics-bind-address=:8080
---metrics-secure=false</code> serves plain HTTP instead). Besides the
-controller-runtime defaults (<code>controller_runtime_reconcile_*</code>, <code>workqueue_*</code>,
-<code>rest_client_*</code>, Go and process metrics) it exports the series in the <a href="../../reference/metrics/">metrics reference</a>.</p>
+<p>The manager serves <code>/metrics</code> on <code>:8443</code> over HTTPS, with Kubernetes
+authentication and authorization, through the
+<code>odoo-operator-controller-manager-metrics-service</code> Service. That port comes
+from the install bundle (<code>--metrics-bind-address=:8443</code>); the binary alone
+serves no metrics. <code>--metrics-bind-address=:8080 --metrics-secure=false</code>
+serves plain HTTP instead. Besides the controller-runtime defaults
+(<code>controller_runtime_reconcile_*</code>, <code>workqueue_*</code>, <code>rest_client_*</code>, Go and
+process metrics) it exports the series in the <a href="../../reference/metrics/">metrics reference</a>.</p>
+<h2 id="scrape-it">Scrape it<a class="headerlink" href="#scrape-it" title="Permanent link">&para;</a></h2>
+<p>The install bundle does not include a ServiceMonitor. With the Prometheus
+Operator, this one scrapes the HTTPS endpoint:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">monitoring.coreos.com/v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ServiceMonitor</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">odoo-operator</span>
+<span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">odoo-operator-system</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">selector</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">matchLabels</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">control-plane</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">controller-manager</span>
+<span class="w">  </span><span class="nt">endpoints</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https</span>
+<span class="w">      </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/metrics</span>
+<span class="w">      </span><span class="nt">scheme</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https</span>
+<span class="w">      </span><span class="nt">bearerTokenFile</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/var/run/secrets/kubernetes.io/serviceaccount/token</span>
+<span class="w">      </span><span class="nt">tlsConfig</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">insecureSkipVerify</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">   </span><span class="c1"># the manager's certificate is self-signed</span>
+<span class="w">      </span><span class="nt">honorLabels</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</code></pre></div>
+<ul>
+<li><strong><code>honorLabels: true</code> is required.</strong> The per-instance series carry the
+  namespace of their OdooDeployment in <code>namespace</code>; without it Prometheus
+  renames that label to <code>exported_namespace</code>, and the alerts and the
+  <a href="../grafana-dashboard/">dashboard</a> lose it.</li>
+<li><strong>Prometheus needs read access to <code>/metrics</code>.</strong> Bind its service account to
+  the <code>odoo-operator-metrics-reader</code> ClusterRole, which the bundle installs.</li>
+<li><a href="https://github.com/MohanadAbugharbia/odoo-operator/tree/main/config/prometheus"><code>config/prometheus/</code></a>
+  holds the same ServiceMonitor and the example alerts as a kustomize base. It
+  is not part of the install bundle.</li>
+</ul>
 <h2 id="alerts">Alerts<a class="headerlink" href="#alerts" title="Permanent link">&para;</a></h2>
 <p><a href="https://github.com/MohanadAbugharbia/odoo-operator/blob/main/config/prometheus/backup-alerts.yaml"><code>config/prometheus/backup-alerts.yaml</code></a> holds example alerts on these metrics
 (stale or failed backups, failed copies, restores and drills, stores that are

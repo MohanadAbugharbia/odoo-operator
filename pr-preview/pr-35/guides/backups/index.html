@@ -1340,11 +1340,12 @@ backup.</p>
 <span class="nt">spec</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">odooDeployment</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my-odoo</span>
 </code></pre></div>
-<p>Once a <a href="../backup-stores/">store</a> is <code>Ready</code>, creating an <code>OdooBackup</code> takes a
-backup; <a href="../../concepts/backups/">How backups work</a> explains what it holds and
+<p>With a <a href="../backup-stores/">store</a> set up (check that it is <code>Ready</code>: a backup
+does not wait for that), creating an <code>OdooBackup</code> takes a backup; <a href="../../concepts/backups/">How backups work</a> explains what it holds and
 the phases it goes through.</p>
 <h2 id="schedules-and-retention">Schedules and retention<a class="headerlink" href="#schedules-and-retention" title="Permanent link">&para;</a></h2>
-<p>deleted after each backup:</p>
+<p><code>spec.backup.schedule</code> takes backups on a schedule, and <code>retention</code> decides
+which old ones are deleted after each backup:</p>
 <div class="highlight"><pre><span></span><code><span class="nt">spec</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">backup</span><span class="p">:</span>
 <span class="w">    </span><span class="nt">stores</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">offsite</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">cold</span><span class="p p-Indicator">]</span><span class="w">           </span><span class="c1"># the first is written; the others get copies</span>
@@ -1355,7 +1356,7 @@ the phases it goes through.</p>
 <span class="w">      </span><span class="nt">weekly</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
 <span class="w">      </span><span class="nt">monthly</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">12</span>
 <span class="w">      </span><span class="nt">within</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2d</span><span class="w">                      </span><span class="c1"># also keep everything from the last 2 days (y, m, d, h)</span>
-<span class="w">      </span><span class="nt">manual</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span><span class="w">                      </span><span class="c1"># newest manual and pre-upgrade backups kept; 0 (default) keeps all</span>
+<span class="w">      </span><span class="nt">manual</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span><span class="w">                      </span><span class="c1"># newest manual backups kept; 0 (default) keeps all</span>
 <span class="w">    </span><span class="nt">drill</span><span class="p">:</span>
 <span class="w">      </span><span class="nt">schedule</span><span class="p">:</span><span class="w"> </span><span class="s">"0</span><span class="nv"> </span><span class="s">5</span><span class="nv"> </span><span class="s">*</span><span class="nv"> </span><span class="s">*</span><span class="nv"> </span><span class="s">0"</span><span class="w">           </span><span class="c1"># [restore drill](drills.md)</span>
 </code></pre></div>
@@ -1367,18 +1368,24 @@ with an event. <code>status.backup</code> shows the last and next scheduled time
 <code>BackupSchedule</code> condition reports a schedule that cannot be read.</p>
 <p>Retention runs in the backup Job, after the new backup is verified. The keep
 rules are restic's (<code>last</code>, <code>hourly</code>, <code>daily</code>, <code>weekly</code>, <code>monthly</code>, <code>yearly</code>,
-<code>within</code>, with restic's meaning), but the periods are counted in <code>timeZone</code>,
-and they apply to scheduled backups; manual and pre-upgrade backups each keep
-their newest <code>manual</code>. Never deleted: the newest backup, a backup with
+<code>within</code>, with restic's meaning: <code>within</code> counts back from the newest backup,
+not from now), but the periods are counted in <code>timeZone</code>, and they apply to
+scheduled backups; manual backups keep their newest <code>manual</code>. Never deleted: the newest backup, a backup with
 <code>spec.keep: true</code> (it does not use up a slot of the rules either), a snapshot
 an unfinished restore needs, and snapshots the operator did not take. The
 OdooBackups of deleted snapshots are deleted too; a retention that fails leaves
 the backup <code>Completed</code> with a warning. <code>retention.keepAll: true</code> turns it off.
-Deleting the snapshot frees no space by itself: the store's <a href="../store-check-prune/">prune</a> does.</p>
+One run deletes at most 24 snapshots, oldest first, so a tightened policy
+takes a few backups to catch up. Deleting the snapshot frees no space by
+itself: the store's <a href="../store-check-prune/">prune</a> does.</p>
+<p>A failed backup is not retried: the next scheduled one, or a new OdooBackup,
+is the retry. Its Job is kept for <code>spec.jobs.ttlSecondsAfterFinished</code> (24
+hours by default) for its log.</p>
 <h2 id="copies">Copies<a class="headerlink" href="#copies" title="Permanent link">&para;</a></h2>
 <p>Each backup is copied (<code>restic copy</code>) to every store after the
 first in <code>spec.backup.stores</code>, in the same Job, and retention runs in each
-copy too. A store that is missing or not ready, or a copy that fails, leaves
+copy too. A store that is missing or whose Secret is incomplete is skipped; a
+store that is not ready is still tried. A skipped store or a copy that fails leaves
 the backup <code>PartiallyCompleted</code> with <code>status.copies</code> saying why; the backup in
 the first store is still good. A restore (or drill) whose backup's store is
 not ready restores a copy from a ready store instead, with an event saying so.

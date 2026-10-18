@@ -1232,7 +1232,7 @@
   stop["scale Odoo to 0&lt;br/&gt;phase Upgrading"]
   job["upgrade Job&lt;br/&gt;-u spec.upgrade.modules,&lt;br/&gt;-i new spec.modules"]
   running["Odoo starts on the new image&lt;br/&gt;phase Running"]
-  failed["phase Failed, Odoo stays stopped&lt;br/&gt;delete the Job to retry,&lt;br/&gt;or restore a backup"]
+  failed["phase Failed, Odoo stays stopped&lt;br/&gt;delete the Job to retry (it is also retried&lt;br/&gt;when its TTL removes it), or restore a backup"]
 
   trigger --&gt; check
   check -- "cannot pull or run" --&gt; old
@@ -1260,11 +1260,16 @@
   by one for the new image: its container never started, so nothing touched
   the database.</li>
 <li>For production set <code>onImageChange: false</code> and bump <code>spec.upgrade.token</code> to
-  run the upgrade on demand.</li>
+  run the upgrade on demand. A <code>spec.image</code> change then does nothing until the
+  token changes, with one exception: a new entry in <code>spec.modules</code> is installed
+  by a Job on <code>spec.image</code>, and the instance moves to that image without <code>-u</code>.</li>
+<li>A failed Job is retried when it is deleted, by you or by its
+  <code>ttlSecondsAfterFinished</code> (24 hours by default): the upgrade then runs again
+  on its own. Read the Job's log before that, or restore a backup.</li>
 <li><code>spec.jobs</code> bounds the Jobs (<code>activeDeadlineSeconds</code>, <code>ttlSecondsAfterFinished</code>,
   <code>backoffLimit</code>).</li>
 </ul>
-<p>A failed upgrade can be rolled back by <a href="../restore/">restoring a backup</a>: a restore replaces a failed upgrade Job.</p>
+<p>A failed upgrade can be rolled back by <a href="../restore/">restoring a backup</a>: a restore replaces a failed init or upgrade Job.</p>
 
 
 

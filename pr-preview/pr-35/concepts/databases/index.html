@@ -1229,16 +1229,25 @@
   <code>spec.database.createPolicy</code> is <code>IfNotExists</code> (default) the operator creates
   it — <code>CREATE DATABASE … ENCODING 'unicode' LC_COLLATE 'C' LC_CTYPE 'C' TEMPLATE template0</code>,
   the same shape Odoo uses — and tags it with the comment
-  <code>odoo-operator:&lt;namespace&gt;/&lt;name&gt;</code> (<code>provisionedBy: operator</code>).</li>
+  <code>odoo-operator:&lt;namespace&gt;/&lt;name&gt;</code> (<code>provisionedBy: operator</code>). It also tries
+  to add the <code>unaccent</code> and <code>pg_trgm</code> extensions, and carries on without them.
+  Restores and drills create databases (restores also rename them) whatever
+  <code>createPolicy</code> says, so for those the database user needs <code>CREATEDB</code>.</li>
 <li><code>spec.database.deletionPolicy: Delete</code> adds the finalizer
-  <code>odoo.abugharbia.com/database</code>. On deletion the operator stops the pods and
+  <code>odoo.abugharbia.com/database</code>, unless the database was adopted. On deletion the operator stops the pods and
   drops the database <strong>only if</strong> it recorded <code>provisionedBy: operator</code> <strong>and</strong>
   the database comment still equals its tag. A CR pointing at a pre-existing
-  database never drops it, whatever the policy says.</li>
-<li><code>spec.database.name</code> (and <code>nameFromSecret</code>) are immutable so a rename can
-  never orphan or drop the wrong database.</li>
+  database never drops it, whatever the policy says. Dropping uses
+  <code>DROP DATABASE … WITH (FORCE)</code>, which needs PostgreSQL 13 or later. If the
+  connection Secret is already gone (for example when the whole namespace is
+  deleted) the database is left in place with a <code>DatabaseNotDropped</code> event.</li>
+<li><code>spec.database.name</code> and the <code>nameFromSecret</code> selector are immutable so a
+  rename can never orphan or drop the wrong database. Changing the value inside
+  the Secret that <code>nameFromSecret</code> points at stops the instance instead: phase
+  <code>Failed</code>, <code>Degraded</code> reason <code>DatabaseNameChanged</code>.</li>
 <li><code>spec.odooFilestore.deletionPolicy</code> works the same way for the filestore PVC
-  (Retain by default).</li>
+  (Retain by default). The PVC is created once: changing
+  <code>spec.odooFilestore.size</code> or <code>storageClassName</code> later does not change it.</li>
 </ul>
 
 

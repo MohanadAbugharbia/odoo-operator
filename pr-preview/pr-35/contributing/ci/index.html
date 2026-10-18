@@ -1349,8 +1349,9 @@ pays only for the tests its change needs:</p>
 <li>A skipped job counts as passed, so these jobs can be required checks.</li>
 <li>The Changes job's summary says what ran and why.</li>
 </ul>
-<p><code>.github/workflows/docs.yml</code> builds this site on every pull request and
-publishes it; see <a href="../docs/">Writing the docs</a>.</p>
+<p><code>.github/workflows/docs.yml</code> builds this site on every pull request, and
+publishes it from <code>main</code>, from releases and, as a preview, from pull requests
+with the <code>docs-preview</code> label; see <a href="../docs/">Writing the docs</a>.</p>
 <h2 id="test-results">Test results<a class="headerlink" href="#test-results" title="Permanent link">&para;</a></h2>
 <p>The test job runs <code>go test</code> with <code>-json</code> and renders the event stream into a
 Markdown report with <code>hack/test-summary.py</code>. The report goes to the job summary

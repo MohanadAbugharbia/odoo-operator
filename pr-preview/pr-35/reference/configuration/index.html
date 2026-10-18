@@ -1067,6 +1067,28 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#when-odoo-restarts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When Odoo restarts
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#master-password" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Master password
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1263,6 +1285,28 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#when-odoo-restarts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When Odoo restarts
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#master-password" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Master password
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1298,6 +1342,18 @@ entrypoint script injects database flags (e.g. the official image's
 is the only configuration source. The image's own <code>addons_path</code> and
 <code>server_wide_modules</code> must therefore be re-expressed in
 <code>spec.config.extraAddonsPaths</code> and <code>spec.config.serverWideModules</code>.</p>
+<h2 id="when-odoo-restarts">When Odoo restarts<a class="headerlink" href="#when-odoo-restarts" title="Permanent link">&para;</a></h2>
+<p>The Deployment uses the <code>Recreate</code> strategy, and its pods carry a hash of the
+rendered <code>odoo.conf</code>. Any change that changes the file restarts Odoo with a
+short downtime: a <code>spec.config</code> change, but also a new database password in
+the connection Secret. The operator owns the Deployment's pod template, so
+changes made to it by hand are reverted.</p>
+<h2 id="master-password">Master password<a class="headerlink" href="#master-password" title="Permanent link">&para;</a></h2>
+<p>Odoo's master password (<code>admin_passwd</code>, which guards the database manager) is
+read from the Secret <code>&lt;name&gt;-admin-password</code>, key <code>password</code>, or from the
+Secret named in <code>spec.config.adminPasswordSecretName</code>. When the key is empty
+the operator generates a password once; it never rotates it. A Secret you name
+yourself is not deleted with the instance.</p>
 
 
 

@@ -687,6 +687,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#what-a-restore-needs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a restore needs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#what-happens-if-something-goes-wrong" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1264,6 +1275,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#what-a-restore-needs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What a restore needs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#what-happens-if-something-goes-wrong" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1323,18 +1345,40 @@
 <span class="w">  </span><span class="nt">keepPrevious</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">72h</span><span class="w">                 </span><span class="c1"># default spec.backup.restore.keepPrevious (72h)</span>
 </code></pre></div>
 <p>Odoo is stopped; the backup is loaded into <code>&lt;db&gt;_restore_&lt;suffix&gt;</code> and
-<code>filestore/&lt;db&gt;_restore_&lt;suffix&gt;</code> beside the live data and checked (every
-table's row count against the backup, every attachment's file, a sample of
-files against their checksum). Only then are the names swapped: the live data
+<code>filestore/&lt;db&gt;_restore_&lt;suffix&gt;</code> beside the live data and checked: every
+table's row count must match the backup and every attachment the backup holds
+must be there. A sample of files is also compared with its checksum; a
+mismatch only adds a warning to <code>status.warnings</code>, as those files were damaged
+before the backup. Only then are the names swapped: the live data
 becomes <code>&lt;db&gt;_prev_&lt;suffix&gt;</code> and the restored data takes its place, and Odoo
 starts on the image recorded in the backup. A restore that fails before the
 swap leaves the live data untouched (<code>Failed</code>); one that fails during the swap
 is retried until it finishes, with Odoo stopped and the instance <code>Degraded</code>
 (<code>RestoreIncomplete</code>). A restore takes precedence over everything else and
-replaces a failed upgrade Job, which makes it the way back from a failed
-upgrade. Modules in <code>spec.modules</code> that the backup lacks are installed again
-afterwards. If <code>spec.image</code> differs from the backup's image the usual upgrade
-follows; set <code>spec.image</code> to the backup's image first to stay on it.</p>
+replaces a failed init or upgrade Job, which makes it the way back from a
+failed upgrade. Modules in <code>spec.modules</code> that the backup lacks are installed
+again afterwards.</p>
+<p>The instance then counts as running the backup's image and upgrade token. If
+<code>spec.image</code> differs from the backup's image, the usual upgrade follows when
+<code>spec.upgrade.onImageChange</code> is true; if <code>spec.upgrade.token</code> differs from the
+backup's, an upgrade follows either way. Set both to the backup's values first
+to stay on it.</p>
+<p>A restore by <code>backup</code> falls back to a copy in another store when the backup's
+store is not ready. A restore by <code>snapshotID</code> reads only the first store in
+<code>spec.backup.stores</code>.</p>
+<h2 id="what-a-restore-needs">What a restore needs<a class="headerlink" href="#what-a-restore-needs" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Room:</strong> the restored files sit beside the live ones on the data volume
+  until the swap, so it needs free space for a second filestore, and the
+  database server holds two to three copies of the database for a while (live,
+  restored, and the previous one kept for undo).</li>
+<li><strong>Database privileges:</strong> a restore always creates and renames databases,
+  whatever <code>spec.database.createPolicy</code> says, so the database user needs
+  <code>CREATEDB</code>.</li>
+<li><strong>Downtime:</strong> Odoo is stopped from the start of the restore to the end of
+  the swap. With a <code>ReadWriteOncePod</code> data volume it is stopped again, briefly,
+  when the kept data is deleted after <code>keepPrevious</code>.</li>
+</ul>
 <h2 id="what-happens-if-something-goes-wrong">What happens if something goes wrong<a class="headerlink" href="#what-happens-if-something-goes-wrong" title="Permanent link">&para;</a></h2>
 <p>The live data is never edited in place, so a restore can fail without
 damaging it, and a Job that dies halfway finishes when it is retried:</p>
@@ -1342,7 +1386,7 @@ damaging it, and a Job that dies halfway finishes when it is retried:</p>
   start([OdooRestore: Odoo is stopped]) --&gt; load["Load the backup beside the live data:&lt;br/&gt;database db_restore_suffix, its filestore"]
   load --&gt; check[Check row counts, attachments&lt;br/&gt;and a sample of checksums]
   load --&gt;|error| failed([Failed: live data untouched])
-  check --&gt;|mismatch| failed
+  check --&gt;|row counts differ or&lt;br/&gt;attachments missing| failed
   check --&gt; swap["Swap: live becomes db_prev_suffix,&lt;br/&gt;restored becomes db"]
   swap --&gt;|Job dies| retry["Retried Job reads the journal&lt;br/&gt;and finishes the swap&lt;br/&gt;(Degraded: RestoreIncomplete meanwhile)"]
   retry --&gt; swap
@@ -1359,6 +1403,11 @@ then the restore can be undone:</p>
 </code></pre></div>
 <p>Only the latest restore can be undone. Deleting an OdooRestore deletes the data
 it kept.</p>
+<div class="admonition warning">
+<p class="admonition-title">Deleting the instance keeps the previous data</p>
+<p>Deleting an OdooDeployment does not delete the <code>&lt;db&gt;_prev_&lt;suffix&gt;</code>
+databases and folders its restores kept; drop them by hand.</p>
+</div>
 
 
 
