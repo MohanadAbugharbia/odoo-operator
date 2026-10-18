@@ -2527,13 +2527,13 @@ Deployment has an available replica again.</p>
 <tbody>
 <tr>
 <td><code>enabled</code> <em>boolean</em></td>
-<td>Enabled runs a small <name>-maintenance Deployment from the operator's<br />own image and points the http Service at it whenever Odoo has no<br />available replica (and spec.replicas is not 0). The poll Service always<br />stays on Odoo.</td>
+<td>Enabled runs a small &lt;name&gt;-maintenance Deployment from the operator's<br />own image and points the http Service at it whenever Odoo has no<br />available replica (and spec.replicas is not 0). The poll Service always<br />stays on Odoo.</td>
 <td>false</td>
 <td></td>
 </tr>
 <tr>
 <td><code>title</code> <em><a href="#maintenancepagetext">MaintenancePageText</a></em></td>
-<td>Title is the product name the page shows ("Updating <title>").</td>
+<td>Title is the product name the page shows ("Updating &lt;title&gt;").</td>
 <td>Odoo</td>
 <td>MaxLength: 64 <br />MinLength: 1 <br />Pattern: <code>^[^\n\r&lt;&gt;]*$</code> <br /></td>
 </tr>
@@ -2589,7 +2589,7 @@ NFS client and a route to the server.</p>
 </tr>
 <tr>
 <td><code>path</code> <em>string</em></td>
-<td>Path is the exported folder. Repositories go under <path>/<namespace>/<deployment>/.</td>
+<td>Path is the exported folder. Repositories go under &lt;path&gt;/&lt;namespace&gt;/&lt;deployment&gt;/.</td>
 <td></td>
 <td>Pattern: <code>^/</code> <br /></td>
 </tr>
@@ -2657,7 +2657,7 @@ by the OdooDeployment, so deleting an instance never deletes its backups.</p>
 <tbody>
 <tr>
 <td><code>stores</code> <em>string array</em></td>
-<td>Stores are OdooBackupStores in this namespace. Backups are written to<br />the first; the instance's repository is <path>/<namespace>/<name>/<br />inside it. Each backup is then copied to the other stores.</td>
+<td>Stores are OdooBackupStores in this namespace. Backups are written to<br />the first; the instance's repository is &lt;path&gt;/&lt;namespace&gt;/&lt;name&gt;/<br />inside it. Each backup is then copied to the other stores.</td>
 <td></td>
 <td>MaxItems: 4 <br />items:MinLength: 1 <br /></td>
 </tr>
@@ -2953,7 +2953,7 @@ defaults below.</p>
 </tr>
 <tr>
 <td><code>repository</code> <em>string</em></td>
-<td>Repository is the restic repository inside the store, <namespace>/<deployment>.</td>
+<td>Repository is the restic repository inside the store, &lt;namespace&gt;/&lt;deployment&gt;.</td>
 <td></td>
 <td></td>
 </tr>
@@ -3141,7 +3141,7 @@ namespace name it in spec.backup.stores.</p>
 <tbody>
 <tr>
 <td><code>format</code> <em><a href="#backupstoreformat">BackupStoreFormat</a></em></td>
-<td>Format is how backups are kept. restic: one encrypted, deduplicated<br />repository per OdooDeployment at <path>/<namespace>/<deployment>/.</td>
+<td>Format is how backups are kept. restic: one encrypted, deduplicated<br />repository per OdooDeployment at &lt;path&gt;/&lt;namespace&gt;/&lt;deployment&gt;/.</td>
 <td>restic</td>
 <td>Enum: [restic] <br /></td>
 </tr>
@@ -3418,13 +3418,13 @@ namespace name it in spec.backup.stores.</p>
 </tr>
 <tr>
 <td><code>listDb</code> <em>boolean</em></td>
-<td>ListDb controls the database manager. When false (the default) the<br />rendered odoo.conf carries list_db = False and dbfilter = ^<db_name>$ so<br />the instance can only ever see its own database.</td>
+<td>ListDb controls the database manager. When false (the default) the<br />rendered odoo.conf carries list_db = False and dbfilter = ^&lt;db_name&gt;$ so<br />the instance can only ever see its own database.</td>
 <td>false</td>
 <td></td>
 </tr>
 <tr>
 <td><code>dbFilter</code> <em>string</em></td>
-<td>DbFilter is written verbatim as dbfilter and replaces the derived<br />^<db_name>$ filter. Single line.</td>
+<td>DbFilter is written verbatim as dbfilter and replaces the derived<br />^&lt;db_name&gt;$ filter. Single line.</td>
 <td></td>
 <td>Pattern: <code>^[^\n\r]*$</code> <br /></td>
 </tr>
@@ -4168,7 +4168,7 @@ for keepPrevious so the restore can be undone.</p>
 </tr>
 <tr>
 <td><code>suffix</code> <em>string</em></td>
-<td>Suffix names the database and filestore folders of this restore:<br /><db><em>restore</em><suffix> while restoring, <db><em>prev</em><suffix> for the<br />data it replaced.</td>
+<td>Suffix names the database and filestore folders of this restore:<br />&lt;db&gt;<em>restore</em>&lt;suffix&gt; while restoring, &lt;db&gt;<em>prev</em>&lt;suffix&gt; for the<br />data it replaced.</td>
 <td></td>
 <td></td>
 </tr>
@@ -4364,7 +4364,7 @@ the node that has it attached.</p>
 </tr>
 <tr>
 <td><code>subPath</code> <em><a href="#storepath">StorePath</a></em></td>
-<td>SubPath is a folder inside the claim. Repositories go under <subPath>/<namespace>/<deployment>/.</td>
+<td>SubPath is a folder inside the claim. Repositories go under &lt;subPath&gt;/&lt;namespace&gt;/&lt;deployment&gt;/.</td>
 <td></td>
 <td>MaxLength: 512 <br />Pattern: <code>^/?([A-Za-z0-9._~+@=-]+(/[A-Za-z0-9._~+@=-]+)*/?)?$</code> <br /></td>
 </tr>
@@ -4437,7 +4437,7 @@ the node that has it attached.</p>
 </tr>
 <tr>
 <td><code>filestore</code> <em>string</em></td>
-<td>Filestore is the replaced filestore folder, under <dataDir>/filestore/.</td>
+<td>Filestore is the replaced filestore folder, under &lt;dataDir&gt;/filestore/.</td>
 <td></td>
 <td></td>
 </tr>
@@ -4501,13 +4501,13 @@ the node that has it attached.</p>
 </tr>
 <tr>
 <td><code>path</code> <em><a href="#storepath">StorePath</a></em></td>
-<td>Path inside the bucket. Repositories go under <path>/<namespace>/<deployment>/.</td>
+<td>Path inside the bucket. Repositories go under &lt;path&gt;/&lt;namespace&gt;/&lt;deployment&gt;/.</td>
 <td></td>
 <td>MaxLength: 512 <br />Pattern: <code>^/?([A-Za-z0-9._~+@=-]+(/[A-Za-z0-9._~+@=-]+)*/?)?$</code> <br /></td>
 </tr>
 <tr>
 <td><code>forcePathStyle</code> <em>boolean</em></td>
-<td>ForcePathStyle addresses the bucket as <endpoint>/<bucket> instead of<br /><bucket>.<endpoint>. Most S3-compatible services need it; AWS does not.</td>
+<td>ForcePathStyle addresses the bucket as &lt;endpoint&gt;/&lt;bucket&gt; instead of<br />&lt;bucket&gt;.&lt;endpoint&gt;. Most S3-compatible services need it; AWS does not.</td>
 <td></td>
 <td></td>
 </tr>
@@ -4553,7 +4553,7 @@ the node that has it attached.</p>
 </tr>
 <tr>
 <td><code>path</code> <em><a href="#storepath">StorePath</a></em></td>
-<td>Path on the server, relative to the user's home folder unless it<br />starts with "/". Repositories go under <path>/<namespace>/<deployment>/.</td>
+<td>Path on the server, relative to the user's home folder unless it<br />starts with "/". Repositories go under &lt;path&gt;/&lt;namespace&gt;/&lt;deployment&gt;/.</td>
 <td></td>
 <td>MaxLength: 512 <br />Pattern: <code>^/?([A-Za-z0-9._~+@=-]+(/[A-Za-z0-9._~+@=-]+)*/?)?$</code> <br /></td>
 </tr>
