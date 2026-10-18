@@ -489,10 +489,12 @@ type OdooRestoreConfig struct {
 	KeepPrevious *metav1.Duration `json:"keepPrevious,omitempty"`
 }
 
-// OdooBackupRetention says which backups are kept. Each kind of backup
-// (scheduled, manual) is thinned on its own, with restic's keep rules: daily: 7
-// keeps the newest backup of each of the last 7 days that have one. A backup
-// kept by any rule stays. Unset fields take the defaults below.
+// OdooBackupRetention says which backups are kept. Scheduled backups are
+// thinned with restic's keep rules (daily: 7 keeps the newest backup of each
+// of the last 7 days that have one; a backup kept by any rule stays); manual
+// and pre-upgrade backups each keep their newest Manual. A backup with
+// spec.keep, and the newest backup, are never deleted. Unset fields take the
+// defaults below.
 type OdooBackupRetention struct {
 	// Last keeps the newest N backups.
 	// +kubebuilder:validation:Minimum=0
