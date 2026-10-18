@@ -7,9 +7,9 @@
   ],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "editable": true,
-  "refresh": "1m",
+  "refresh": "",
   "time": {
     "from": "now-24h",
     "to": "now"
@@ -25,6 +25,28 @@
         "hide": 0,
         "refresh": 1,
         "options": []
+      },
+      {
+        "name": "job",
+        "label": "Operator job",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "query": {
+          "query": "label_values(odoo_operator_build_info, job)",
+          "refId": "job"
+        },
+        "definition": "label_values(odoo_operator_build_info, job)",
+        "refresh": 2,
+        "multi": false,
+        "includeAll": false,
+        "current": {},
+        "sort": 1,
+        "hide": 0,
+        "options": [],
+        "description": "The scrape job of the operator's metrics; the operator panels read up, process and client metrics from it."
       },
       {
         "name": "namespace",
@@ -81,6 +103,30 @@
           ]
         },
         "sort": 1
+      },
+      {
+        "name": "store",
+        "label": "Store",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "query": {
+          "query": "label_values(odoo_operator_backup_store_ready{namespace=~\"$namespace\"}, store)",
+          "refId": "store"
+        },
+        "definition": "label_values(odoo_operator_backup_store_ready{namespace=~\"$namespace\"}, store)",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "sort": 1,
+        "hide": 0,
+        "options": []
       }
     ]
   },
@@ -98,7 +144,7 @@
         "x": 0,
         "y": 0
       },
-      "id": 1,
+      "id": 101,
       "panels": []
     },
     {
@@ -118,17 +164,17 @@
           "expr": "sum(odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Pending\"}) or vector(0)",
           "legendFormat": "",
           "refId": "A",
-          "range": false,
-          "instant": true
+          "instant": true,
+          "range": false
         }
       ],
       "gridPos": {
         "h": 4,
-        "w": 4,
+        "w": 3,
         "x": 0,
         "y": 1
       },
-      "id": 2,
+      "id": 102,
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -165,17 +211,17 @@
           "expr": "sum(odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Initializing\"}) or vector(0)",
           "legendFormat": "",
           "refId": "A",
-          "range": false,
-          "instant": true
+          "instant": true,
+          "range": false
         }
       ],
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 4,
+        "w": 3,
+        "x": 3,
         "y": 1
       },
-      "id": 3,
+      "id": 103,
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -212,17 +258,17 @@
           "expr": "sum(odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Upgrading\"}) or vector(0)",
           "legendFormat": "",
           "refId": "A",
-          "range": false,
-          "instant": true
+          "instant": true,
+          "range": false
         }
       ],
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 8,
+        "w": 3,
+        "x": 6,
         "y": 1
       },
-      "id": 4,
+      "id": 104,
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -259,22 +305,116 @@
           "expr": "sum(odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Running\"}) or vector(0)",
           "legendFormat": "",
           "refId": "A",
-          "range": false,
-          "instant": true
+          "instant": true,
+          "range": false
         }
       ],
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 12,
+        "w": 3,
+        "x": 9,
         "y": 1
       },
-      "id": 5,
+      "id": 105,
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "fixed",
             "fixedColor": "green"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "BackingUp",
+      "description": "OdooDeployments in phase BackingUp.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"BackingUp\"}) or vector(0)",
+          "legendFormat": "",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 12,
+        "y": 1
+      },
+      "id": 106,
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "orange"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Restoring",
+      "description": "OdooDeployments in phase Restoring.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Restoring\"}) or vector(0)",
+          "legendFormat": "",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 15,
+        "y": 1
+      },
+      "id": 107,
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "dark-orange"
           }
         },
         "overrides": []
@@ -306,17 +446,17 @@
           "expr": "sum(odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Failed\"}) or vector(0)",
           "legendFormat": "",
           "refId": "A",
-          "range": false,
-          "instant": true
+          "instant": true,
+          "range": false
         }
       ],
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 16,
+        "w": 3,
+        "x": 18,
         "y": 1
       },
-      "id": 6,
+      "id": 108,
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -350,7 +490,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max(up{job=\"odoo-operator-controller-manager-metrics-service\"}) or vector(0)",
+          "expr": "max(up{job=~\"$job\"}) or vector(0)",
           "legendFormat": "",
           "refId": "A",
           "range": false,
@@ -359,8 +499,8 @@
       ],
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 20,
+        "w": 3,
+        "x": 21,
         "y": 1
       },
       "id": 7,
@@ -420,7 +560,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (name, namespace) (odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Pending\"} * 1) or max by (name, namespace) (odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Initializing\"} * 2) or max by (name, namespace) (odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Upgrading\"} * 3) or max by (name, namespace) (odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Running\"} * 4) or max by (name, namespace) (odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Failed\"} * 5)",
+          "expr": "max by (name, namespace) ((odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Pending\"} == 1) * 1) or max by (name, namespace) ((odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Initializing\"} == 1) * 2) or max by (name, namespace) ((odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Upgrading\"} == 1) * 3) or max by (name, namespace) ((odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Running\"} == 1) * 4) or max by (name, namespace) ((odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"BackingUp\"} == 1) * 5) or max by (name, namespace) ((odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Restoring\"} == 1) * 6) or max by (name, namespace) ((odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Failed\"} == 1) * 7)",
           "legendFormat": "",
           "refId": "phase",
           "range": false,
@@ -630,7 +770,7 @@
     },
     {
       "type": "row",
-      "title": "Phases",
+      "title": "Health",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -638,7 +778,174 @@
         "x": 0,
         "y": 13
       },
-      "id": 9,
+      "id": 109,
+      "panels": []
+    },
+    {
+      "type": "table",
+      "title": "Degraded",
+      "description": "OdooDeployments whose Degraded condition is true, with its reason (ImagePullFailed, DatabaseMissing, RestoreIncomplete, ...).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "max by (namespace, name, reason) (odoo_operator_deployment_condition{namespace=~\"$namespace\",name=~\"$name\",type=\"Degraded\",status=\"true\"})",
+          "legendFormat": "",
+          "refId": "A",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "id": 110,
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Image change pending",
+      "description": "OdooDeployments whose spec.image differs from the image they run: an image check or upgrade is pending or failing.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(odoo_operator_deployment_image_pending{namespace=~\"$namespace\",name=~\"$name\"}) or vector(0)",
+          "legendFormat": "",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 4,
+        "x": 12,
+        "y": 14
+      },
+      "id": 111,
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Replicas",
+      "description": "Pods each instance asks for (spec.replicas) and how many of its Deployment are available (kube-state-metrics).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "max by (name) (odoo_operator_deployment_replicas_desired{namespace=~\"$namespace\",name=~\"$name\"})",
+          "legendFormat": "{{name}} desired",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "max by (deployment) (kube_deployment_status_replicas_available{namespace=~\"$namespace\",deployment=~\"$name\"})",
+          "legendFormat": "{{deployment}} available",
+          "refId": "B"
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 14
+      },
+      "id": 112,
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Phases",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "id": 113,
       "panels": []
     },
     {
@@ -655,7 +962,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (name) (odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Pending\"} * 1) or max by (name) (odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Initializing\"} * 2) or max by (name) (odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Upgrading\"} * 3) or max by (name) (odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Running\"} * 4) or max by (name) (odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Failed\"} * 5)",
+          "expr": "max by (name) ((odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Pending\"} == 1) * 1) or max by (name) ((odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Initializing\"} == 1) * 2) or max by (name) ((odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Upgrading\"} == 1) * 3) or max by (name) ((odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Running\"} == 1) * 4) or max by (name) ((odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"BackingUp\"} == 1) * 5) or max by (name) ((odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Restoring\"} == 1) * 6) or max by (name) ((odoo_operator_deployment_phase{namespace=~\"$namespace\",name=~\"$name\",phase=\"Failed\"} == 1) * 7)",
           "legendFormat": "{{name}}",
           "refId": "A",
           "range": true,
@@ -666,7 +973,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 14
+        "y": 22
       },
       "id": 10,
       "fieldConfig": {
@@ -716,15 +1023,36 @@
               "type": "value",
               "options": {
                 "5": {
+                  "text": "BackingUp",
+                  "color": "orange",
+                  "index": 4
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "6": {
+                  "text": "Restoring",
+                  "color": "dark-orange",
+                  "index": 5
+                }
+              }
+            },
+            {
+              "type": "value",
+              "options": {
+                "7": {
                   "text": "Failed",
                   "color": "red",
-                  "index": 4
+                  "index": 6
                 }
               }
             }
           ],
           "color": {
-            "mode": "thresholds"
+            "mode": "fixed",
+            "fixedColor": "text"
           }
         },
         "overrides": []
@@ -746,9 +1074,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 23
+        "y": 31
       },
-      "id": 11,
+      "id": 114,
       "panels": []
     },
     {
@@ -777,7 +1105,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 24
+        "y": 32
       },
       "id": 12,
       "fieldConfig": {
@@ -827,7 +1155,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 24
+        "y": 32
       },
       "id": 13,
       "fieldConfig": {
@@ -888,7 +1216,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 24
+        "y": 32
       },
       "id": 14,
       "fieldConfig": {
@@ -923,7 +1251,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 32
+        "y": 40
       },
       "id": 15,
       "fieldConfig": {
@@ -964,7 +1292,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 32
+        "y": 40
       },
       "id": 16,
       "fieldConfig": {
@@ -982,15 +1310,976 @@
     },
     {
       "type": "row",
+      "title": "Backups",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 47
+      },
+      "id": 115,
+      "panels": []
+    },
+    {
+      "type": "bargauge",
+      "title": "Since the last successful backup",
+      "description": "Time since each instance's newest successful backup. Yellow after a day, red after two: adjust to your schedule.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "time() - max by (name) (odoo_operator_backup_last_success_timestamp_seconds{namespace=~\"$namespace\",name=~\"$name\"})",
+          "legendFormat": "{{name}}",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 48
+      },
+      "id": 116,
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 93600
+              },
+              {
+                "color": "red",
+                "value": 180000
+              }
+            ]
+          },
+          "min": 0,
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Last backup failed",
+      "description": "Instances whose most recently finished backup failed.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(odoo_operator_backup_last_failed{namespace=~\"$namespace\",name=~\"$name\"}) or vector(0)",
+          "legendFormat": "",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 3,
+        "x": 12,
+        "y": 48
+      },
+      "id": 117,
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Copy failed",
+      "description": "Instance and store pairs where the latest backup could not be copied.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(odoo_operator_backup_last_copy_failed{namespace=~\"$namespace\",name=~\"$name\"}) or vector(0)",
+          "legendFormat": "",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 3,
+        "x": 15,
+        "y": 48
+      },
+      "id": 118,
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Missing attachments",
+      "description": "Attachments the newest successful backups could not include (CompletedWithWarnings).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(odoo_operator_backup_missing_files{namespace=~\"$namespace\",name=~\"$name\"}) or vector(0)",
+          "legendFormat": "",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 3,
+        "x": 18,
+        "y": 48
+      },
+      "id": 119,
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Scheduled",
+      "description": "Instances with a backup schedule, out of those shown.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(odoo_operator_backup_enabled{namespace=~\"$namespace\",name=~\"$name\"}) or vector(0)",
+          "legendFormat": "",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 3,
+        "x": 21,
+        "y": 48
+      },
+      "id": 120,
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Backup size",
+      "description": "Sizes of each instance's newest successful backup: the database dump, the filestore, and the data newly uploaded.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "max by (name, part) (odoo_operator_backup_last_size_bytes{namespace=~\"$namespace\",name=~\"$name\"})",
+          "legendFormat": "{{name}} {{part}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 55
+      },
+      "id": 121,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Finished backups",
+      "description": "Backups finished per hour, by kind (manual, scheduled, pre-upgrade) and result.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (kind, result) (increase(odoo_operator_backups_total[1h]))",
+          "legendFormat": "{{kind}} {{result}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 55
+      },
+      "id": 122,
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Backup duration",
+      "description": "Start to completion of successful backups over the last day, median and 95th percentile.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le, kind) (increase(odoo_operator_backup_duration_seconds_bucket[1d])))",
+          "legendFormat": "{{kind}} p50",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, kind) (increase(odoo_operator_backup_duration_seconds_bucket[1d])))",
+          "legendFormat": "{{kind}} p95",
+          "refId": "B"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 55
+      },
+      "id": 123,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Restores and drills",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 63
+      },
+      "id": 124,
+      "panels": []
+    },
+    {
+      "type": "bargauge",
+      "title": "Since the last passing drill",
+      "description": "Time since each instance's restore drill last passed. Yellow after eight days, red after fifteen: adjust to your drill schedule.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "time() - max by (name) (odoo_operator_restore_drill_last_success_timestamp_seconds{namespace=~\"$namespace\",name=~\"$name\"})",
+          "legendFormat": "{{name}}",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 64
+      },
+      "id": 125,
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 691200
+              },
+              {
+                "color": "red",
+                "value": 1296000
+              }
+            ]
+          },
+          "min": 0,
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Last drill failed",
+      "description": "Instances whose latest restore drill failed.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(odoo_operator_restore_drill_last_failed{namespace=~\"$namespace\",name=~\"$name\"}) or vector(0)",
+          "legendFormat": "",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 3,
+        "x": 8,
+        "y": 64
+      },
+      "id": 126,
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Drills on",
+      "description": "Instances with a drill schedule.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(odoo_operator_restore_drill_enabled{namespace=~\"$namespace\",name=~\"$name\"}) or vector(0)",
+          "legendFormat": "",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 3,
+        "x": 11,
+        "y": 64
+      },
+      "id": 127,
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Last restore failed",
+      "description": "Instances whose most recently finished OdooRestore failed.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(odoo_operator_restore_last_failed{namespace=~\"$namespace\",name=~\"$name\"}) or vector(0)",
+          "legendFormat": "",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 3,
+        "x": 14,
+        "y": 64
+      },
+      "id": 128,
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Restores",
+      "description": "Restores and undos finished per hour, by result.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (mode, result) (increase(odoo_operator_restores_total[1h]))",
+          "legendFormat": "{{mode}} {{result}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 7,
+        "x": 17,
+        "y": 64
+      },
+      "id": 129,
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Backup stores",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 71
+      },
+      "id": 130,
+      "panels": []
+    },
+    {
+      "type": "bargauge",
+      "title": "Store ready",
+      "description": "1 when the store's last probe could write, read and delete a file.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "max by (namespace, store) (odoo_operator_backup_store_ready{namespace=~\"$namespace\",store=~\"$store\"})",
+          "legendFormat": "{{namespace}}/{{store}}",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 6,
+        "x": 0,
+        "y": 72
+      },
+      "id": 131,
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Since the last check and prune",
+      "description": "Time since each store's latest check and prune finished.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "time() - max by (store, task) (odoo_operator_backup_store_task_last_timestamp_seconds{namespace=~\"$namespace\",store=~\"$store\"})",
+          "legendFormat": "{{store}} {{task}}",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 6,
+        "y": 72
+      },
+      "id": 132,
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 691200
+              },
+              {
+                "color": "red",
+                "value": 1296000
+              }
+            ]
+          },
+          "min": 0,
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Check or prune failed",
+      "description": "Store tasks (check, prune) whose latest run failed.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(odoo_operator_backup_store_task_last_failed{namespace=~\"$namespace\",store=~\"$store\"}) or vector(0)",
+          "legendFormat": "",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 3,
+        "x": 14,
+        "y": 72
+      },
+      "id": 133,
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Stored",
+      "description": "What each store's repositories hold, as of its latest check or prune; a prune frees the space of deleted backups.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "max by (store) (odoo_operator_backup_store_stored_bytes{namespace=~\"$namespace\",store=~\"$store\"})",
+          "legendFormat": "{{store}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 7,
+        "x": 17,
+        "y": 72
+      },
+      "id": 134,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "type": "row",
       "title": "Odoo pods",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 39
+        "y": 79
       },
-      "id": 17,
+      "id": 135,
       "panels": []
     },
     {
@@ -1018,7 +2307,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 40
+        "y": 80
       },
       "id": 18,
       "fieldConfig": {
@@ -1064,7 +2353,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 40
+        "y": 80
       },
       "id": 19,
       "fieldConfig": {
@@ -1099,7 +2388,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 40
+        "y": 80
       },
       "id": 20,
       "fieldConfig": {
@@ -1134,7 +2423,7 @@
         "h": 6,
         "w": 24,
         "x": 0,
-        "y": 48
+        "y": 88
       },
       "id": 21,
       "fieldConfig": {
@@ -1175,9 +2464,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 54
+        "y": 94
       },
-      "id": 22,
+      "id": 136,
       "panels": []
     },
     {
@@ -1205,7 +2494,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 55
+        "y": 95
       },
       "id": 23,
       "fieldConfig": {
@@ -1251,7 +2540,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 55
+        "y": 95
       },
       "id": 24,
       "fieldConfig": {
@@ -1295,7 +2584,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 55
+        "y": 95
       },
       "id": 25,
       "fieldConfig": {
@@ -1317,7 +2606,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "process_resident_memory_bytes{job=\"odoo-operator-controller-manager-metrics-service\"}",
+          "expr": "process_resident_memory_bytes{job=~\"$job\"}",
           "legendFormat": "{{pod}}",
           "refId": "A",
           "range": true,
@@ -1328,7 +2617,7 @@
         "h": 6,
         "w": 8,
         "x": 0,
-        "y": 63
+        "y": 103
       },
       "id": 26,
       "fieldConfig": {
@@ -1352,7 +2641,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (code) (rate(rest_client_requests_total{job=\"odoo-operator-controller-manager-metrics-service\",code!~\"2..\"}[5m]))",
+          "expr": "sum by (code) (rate(rest_client_requests_total{job=~\"$job\",code!~\"2..\"}[5m]))",
           "legendFormat": "{{code}}",
           "refId": "A",
           "range": true,
@@ -1363,7 +2652,7 @@
         "h": 6,
         "w": 8,
         "x": 8,
-        "y": 63
+        "y": 103
       },
       "id": 27,
       "fieldConfig": {
@@ -1398,7 +2687,7 @@
         "h": 6,
         "w": 8,
         "x": 16,
-        "y": 63
+        "y": 103
       },
       "id": 28,
       "fieldConfig": {
