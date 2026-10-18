@@ -1195,6 +1195,25 @@
 
 <h1 id="upgrade-odoo">Upgrade Odoo<a class="headerlink" href="#upgrade-odoo" title="Permanent link">&para;</a></h1>
 <p>An upgrade runs Odoo's <code>-u</code> on the database in a Job, with the Deployment scaled to zero, whenever the image changes or you ask for it.</p>
+<pre class="mermaid"><code>flowchart TD
+  trigger["spec.image changes (onImageChange: true)&lt;br/&gt;or spec.upgrade.token changes"]
+  check["image check Job&lt;br/&gt;pulls the new image, runs odoo --version&lt;br/&gt;(skipped when the image is unchanged)"]
+  old["old image keeps serving&lt;br/&gt;Degraded: ImagePullFailed or ImageCheckFailed"]
+  modules{"spec.upgrade.modules&lt;br/&gt;empty?"}
+  roll["roll the Deployment&lt;br/&gt;to the new image, no Job"]
+  stop["scale Odoo to 0&lt;br/&gt;phase Upgrading"]
+  job["upgrade Job&lt;br/&gt;-u spec.upgrade.modules,&lt;br/&gt;-i new spec.modules"]
+  running["Odoo starts on the new image&lt;br/&gt;phase Running"]
+  failed["phase Failed, Odoo stays stopped&lt;br/&gt;delete the Job to retry,&lt;br/&gt;or restore a backup"]
+
+  trigger --&gt; check
+  check -- "cannot pull or run" --&gt; old
+  old -- "a later spec.image replaces the check" --&gt; check
+  check -- "succeeds" --&gt; modules
+  modules -- yes --&gt; roll --&gt; running
+  modules -- no --&gt; stop --&gt; job
+  job -- succeeds --&gt; running
+  job -- fails --&gt; failed</code></pre>
 <ul>
 <li><code>spec.upgrade.onImageChange: true</code> (default): every <code>spec.image</code> change runs
   an upgrade Job with <code>-u &lt;spec.upgrade.modules&gt;</code> before the Deployment rolls
