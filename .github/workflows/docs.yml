@@ -96,6 +96,7 @@ jobs:
           source-dir: site
           preview-branch: gh-pages
           umbrella-dir: pr-preview
+          pages-base-url: odoo-operator.abugharbia.com
           action: ${{ steps.mode.outputs.action }}
 
   publish:
