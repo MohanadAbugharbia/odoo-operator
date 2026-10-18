@@ -28,6 +28,26 @@ upgrade. Modules in `spec.modules` that the backup lacks are installed again
 afterwards. If `spec.image` differs from the backup's image the usual upgrade
 follows; set `spec.image` to the backup's image first to stay on it.
 
+## What happens if something goes wrong
+
+The live data is never edited in place, so a restore can fail without
+damaging it, and a Job that dies halfway finishes when it is retried:
+
+```mermaid
+flowchart TD
+  start([OdooRestore: Odoo is stopped]) --> load["Load the backup beside the live data:<br/>database db_restore_suffix, its filestore"]
+  load --> check[Check row counts, attachments<br/>and a sample of checksums]
+  load -->|error| failed([Failed: live data untouched])
+  check -->|mismatch| failed
+  check --> swap["Swap: live becomes db_prev_suffix,<br/>restored becomes db"]
+  swap -->|Job dies| retry["Retried Job reads the journal<br/>and finishes the swap<br/>(Degraded: RestoreIncomplete meanwhile)"]
+  retry --> swap
+  swap --> run[Odoo starts on the backup's image]
+  run --> kept["Previous data kept until<br/>status.previous.keptUntil"]
+  kept -->|OdooRestore with undo| undo[Swap the previous data back]
+  kept -->|keptUntil passes| gone([Previous data deleted])
+```
+
 ## Undo a restore
 
 The replaced data is kept until `status.previous.keptUntil`, then deleted. Until
