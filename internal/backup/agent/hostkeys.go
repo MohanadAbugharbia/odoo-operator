@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -27,6 +28,8 @@ import (
 const (
 	envKnownHosts        = "RCLONE_CONFIG_STORE_KNOWN_HOSTS_FILE"
 	envHostKeyAlgorithms = "RCLONE_CONFIG_STORE_HOST_KEY_ALGORITHMS"
+	// sshAuthPrivateKey is odoov1.SSHAuthPrivateKeyKey.
+	sshAuthPrivateKey = "ssh-privatekey"
 )
 
 // hostKeyAlgorithms maps a known_hosts key type to the algorithms that
@@ -103,4 +106,28 @@ func knownHostAlgorithms(path string) ([]string, error) {
 		}
 	}
 	return out, scanner.Err()
+}
+
+// UseSSHAuthPrivateKey points rclone at the ssh-privatekey file (the key of
+// Secrets of type kubernetes.io/ssh-auth) of every remote whose key file is
+// missing and which has one beside it. The Jobs mount both names and name
+// id_ed25519 as the key file.
+func UseSSHAuthPrivateKey() error {
+	for _, kv := range os.Environ() {
+		key, path, _ := strings.Cut(kv, "=")
+		if !strings.HasPrefix(key, "RCLONE_CONFIG_") || !strings.HasSuffix(key, "_KEY_FILE") || path == "" {
+			continue
+		}
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		alt := filepath.Join(filepath.Dir(path), sshAuthPrivateKey)
+		if _, err := os.Stat(alt); err != nil {
+			continue
+		}
+		if err := os.Setenv(key, alt); err != nil {
+			return err
+		}
+	}
+	return nil
 }

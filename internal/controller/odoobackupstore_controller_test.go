@@ -519,7 +519,38 @@ var _ = Describe("OdooBackupStore reconciler", func() {
 			store.Spec.SFTP = &odoov1.SFTPStore{Host: "backup.example.com", User: "odoo", SSHSecret: corev1.LocalObjectReference{Name: s.name + "-ssh"}}
 			return store
 		}, `secret "NAME-ssh" of OdooBackupStore NAME has no key "known_hosts"`),
+		Entry("an SSH Secret without a private key", func(s *storeHarness) *odoov1.OdooBackupStore {
+			s.t.create(s.keySecret())
+			s.t.create(&corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: s.name + "-ssh", Namespace: ns},
+				Data:       map[string][]byte{odoov1.SSHKnownHostsKey: []byte("hosts")},
+			})
+			store := s.pvcStore()
+			store.Spec.PVC = nil
+			store.Spec.SFTP = &odoov1.SFTPStore{Host: "backup.example.com", User: "odoo", SSHSecret: corev1.LocalObjectReference{Name: s.name + "-ssh"}}
+			return store
+		}, `secret "NAME-ssh" of OdooBackupStore NAME has no key "id_ed25519" or "ssh-privatekey"`),
 	)
+
+	It("probes with the private key of a kubernetes.io/ssh-auth Secret", func() {
+		t.create(s.keySecret())
+		t.create(&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: s.name + "-ssh", Namespace: ns},
+			Type:       corev1.SecretTypeSSHAuth,
+			Data: map[string][]byte{
+				corev1.SSHAuthPrivateKey: []byte("key"),
+				odoov1.SSHKnownHostsKey:  []byte("hosts"),
+			},
+		})
+		store := s.pvcStore()
+		store.Spec.PVC = nil
+		store.Spec.SFTP = &odoov1.SFTPStore{Host: "backup.example.com", User: "odoo", SSHSecret: corev1.LocalObjectReference{Name: s.name + "-ssh"}}
+		t.create(store)
+		s.reconcile()
+		Expect(s.ready().Reason).NotTo(Equal(ReasonStoreSecretBroken))
+		Expect(s.get().Status.ProbeJob).NotTo(BeEmpty())
+		Expect(s.jobs()).To(HaveLen(1))
+	})
 
 	It("probes once the missing Secret appears", func() {
 		t.create(s.pvcStore())

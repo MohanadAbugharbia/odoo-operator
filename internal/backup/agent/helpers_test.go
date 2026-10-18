@@ -882,3 +882,34 @@ func TestKnownHostAlgorithms(t *testing.T) {
 		t.Fatalf("a copy store's remote is limited too: %v", err)
 	}
 }
+
+func TestUseSSHAuthPrivateKey(t *testing.T) {
+	dir := t.TempDir()
+	authKey := filepath.Join(dir, sshAuthPrivateKey)
+	if err := os.WriteFile(authKey, []byte("key"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RCLONE_CONFIG_STORE_KEY_FILE", filepath.Join(dir, "id_ed25519"))
+	if err := UseSSHAuthPrivateKey(); err != nil || os.Getenv("RCLONE_CONFIG_STORE_KEY_FILE") != authKey {
+		t.Fatalf("a missing id_ed25519 falls back to ssh-privatekey: %v, %q", err, os.Getenv("RCLONE_CONFIG_STORE_KEY_FILE"))
+	}
+
+	// id_ed25519 wins when both are there.
+	ed := filepath.Join(dir, "id_ed25519")
+	if err := os.WriteFile(ed, []byte("key"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RCLONE_CONFIG_COPY1_KEY_FILE", ed)
+	// Neither there: the setting is kept, and rclone names the missing file.
+	other := filepath.Join(t.TempDir(), "id_ed25519")
+	t.Setenv("RCLONE_CONFIG_COPY2_KEY_FILE", other)
+	if err := UseSSHAuthPrivateKey(); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("RCLONE_CONFIG_COPY1_KEY_FILE"); got != ed {
+		t.Errorf("both keys: %q", got)
+	}
+	if got := os.Getenv("RCLONE_CONFIG_COPY2_KEY_FILE"); got != other {
+		t.Errorf("no key: %q", got)
+	}
+}

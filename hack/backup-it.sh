@@ -33,9 +33,14 @@ mkdir -p "$WORK/ssh"
 # The key is made, and made readable for the unprivileged test user, inside
 # the container: its files belong to root, which a CI runner is not.
 docker run --rm -v "$WORK/ssh:/k" --entrypoint sh atmoz/sftp:alpine -c \
-	'ssh-keygen -q -t ed25519 -N "" -f /k/id_ed25519 && chmod 0644 /k/id_ed25519'
+	'ssh-keygen -q -t ed25519 -N "" -f /k/id_ed25519 &&
+	 ssh-keygen -q -t rsa -b 3072 -m PEM -N "" -f /k/id_rsa &&
+	 ssh-keygen -q -t ecdsa -b 256 -N "" -f /k/id_ecdsa &&
+	 chmod 0644 /k/id_ed25519 /k/id_rsa /k/id_ecdsa'
 docker run -d --name backup-it-sftp --network "$NET" \
-	-v "$WORK/ssh/id_ed25519.pub:/home/backup/.ssh/keys/id.pub:ro" atmoz/sftp:alpine backup::1001:1001:upload >/dev/null
+	-v "$WORK/ssh/id_ed25519.pub:/home/backup/.ssh/keys/id.pub:ro" \
+	-v "$WORK/ssh/id_rsa.pub:/home/backup/.ssh/keys/id_rsa.pub:ro" \
+	-v "$WORK/ssh/id_ecdsa.pub:/home/backup/.ssh/keys/id_ecdsa.pub:ro" atmoz/sftp:alpine backup::1001:1001:upload >/dev/null
 
 # S3: SeaweedFS with one identity, so wrong credentials are refused.
 cat >"$WORK/s3.json" <<'JSON'
@@ -70,6 +75,7 @@ docker run --rm --network "$NET" --user 65532:65532 -v "$WORK/ssh:/it:ro" -v "$P
 	-e TEST_BACKUP_PG_HOST=backup-it-pg -e TEST_BACKUP_PG_PASSWORD=postgres \
 	-e TEST_SFTP_HOST=backup-it-sftp -e TEST_SFTP_USER=backup -e TEST_SFTP_PATH=upload \
 	-e TEST_SFTP_KEY_FILE=/it/id_ed25519 -e TEST_SFTP_KNOWN_HOSTS=/it/known_hosts \
+	-e TEST_SFTP_RSA_KEY_FILE=/it/id_rsa -e TEST_SFTP_ECDSA_KEY_FILE=/it/id_ecdsa \
 	-e TEST_S3_ENDPOINT=http://backup-it-s3:8333 -e TEST_S3_BUCKET=odoo-it \
 	-e TEST_S3_ACCESS_KEY_ID=backupkey -e TEST_S3_SECRET_ACCESS_KEY=backupsecret123 \
 	-w /tmp --entrypoint /it/agent.test "$IMAGE" \

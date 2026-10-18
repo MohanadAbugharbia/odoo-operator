@@ -302,8 +302,12 @@ spec:
                     type: integer
                   sshSecret:
                     description: |-
-                      SSHSecret holds the private key (id_ed25519) and the server's host key
-                      (known_hosts). The host key is always checked.
+                      SSHSecret holds the private key and the server's host key
+                      (known_hosts). The private key is under id_ed25519 or, as in Secrets of
+                      type kubernetes.io/ssh-auth, ssh-privatekey (id_ed25519 wins when both
+                      are set). Any unencrypted Ed25519, ECDSA or RSA key works, in OpenSSH or
+                      PEM format; keys with a passphrase do not. The host key is always
+                      checked.
                     properties:
                       name:
                         default: ""

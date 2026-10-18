@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -348,8 +349,9 @@ func checkStoreSecrets(ctx context.Context, c client.Reader, store *odoov1.OdooB
 			return err
 		}
 		for _, k := range keys {
-			if _, ok := secret.Data[k]; !ok {
-				return fmt.Errorf("secret %q of OdooBackupStore %s has no key %q", name, store.Name, k)
+			if !slices.ContainsFunc(strings.Split(k, "|"), func(k string) bool { _, ok := secret.Data[k]; return ok }) {
+				return fmt.Errorf("secret %q of OdooBackupStore %s has no key %s", name, store.Name,
+					`"`+strings.ReplaceAll(k, "|", `" or "`)+`"`)
 			}
 		}
 	}

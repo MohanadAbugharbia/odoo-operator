@@ -92,6 +92,9 @@ func emulateLocation(t *testing.T, loc jobspec.Location, sec secrets, storeDir s
 		}
 		for _, item := range v.Secret.Items {
 			value, ok := sec[v.Secret.SecretName][item.Key]
+			if !ok && v.Secret.Optional != nil && *v.Secret.Optional {
+				continue // the kubelet leaves a missing key out
+			}
 			if !ok {
 				t.Fatalf("the Job mounts key %s of Secret %s, which the test does not have", item.Key, v.Secret.SecretName)
 			}
@@ -257,24 +260,42 @@ func storeCases(t *testing.T) []storeCase {
 			}
 			port = n
 		}
-		sec := copySecrets(key)
-		sec["sftp"] = map[string]string{odoov1.SSHPrivateKeyKey: string(keyData), odoov1.SSHKnownHostsKey: string(knownHosts)}
-		cases = append(cases, storeCase{
-			name: "sftp",
-			store: storeObject(odoov1.OdooBackupStoreSpec{SFTP: &odoov1.SFTPStore{
-				Host: host, Port: port, User: os.Getenv("TEST_SFTP_USER"),
-				Path:      odoov1.StorePath(os.Getenv("TEST_SFTP_PATH") + "/" + randomHex(t, 4)),
-				SSHSecret: corev1.LocalObjectReference{Name: "sftp"},
-			}}),
-			secrets: sec,
-			broken: func(s secrets) secrets {
-				// A server whose host key does not match is refused.
-				s = copySecrets(s)
-				s["sftp"][odoov1.SSHKnownHostsKey] = "[" + host + "]:1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN3iAlYu0OFlbFtu1hWW2fb+qv/lDpobr1GQY/3t7dJI\n" +
-					strings.Replace(string(knownHosts), "AAAA", "AAAB", 1)
-				return s
-			},
-		})
+		sftpCase := func(name, secretKey string, keyData []byte) storeCase {
+			sec := copySecrets(key)
+			sec["sftp"] = map[string]string{secretKey: string(keyData), odoov1.SSHKnownHostsKey: string(knownHosts)}
+			return storeCase{
+				name: name,
+				store: storeObject(odoov1.OdooBackupStoreSpec{SFTP: &odoov1.SFTPStore{
+					Host: host, Port: port, User: os.Getenv("TEST_SFTP_USER"),
+					Path:      odoov1.StorePath(os.Getenv("TEST_SFTP_PATH") + "/" + randomHex(t, 4)),
+					SSHSecret: corev1.LocalObjectReference{Name: "sftp"},
+				}}),
+				secrets: sec,
+				broken: func(s secrets) secrets {
+					// A server whose host key does not match is refused.
+					s = copySecrets(s)
+					s["sftp"][odoov1.SSHKnownHostsKey] = "[" + host + "]:1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN3iAlYu0OFlbFtu1hWW2fb+qv/lDpobr1GQY/3t7dJI\n" +
+						strings.Replace(string(knownHosts), "AAAA", "AAAB", 1)
+					return s
+				},
+			}
+		}
+		cases = append(cases, sftpCase("sftp", odoov1.SSHPrivateKeyKey, keyData))
+		// Other client key types, also under the ssh-auth Secret's key name.
+		for _, k := range []struct{ name, env, secretKey string }{
+			{"sftp-rsa", "TEST_SFTP_RSA_KEY_FILE", odoov1.SSHAuthPrivateKeyKey},
+			{"sftp-ecdsa", "TEST_SFTP_ECDSA_KEY_FILE", odoov1.SSHPrivateKeyKey},
+		} {
+			if os.Getenv(k.env) == "" {
+				t.Logf("%s is not set, skipping %s", k.env, k.name)
+				continue
+			}
+			data, err := os.ReadFile(os.Getenv(k.env))
+			if err != nil {
+				t.Fatalf("%s: %v", k.env, err)
+			}
+			cases = append(cases, sftpCase(k.name, k.secretKey, data))
+		}
 	} else {
 		t.Log("TEST_SFTP_HOST is not set, skipping the SFTP store")
 	}
@@ -316,7 +337,8 @@ func parseInt32(s string) (int32, error) {
 }
 
 // setEnv sets a Job's environment for the rest of the test, the way
-// odoo-backup starts: with the host key algorithms limited to known_hosts.
+// odoo-backup starts: with the host key algorithms limited to known_hosts
+// and the private key found under either name.
 func setEnv(t *testing.T, env []string) {
 	t.Helper()
 	for _, name := range []string{envHostKeyAlgorithms, "RCLONE_CONFIG_COPY1_HOST_KEY_ALGORITHMS"} {
@@ -328,6 +350,9 @@ func setEnv(t *testing.T, env []string) {
 		t.Setenv(k, v)
 	}
 	if err := LimitHostKeyAlgorithms(); err != nil {
+		t.Fatal(err)
+	}
+	if err := UseSSHAuthPrivateKey(); err != nil {
 		t.Fatal(err)
 	}
 }

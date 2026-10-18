@@ -37,6 +37,9 @@ const (
 	S3SecretAccessKeyKey = "AWS_SECRET_ACCESS_KEY"
 	SSHPrivateKeyKey     = "id_ed25519"
 	SSHKnownHostsKey     = "known_hosts"
+	// SSHAuthPrivateKeyKey is where Secrets of type kubernetes.io/ssh-auth
+	// keep the private key; the operator reads it when id_ed25519 is absent.
+	SSHAuthPrivateKeyKey = "ssh-privatekey"
 )
 
 // StorePath is a folder inside a store: relative segments separated by "/",
@@ -87,8 +90,12 @@ type SFTPStore struct {
 	// Path on the server, relative to the user's home folder unless it
 	// starts with "/". Repositories go under <path>/<namespace>/<deployment>/.
 	Path StorePath `json:"path,omitempty"`
-	// SSHSecret holds the private key (id_ed25519) and the server's host key
-	// (known_hosts). The host key is always checked.
+	// SSHSecret holds the private key and the server's host key
+	// (known_hosts). The private key is under id_ed25519 or, as in Secrets of
+	// type kubernetes.io/ssh-auth, ssh-privatekey (id_ed25519 wins when both
+	// are set). Any unencrypted Ed25519, ECDSA or RSA key works, in OpenSSH or
+	// PEM format; keys with a passphrase do not. The host key is always
+	// checked.
 	SSHSecret corev1.LocalObjectReference `json:"sshSecret"`
 }
 

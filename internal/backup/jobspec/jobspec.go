@@ -246,10 +246,16 @@ func locate(store *odoov1.OdooBackupStore, repo string, sl slot) (Location, erro
 			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
 				SecretName:  sftp.SSHSecret.Name,
 				DefaultMode: ptr(int32(0o440)),
+				// The private key is under either name, so a missing key
+				// must not stop the Pod; the operator checks the Secret
+				// before it creates a Job, and the agent reads the key that
+				// is there.
 				Items: []corev1.KeyToPath{
 					{Key: odoov1.SSHPrivateKeyKey, Path: odoov1.SSHPrivateKeyKey},
+					{Key: odoov1.SSHAuthPrivateKeyKey, Path: odoov1.SSHAuthPrivateKeyKey},
 					{Key: odoov1.SSHKnownHostsKey, Path: odoov1.SSHKnownHostsKey},
 				},
+				Optional: ptr(true),
 			}},
 		})
 		loc.Mounts = append(loc.Mounts, corev1.VolumeMount{Name: sl.volSSH, MountPath: sl.sshMount, ReadOnly: true})
@@ -303,7 +309,8 @@ func locate(store *odoov1.OdooBackupStore, repo string, sl slot) (Location, erro
 	return loc, nil
 }
 
-// StoreSecrets are the Secrets (and keys) a store's Jobs read.
+// StoreSecrets are the Secrets (and keys) a store's Jobs read. A key written
+// "a|b" is either of them.
 func StoreSecrets(store *odoov1.OdooBackupStore) map[string][]string {
 	out := map[string][]string{}
 	add := func(name string, keys ...string) {
@@ -316,7 +323,7 @@ func StoreSecrets(store *odoov1.OdooBackupStore) map[string][]string {
 	case spec.S3 != nil:
 		add(spec.S3.CredentialsSecret.Name, odoov1.S3AccessKeyIDKey, odoov1.S3SecretAccessKeyKey)
 	case spec.SFTP != nil:
-		add(spec.SFTP.SSHSecret.Name, odoov1.SSHPrivateKeyKey, odoov1.SSHKnownHostsKey)
+		add(spec.SFTP.SSHSecret.Name, odoov1.SSHPrivateKeyKey+"|"+odoov1.SSHAuthPrivateKeyKey, odoov1.SSHKnownHostsKey)
 	}
 	key := spec.EncryptionKeySecret.Key
 	if key == "" {

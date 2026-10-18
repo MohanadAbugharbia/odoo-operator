@@ -142,6 +142,9 @@ func run(ctx context.Context, command string, args []string) int {
 	if err := agent.LimitHostKeyAlgorithms(); err != nil {
 		fmt.Fprintln(os.Stderr, "read the SFTP known_hosts:", err)
 	}
+	if err := agent.UseSSHAuthPrivateKey(); err != nil {
+		fmt.Fprintln(os.Stderr, "find the SFTP private key:", err)
+	}
 	switch command {
 	case "version":
 		fmt.Println(version)
