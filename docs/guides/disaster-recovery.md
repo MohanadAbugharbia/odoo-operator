@@ -10,11 +10,11 @@ cluster. You need:
 - the instance's old **namespace** and **name**;
 - [restic](https://restic.net/) on a workstation, to list the backups.
 
-!!! warning "Rehearse it"
-    This procedure follows how the operator finds and restores backups, but
-    the restore onto a never-initialised instance it relies on is not covered
-    by the operator's end-to-end tests yet. Try it on a scratch cluster
-    before you depend on it.
+!!! tip "Practise it"
+    This procedure was rehearsed end to end on a fresh cluster: the instance
+    came back with its data and attachments, before its init Job ran.
+    Practise it once yourself on a scratch cluster, so the steps are known
+    before you need them.
 
 ## Why the name matters
 
