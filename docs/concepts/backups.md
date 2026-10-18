@@ -13,6 +13,39 @@ in `encryptionKeySecret` (keep a copy of it outside the cluster: without it no
 backup can be read). The kinds of store and their settings are in [Set up a
 backup store](../guides/backup-stores.md).
 
+## Taking a backup
+
+```mermaid
+flowchart LR
+  subgraph cluster[Kubernetes cluster]
+    op[odoo-operator<br/>one Job per instance at a time]
+    odoo[Odoo<br/>keeps running, unless offline]
+    job[backup Job]
+    pg[(PostgreSQL<br/>the instance's database)]
+    fs[(filestore volume)]
+  end
+  subgraph offsite[Stores]
+    store[(first store<br/>restic repository)]
+    copies[(other stores<br/>optional)]
+  end
+  op -- "on schedule or on demand" --> job
+  op -. "stops it for an offline backup" .-> odoo
+  odoo -- "writes attachments" --> fs
+  job -- "1. dump, file list and row counts,<br/>one database snapshot" --> pg
+  job -- "2. copy the files" --> fs
+  job -- "3. one restic snapshot" --> store
+  store -- "4. restic copy" --> copies
+```
+
+1. The Job dumps the database and, from the same database snapshot, lists
+   the files the database refers to and counts each table's rows.
+2. It copies those files from the filestore. A file deleted since the dump
+   is taken from the previous backup.
+3. It writes `dump.sql`, `manifest.json` and `filestore/` as one restic
+   snapshot to the first store, then applies retention there.
+4. It copies the snapshot to every other store listed, and applies retention
+   in each.
+
 ## What a backup holds
 
 A backup is one restic snapshot holding `dump.sql` (a plain `pg_dump`
@@ -41,6 +74,48 @@ or `consistency: Offline`, Odoo is stopped while the backup runs.
 
 Deleting an OdooBackup does not delete the snapshot, and deleting an
 instance never deletes its backups.
+
+## Restoring
+
+```mermaid
+flowchart LR
+  subgraph cluster[Kubernetes cluster]
+    restore[OdooRestore<br/>names a backup]
+    op[odoo-operator]
+    odoo[Odoo<br/>scaled to 0]
+    job[restore Job]
+    pg[(PostgreSQL<br/>db_restore beside db)]
+    fs[(filestore volume<br/>db_restore beside db)]
+  end
+  store[(store holding<br/>the snapshot)]
+  restore --> op
+  op -- "1. stop Odoo" --> odoo
+  op --> job
+  store -- "2. fetch the snapshot" --> job
+  job -- "3. load dump.sql" --> pg
+  job -- "4. write the files" --> fs
+  job -- "5. check, then 6. swap<br/>database and files by renaming" --> pg
+  op -- "7. start Odoo" --> odoo
+```
+
+Nothing live changes until the swap:
+
+1. Odoo is stopped (the maintenance page shows, when enabled).
+2. The Job fetches the snapshot, from a copy in another store when the
+   backup's own store is not ready.
+3. It loads `dump.sql` into a new database, `<db>_restore_<suffix>`.
+4. It writes the files into `filestore/<db>_restore_<suffix>`, beside the
+   live ones.
+5. It checks the result: every table's row count against the backup, every
+   attachment's file, and a sample of files against their checksum. A failed
+   check stops the restore with the live data untouched.
+6. It swaps by renaming: the live database and files become
+   `<db>_prev_<suffix>`, kept for `keepPrevious` (72 hours by default) so the
+   restore can be undone, and the restored ones take their names.
+7. Odoo starts on the image recorded in the backup.
+
+The details, and how to undo a restore, are in
+[Restore and undo](../guides/restore.md).
 
 ## The backup image
 
