@@ -379,7 +379,7 @@ k rollout status deploy/"$BOOT" --timeout=5m
 [ "$(boot_psql "SELECT store_fname FROM ir_attachment WHERE id = 14")" = "b1/$FIXTURE_SHA" ] || fail "the backup's attachment row is missing"
 [ "$(k exec deploy/"$BOOT" -c odoo -- cat "$(data_dir)/filestore/$BOOT_DB/b1/$FIXTURE_SHA")" = "odoo fixture 18.0" ] ||
 	fail "the backup's attachment file is missing"
-[ "$(boot_psql "SELECT value FROM ir_config_parameter WHERE key = 'database.is_neutralized'")" = True ] || fail "the database was not neutralized"
+[ "$(boot_psql "SELECT lower(value) FROM ir_config_parameter WHERE key = 'database.is_neutralized'")" = true ] || fail "the database was not neutralized"
 uuid="$(boot_psql "SELECT value FROM ir_config_parameter WHERE key = 'database.uuid'")"
 [ -n "$uuid" ] && [ "$uuid" != "$FIXTURE_UUID" ] || fail "the neutralized copy kept database.uuid $uuid"
 k exec deploy/"$BOOT" -c odoo -- python3 -c \
@@ -418,7 +418,7 @@ wait_for odoobackupstore/s3-readonly .status.ready true 420
 wait_for odoorestore/e2e-boot-from-repo .status.phase Completed 900
 wait_for odoodeployment/"$BOOT" .status.phase Running 900
 [ "$(boot_psql 'SELECT word FROM e2e_marker')" = before-s3 ] || fail "the latest manual backup of $OD was not restored"
-[ "$(boot_psql "SELECT value FROM ir_config_parameter WHERE key = 'database.is_neutralized'")" = True ] || fail "the restore was not neutralized"
+[ "$(boot_psql "SELECT lower(value) FROM ir_config_parameter WHERE key = 'database.is_neutralized'")" = true ] || fail "the restore was not neutralized"
 [ -n "$(k get odoorestore e2e-boot-from-repo -o jsonpath='{.status.snapshotID}')" ] || fail "the snapshot latest resolved to is not recorded"
 cat <<YAML | kubectl apply -f -
 apiVersion: odoo.abugharbia.com/v1
