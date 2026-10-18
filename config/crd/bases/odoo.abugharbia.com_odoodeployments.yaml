@@ -1842,7 +1842,7 @@ spec:
                       succeeded:
                         description: |-
                           Succeeded is true when the backup restored, passed every check and
-                          Odoo loaded it.
+                          Odoo read it.
                         type: boolean
                     required:
                     - succeeded
