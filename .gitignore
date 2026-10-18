@@ -39,3 +39,6 @@ __debug_*
 dist/
 out/
 cover/
+
+# Documentation site build output (make docs-build)
+site/

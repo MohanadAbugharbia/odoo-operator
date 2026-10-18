@@ -907,6 +907,11 @@ spec:
                     type: integer
                   ttlSecondsAfterFinished:
                     default: 86400
+                    description: |-
+                      TTLSecondsAfterFinished removes the instance's backup, restore and
+                      drill Jobs that long after they finish. Init and upgrade Jobs get no
+                      TTL: the operator deletes them when they succeed and keeps a failed one
+                      until it is deleted, which is how it is retried.
                     format: int32
                     minimum: 0
                     type: integer

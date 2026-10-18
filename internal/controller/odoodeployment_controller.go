@@ -813,6 +813,10 @@ func (r *OdooDeploymentReconciler) observeCurrentJob(ctx context.Context, s *rec
 		return ctrl.Result{}, true, nil
 
 	case reconcileloops.JobStateFailed:
+		if err := reconcileloops.KeepFailedMaintenanceJob(ctx, r.Client, obs.Job); err != nil {
+			result, err := s.fail(odoov1.ReasonReconcileFailed, err)
+			return result, false, err
+		}
 		reason := failedReason
 		detail := obs.FailureMessage
 		if obs.QuotaMessage != "" {
