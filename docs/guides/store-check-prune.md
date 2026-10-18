@@ -15,7 +15,8 @@ spec:                                 # OdooBackupStore
   timeZone: Europe/Berlin
 ```
 
-One Job runs at a time per store, prune first when both are due, over the
+Checks and prunes only run while the store is `Ready`. One Job runs at a
+time per store, prune first when both are due, over the
 repositories of every instance in the namespace that lists the store. The
 outcome is in `status.lastCheck` and `status.lastPrune` (with the part read,
 the repositories and what they hold); a failed task keeps its Job for its log

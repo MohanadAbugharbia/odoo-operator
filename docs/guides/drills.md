@@ -10,5 +10,6 @@ through `sh`: Odoo loads its registry, reads records of core models and reads
 attachments from the scratch filestore), and drops the scratch database. Odoo
 keeps serving throughout. The outcome is in `status.backup.lastDrill`
 (`lastSuccessfulDrillTime` keeps the last pass); a failed drill keeps its Job
+for `spec.jobs.ttlSecondsAfterFinished`
 (`kubectl logs job/<name> --all-containers`). The scratch filestore needs node
 disk the size of the filestore; `drill.scratchSizeLimit` caps it.

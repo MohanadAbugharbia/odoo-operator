@@ -42,6 +42,8 @@ scrape job, and narrow the panels to some namespaces, instances and stores.
   per-instance series carry the namespace of their OdooDeployment, which
   Prometheus would otherwise rename to `exported_namespace`, leaving the
   namespace selector with only the operator's namespace.
+- kube-state-metrics for the replica counts in the **Instances** table and
+  the **Health** row.
 - For the **Odoo pods** row: the kubelet's cAdvisor and volume metrics
   (`container_cpu_usage_seconds_total`, `container_memory_working_set_bytes`,
   `kubelet_volume_stats_*`) and kube-state-metrics

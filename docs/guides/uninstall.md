@@ -14,7 +14,13 @@ What stays behind depends on each instance's policies:
 - The filestore volume is kept unless `spec.odooFilestore.deletionPolicy` is
   `Delete`.
 - Backups are never deleted: deleting an instance or an `OdooBackup` leaves
-  the snapshots in their stores.
+  the snapshots in their stores. The instance's repositories are no longer
+  checked or pruned either, since store tasks only cover instances that list
+  the store.
+- The databases and folders that restores kept for undo
+  (`<db>_prev_<suffix>`) stay; drop them by hand.
+- Deleting an instance waits for all its pods to stop, including a running
+  backup Job.
 
 Then remove the operator, its CRDs and RBAC:
 

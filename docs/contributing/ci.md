@@ -26,8 +26,9 @@ pays only for the tests its change needs:
 - A skipped job counts as passed, so these jobs can be required checks.
 - The Changes job's summary says what ran and why.
 
-`.github/workflows/docs.yml` builds this site on every pull request and
-publishes it; see [Writing the docs](docs.md).
+`.github/workflows/docs.yml` builds this site on every pull request, and
+publishes it from `main`, from releases and, as a preview, from pull requests
+with the `docs-preview` label; see [Writing the docs](docs.md).
 
 ## Test results
 

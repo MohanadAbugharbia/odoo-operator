@@ -106,9 +106,11 @@ Nothing live changes until the swap:
 3. It loads `dump.sql` into a new database, `<db>_restore_<suffix>`.
 4. It writes the files into `filestore/<db>_restore_<suffix>`, beside the
    live ones.
-5. It checks the result: every table's row count against the backup, every
-   attachment's file, and a sample of files against their checksum. A failed
-   check stops the restore with the live data untouched.
+5. It checks the result: every table's row count must match the backup and
+   every attachment the backup holds must be there, or the restore stops with
+   the live data untouched. A sample of files is also compared with its
+   checksum; a mismatch is a warning in the OdooRestore's status, since those
+   files were already damaged when the backup was taken.
 6. It swaps by renaming: the live database and files become
    `<db>_prev_<suffix>`, kept for `keepPrevious` (72 hours by default) so the
    restore can be undone, and the restored ones take their names.
@@ -121,6 +123,7 @@ The details, and how to undo a restore, are in
 
 The Jobs run `ghcr.io/mohanadabugharbia/odoo-operator-backup`
 at the operator's own tag (derived from the operator's image; `--backup-image`
-overrides it). It carries the PostgreSQL 14–18 clients, restic, rclone and the
+overrides it). An operator image pinned by digest only has no tag to derive it
+from, and gets `:latest`: set `--backup-image` for such installs. It carries the PostgreSQL 14–18 clients, restic, rclone and the
 `odoo-backup` agent, and runs as the instance's pod security context with no
 service account token.
