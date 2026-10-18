@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -32,6 +34,16 @@ func (h *backupHarness) drillJobs() []batchv1.Job {
 		}
 	}
 	return live
+}
+
+// laggingCache is a cache that has not seen the drill Jobs yet.
+type laggingCache struct{ client.Client }
+
+func (c laggingCache) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*batchv1.Job); ok && strings.Contains(key.Name, "-drill-") {
+		return apierrors.NewNotFound(batchv1.Resource("jobs"), key.Name)
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
 }
 
 func container(cs []corev1.Container, name string) *corev1.Container {
@@ -219,6 +231,18 @@ var _ = Describe("Restore drills", func() {
 		_, od = h.reconcile()
 		Expect(od.Status.Backup.DrillDue).To(BeNil())
 		Expect(od.Status.Backup.NextDrillTime).To(BeNil())
+	})
+
+	It("follows a drill Job the cache has not seen yet", func() {
+		start()
+		h.setStoreReady(h.store, true)
+		h.completedBackup()
+		h.r.Client = laggingCache{k8sClient}
+		_, od := h.reconcile()
+		h.r.Client = k8sClient
+		Expect(od.Status.CurrentOperation.Kind).To(Equal(odoov1.OperationDrill))
+		Expect(od.Status.Backup.LastDrill).To(BeNil())
+		Expect(h.drillJobs()).To(HaveLen(1))
 	})
 
 	It("ends a drill whose Job was deleted", func() {

@@ -22,9 +22,12 @@ import (
 	"strings"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
@@ -146,6 +149,15 @@ func (r *OdooDeploymentReconciler) driveDrill(ctx context.Context, s *reconcileS
 	}
 	switch out.state {
 	case reconcileloops.JobStateMissing:
+		// The cache may not have the Job just created yet: only the API
+		// server can say it is gone.
+		err := r.reader().Get(ctx, client.ObjectKey{Namespace: od.Namespace, Name: op.Job}, &batchv1.Job{})
+		if err == nil {
+			return ctrl.Result{RequeueAfter: 2 * time.Second}, false, nil
+		}
+		if !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, false, err
+		}
 		outcome.Message = "job " + op.Job + " was deleted before it finished"
 		return r.finishDrill(ctx, s, outcome)
 	case reconcileloops.JobStateActive:
