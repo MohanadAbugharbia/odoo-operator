@@ -164,6 +164,7 @@ kubectl delete namespace odoo-sample
 
 The second command removes everything the sample installed, including the
 CloudNativePG CRDs and webhook configurations it put cluster-wide.
+
 To remove the operator too, see [Uninstall](guides/uninstall.md).
 
 ## Next steps
