@@ -330,7 +330,7 @@ func TestGetMaintenanceJobTemplate_PodShape(t *testing.T) {
 	if len(pod.ImagePullSecrets) != 1 || pod.ImagePullSecrets[0].Name != "ghcr-pull" {
 		t.Errorf("imagePullSecrets not propagated: %v", pod.ImagePullSecrets)
 	}
-	if *job.Spec.ActiveDeadlineSeconds != 120 || *job.Spec.TTLSecondsAfterFinished != 600 || *job.Spec.BackoffLimit != 1 {
+	if *job.Spec.ActiveDeadlineSeconds != 120 || job.Spec.TTLSecondsAfterFinished != nil || *job.Spec.BackoffLimit != 1 {
 		t.Errorf("job tunables not applied: %+v", job.Spec)
 	}
 	if c.Image != "odoo:18" {
@@ -341,7 +341,7 @@ func TestGetMaintenanceJobTemplate_PodShape(t *testing.T) {
 func TestGetMaintenanceJobTemplate_Defaults(t *testing.T) {
 	o := minimalOdooDeployment([]string{"base"}, nil)
 	job := o.GetMaintenanceJobTemplate([]string{"base"}, nil, true)
-	if *job.Spec.ActiveDeadlineSeconds != 3600 || *job.Spec.TTLSecondsAfterFinished != 86400 || *job.Spec.BackoffLimit != 2 {
+	if *job.Spec.ActiveDeadlineSeconds != 3600 || job.Spec.TTLSecondsAfterFinished != nil || *job.Spec.BackoffLimit != 2 {
 		t.Errorf("job defaults: %+v", job.Spec)
 	}
 }

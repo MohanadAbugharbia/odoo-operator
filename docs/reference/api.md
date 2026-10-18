@@ -646,7 +646,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `activeDeadlineSeconds` _integer_ |  | 3600 | Minimum: 1 <br /> |
-| `ttlSecondsAfterFinished` _integer_ |  | 86400 | Minimum: 0 <br /> |
+| `ttlSecondsAfterFinished` _integer_ | TTLSecondsAfterFinished removes the instance's backup, restore and<br />drill Jobs that long after they finish. Init and upgrade Jobs get no<br />TTL: the operator deletes them when they succeed and keeps a failed one<br />until it is deleted, which is how it is retried. | 86400 | Minimum: 0 <br /> |
 | `backoffLimit` _integer_ |  | 2 | Minimum: 0 <br /> |
 
 

@@ -673,11 +673,13 @@ func (o *OdooDeployment) GetMaintenanceJobTemplate(initModules, upgradeModules [
 				},
 				Spec: spec,
 			},
-			Parallelism:             ptrTo(int32(1)),
-			Completions:             ptrTo(int32(1)),
-			BackoffLimit:            ptrTo(o.Spec.Jobs.BackoffLimitValue()),
-			ActiveDeadlineSeconds:   ptrTo(o.Spec.Jobs.ActiveDeadlineSecondsValue()),
-			TTLSecondsAfterFinished: ptrTo(o.Spec.Jobs.TTLSecondsAfterFinishedValue()),
+			Parallelism:           ptrTo(int32(1)),
+			Completions:           ptrTo(int32(1)),
+			BackoffLimit:          ptrTo(o.Spec.Jobs.BackoffLimitValue()),
+			ActiveDeadlineSeconds: ptrTo(o.Spec.Jobs.ActiveDeadlineSecondsValue()),
+			// No TTL: a succeeded Job is deleted by the operator, and a failed
+			// one must stay until someone deletes it to retry. A TTL would
+			// delete it, and the operator would take that for a retry.
 		},
 	}
 	return job

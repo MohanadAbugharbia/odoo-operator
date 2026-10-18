@@ -10,7 +10,7 @@ An `OdooDeployment` moves through `status.phase`:
 | `Running` | The Deployment runs `status.appliedImage`; `Ready` is True once the requested replicas are available (or `spec.replicas` is 0). |
 | `BackingUp` | An offline backup runs; Odoo is stopped (see [How backups work](backups.md)). An online backup leaves the phase alone. |
 | `Restoring` | An OdooRestore runs; Odoo is stopped until it finishes. |
-| `Failed` | Odoo is stopped and needs attention. Usually a maintenance Job failed: the `Degraded` condition names the Job and the `kubectl logs` command to read it. Deleting the Job retries it, and so does its `spec.jobs.ttlSecondsAfterFinished` (24 hours by default) running out, so read its log before then. Also `DatabaseNameChanged` (the name resolved from `spec.database.nameFromSecret` changed) and a restore abandoned in the middle of its swap (`RestoreIncomplete`). |
+| `Failed` | Odoo is stopped and needs attention. Usually a maintenance Job failed: the `Degraded` condition names the Job and the `kubectl logs` command to read it. The failed Job is kept until you delete it; deleting it retries it. Also `DatabaseNameChanged` (the name resolved from `spec.database.nameFromSecret` changed) and a restore abandoned in the middle of its swap (`RestoreIncomplete`). |
 
 `status.currentInitJob.startedAt` records when the running Job was created and
 `status.lastMaintenanceDuration` how long the last successful upgrade took.

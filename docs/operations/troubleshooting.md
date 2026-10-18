@@ -52,7 +52,7 @@ fails.
 
 | Cause | Reason | What to do |
 |---|---|---|
-| The init or upgrade Job failed | `InitJobFailed`, `UpgradeJobFailed`, `QuotaExceeded` | Read `kubectl -n <ns> logs job/<job>`, fix the cause, then **delete the Job** to retry: changing the spec alone does not. Left alone, the Job is deleted by its TTL (`spec.jobs.ttlSecondsAfterFinished`, a day by default) and then **runs again by itself**. A failed upgrade leaves Odoo stopped; restoring a backup replaces the failed Job ([Restore and undo](../guides/restore.md)). |
+| The init or upgrade Job failed | `InitJobFailed`, `UpgradeJobFailed`, `QuotaExceeded` | Read `kubectl -n <ns> logs job/<job>`, fix the cause, then **delete the Job** to retry: changing the spec alone does not. The failed Job stays until you delete it, so it is never retried behind your back. A failed upgrade leaves Odoo stopped; restoring a backup replaces the failed Job ([Restore and undo](../guides/restore.md)). |
 | The database name changed | `DatabaseNameChanged` | `spec.database.name` (or the Secret value behind `nameFromSecret`) now resolves to another name than the instance uses. Put the old value back; the operator never switches databases. |
 | A restore was deleted halfway through its swap | `RestoreIncomplete` | Odoo stays stopped. Check the `<db>_restore_*` / `<db>_prev_*` databases and filestore folders named in the restore Job's log, put the data right, then clear `status.currentOperation` on the OdooDeployment. |
 

@@ -405,6 +405,10 @@ type OdooJobConfig struct {
 	// +kubebuilder:default=3600
 	// +kubebuilder:validation:Minimum=1
 	ActiveDeadlineSeconds *int64 `json:"activeDeadlineSeconds,omitempty"`
+	// TTLSecondsAfterFinished removes the instance's backup, restore and
+	// drill Jobs that long after they finish. Init and upgrade Jobs get no
+	// TTL: the operator deletes them when they succeed and keeps a failed one
+	// until it is deleted, which is how it is retried.
 	// +kubebuilder:default=86400
 	// +kubebuilder:validation:Minimum=0
 	TTLSecondsAfterFinished *int32 `json:"ttlSecondsAfterFinished,omitempty"`
