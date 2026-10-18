@@ -687,6 +687,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#what-happens-if-something-goes-wrong" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What happens if something goes wrong
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#undo-a-restore" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1225,6 +1236,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#what-happens-if-something-goes-wrong" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What happens if something goes wrong
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#undo-a-restore" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1285,6 +1307,21 @@ replaces a failed upgrade Job, which makes it the way back from a failed
 upgrade. Modules in <code>spec.modules</code> that the backup lacks are installed again
 afterwards. If <code>spec.image</code> differs from the backup's image the usual upgrade
 follows; set <code>spec.image</code> to the backup's image first to stay on it.</p>
+<h2 id="what-happens-if-something-goes-wrong">What happens if something goes wrong<a class="headerlink" href="#what-happens-if-something-goes-wrong" title="Permanent link">&para;</a></h2>
+<p>The live data is never edited in place, so a restore can fail without
+damaging it, and a Job that dies halfway finishes when it is retried:</p>
+<pre class="mermaid"><code>flowchart TD
+  start([OdooRestore: Odoo is stopped]) --&gt; load["Load the backup beside the live data:&lt;br/&gt;database db_restore_suffix, its filestore"]
+  load --&gt; check[Check row counts, attachments&lt;br/&gt;and a sample of checksums]
+  load --&gt;|error| failed([Failed: live data untouched])
+  check --&gt;|mismatch| failed
+  check --&gt; swap["Swap: live becomes db_prev_suffix,&lt;br/&gt;restored becomes db"]
+  swap --&gt;|Job dies| retry["Retried Job reads the journal&lt;br/&gt;and finishes the swap&lt;br/&gt;(Degraded: RestoreIncomplete meanwhile)"]
+  retry --&gt; swap
+  swap --&gt; run[Odoo starts on the backup's image]
+  run --&gt; kept["Previous data kept until&lt;br/&gt;status.previous.keptUntil"]
+  kept --&gt;|OdooRestore with undo| undo[Swap the previous data back]
+  kept --&gt;|keptUntil passes| gone([Previous data deleted])</code></pre>
 <h2 id="undo-a-restore">Undo a restore<a class="headerlink" href="#undo-a-restore" title="Permanent link">&para;</a></h2>
 <p>The replaced data is kept until <code>status.previous.keptUntil</code>, then deleted. Until
 then the restore can be undone:</p>
