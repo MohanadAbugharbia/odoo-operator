@@ -14,6 +14,11 @@ in these jobs:
   backup images (amd64 and arm64) tagged `sha-<head sha>` and `pr-<number>`, so
   a branch can be tried on a real cluster before it is released.
 
+A change that touches only documentation (`docs/`, Markdown files,
+`mkdocs.yml`, `LICENSE` or the Docs workflow) skips all of these: the first
+job, **Changes**, sees that no other file changed. The skipped jobs count as
+passed.
+
 `.github/workflows/docs.yml` builds this site on every pull request and
 publishes it; see [Writing the docs](docs.md).
 

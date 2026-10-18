@@ -11,8 +11,40 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    # Decides whether the rest runs. A change that touches only the docs
+    # (docs/, Markdown, mkdocs.yml, the license, the Docs workflow) skips
+    # every other job: the Docs workflow builds and checks the site. A job
+    # skipped by its `if` counts as passed, so this also works for required
+    # checks, which a workflow-level paths-ignore would leave waiting.
+    name: Changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # A file counts as code when it matches every pattern, i.e. it is
+          # not one of the docs paths.
+          predicate-quantifier: every
+          filters: |
+            code:
+              - '**'
+              - '!docs/**'
+              - '!**/*.md'
+              - '!mkdocs.yml'
+              - '!LICENSE'
+              - '!.github/workflows/docs.yml'
+
   test:
     name: Unit and envtest
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -127,6 +159,8 @@ jobs:
     # server and an S3 server (hack/backup-it.sh). Restores are checked for
     # fidelity and interrupted at every step to prove they resume.
     name: Backup on PostgreSQL ${{ matrix.pg }}
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -158,6 +192,8 @@ jobs:
     # Backup, restore and undo of a real Odoo in kind, through an S3 store
     # and a PVC store (hack/backup-e2e.sh).
     name: Backup e2e (kind)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -174,6 +210,8 @@ jobs:
 
   lint:
     name: Lint
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -191,7 +229,8 @@ jobs:
     # cluster before it is released. Skipped for pull requests from forks,
     # which get no package write token.
     name: Images
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       contents: read
