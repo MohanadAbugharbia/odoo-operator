@@ -143,8 +143,26 @@ func (s *Schedule) Step(last *time.Time, now time.Time) (due, next time.Time) {
 	if earliest := now.Add(-lookback); from.Before(earliest) {
 		from = earliest
 	}
-	for t := s.Next(from); !t.IsZero() && !t.After(now); t = s.Next(t) {
-		due = t
+	if every, ok := s.cron.(cron.ConstantDelaySchedule); ok {
+		// @every counts from last, so the latest time is arithmetic.
+		first := s.Next(from)
+		if first.After(now) {
+			return time.Time{}, next
+		}
+		return first.Add(now.Sub(first) / every.Delay * every.Delay), next
 	}
-	return due, next
+	// Search back from now in doubling windows, so a long gap costs a few
+	// windows rather than every scheduled time in it.
+	for w := time.Minute; ; w *= 2 {
+		start := now.Add(-w)
+		if !start.After(from) {
+			start = from
+		}
+		for t := s.Next(start); !t.IsZero() && !t.After(now); t = s.Next(t) {
+			due = t
+		}
+		if !due.IsZero() || start.Equal(from) {
+			return due, next
+		}
+	}
 }

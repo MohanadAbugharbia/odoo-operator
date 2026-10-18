@@ -17,6 +17,8 @@ limitations under the License.
 package schedule
 
 import (
+	"math/rand"
+	"strings"
 	"testing"
 	"time"
 )
@@ -128,7 +130,7 @@ func TestStepVeryOldLastStillRunsOnce(t *testing.T) {
 	if want := at(t, "2026-10-18T12:00:00Z"); !due.Equal(want) {
 		t.Errorf("due = %v, want %v", due, want)
 	}
-	if time.Since(start) > 5*time.Second {
+	if time.Since(start) > 100*time.Millisecond {
 		t.Errorf("Step took %v", time.Since(start))
 	}
 }
@@ -238,6 +240,40 @@ func TestNextIsAlwaysLater(t *testing.T) {
 					t.Fatalf("%s %s: Next(%v) = %v, not later", tz, expr, cur, next)
 				}
 				cur = next
+			}
+		}
+	}
+}
+
+// TestStepFindsWhatAFullScanFinds checks the windowed search against walking
+// every scheduled time from last.
+func TestStepFindsWhatAFullScanFinds(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+	exprs := []string{"* * * * *", "*/7 * * * *", "0 3 * * *", "30 2 * * 0", "0 0 1 * *", "@yearly", "@every 90m", "15 4 29 2 *"}
+	base := at(t, "2026-01-01T00:00:00Z")
+	for _, expr := range exprs {
+		for _, tz := range []string{"UTC", "Europe/Berlin", "Asia/Jerusalem"} {
+			s := mustParse(t, expr, tz)
+			for i := 0; i < 40; i++ {
+				now := base.Add(time.Duration(rng.Int63n(int64(400 * 24 * time.Hour))))
+				// Gaps up to 3 days for the dense schedules keep the full
+				// scan quick; the sparse ones also get gaps past lookback.
+				gap := 3 * 24 * time.Hour
+				if i%4 == 0 && !strings.HasPrefix(expr, "*") {
+					gap = 500 * 24 * time.Hour
+				}
+				last := now.Add(-time.Duration(rng.Int63n(int64(gap))))
+				var want time.Time
+				from := last
+				if earliest := now.Add(-lookback); from.Before(earliest) {
+					from = earliest
+				}
+				for x := s.Next(from); !x.IsZero() && !x.After(now); x = s.Next(x) {
+					want = x
+				}
+				if got, _ := s.Step(&last, now); !got.Equal(want) {
+					t.Fatalf("%s %s last %v now %v: due %v, want %v", expr, tz, last, now, got, want)
+				}
 			}
 		}
 	}
