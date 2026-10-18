@@ -33,11 +33,14 @@ extra:
 
 markdown_extensions:
   - admonition
+  - def_list
   - attr_list
   - tables
   - toc:
       permalink: true
   - pymdownx.details
+  - pymdownx.tasklist:
+      custom_checkbox: true
   - pymdownx.highlight
   - pymdownx.inlinehilite
   - pymdownx.superfences:
@@ -54,11 +57,14 @@ nav:
       - Databases: concepts/databases.md
       - How backups work: concepts/backups.md
   - Guides:
+      - Expose Odoo: guides/expose.md
       - Upgrade Odoo: guides/upgrades.md
       - Maintenance page: guides/maintenance-page.md
+      - Set up production backups: guides/production-backups.md
       - Set up a backup store: guides/backup-stores.md
       - Take and schedule backups: guides/backups.md
       - Restore and undo: guides/restore.md
+      - Recover onto a new cluster: guides/disaster-recovery.md
       - Restore drills: guides/drills.md
       - Check and prune a store: guides/store-check-prune.md
       - Monitoring and alerts: guides/monitoring.md
@@ -66,10 +72,13 @@ nav:
       - Uninstall: guides/uninstall.md
   - Operations:
       - Upgrading the operator: operations/upgrading-the-operator.md
+      - Troubleshooting: operations/troubleshooting.md
   - Reference:
       - API: reference/api.md
       - Metrics: reference/metrics.md
       - Configuration: reference/configuration.md
+      - Operator flags: reference/operator-flags.md
+      - Glossary: reference/glossary.md
   - Contributing:
       - Development: contributing/development.md
       - Continuous integration: contributing/ci.md
