@@ -161,7 +161,11 @@ func (r *OdooBackupReconciler) backupsOf(ctx context.Context, obj client.Object)
 }
 
 func backupFinished(phase string) bool {
-	return phase == odoov1.BackupPhaseCompleted || phase == odoov1.BackupPhaseCompletedWithWarnings || phase == odoov1.BackupPhaseFailed
+	switch phase {
+	case odoov1.BackupPhaseCompleted, odoov1.BackupPhaseCompletedWithWarnings, odoov1.BackupPhasePartiallyCompleted, odoov1.BackupPhaseFailed:
+		return true
+	}
+	return false
 }
 
 // restoresOf maps an OdooDeployment to its restores that still hold a

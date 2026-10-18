@@ -192,7 +192,9 @@ func runBackup(ctx context.Context, fs *flag.FlagSet, c *common, args []string) 
 	var ret agent.Retention
 	var withRetention bool
 	var timeZone string
-	var protectBackups, protectSnapshots stringList
+	var protectBackups, protectSnapshots, copies stringList
+	fs.Var(&copies, "copy", "store to copy the backup to (repeatable); the n-th is reached through "+
+		"COPY<n>_RESTIC_REPOSITORY and COPY<n>_RESTIC_PASSWORD_FILE")
 	fs.BoolVar(&withRetention, "retention", false, "forget the snapshots the keep rules no longer keep after the backup")
 	fs.IntVar(&ret.Policy.Last, "keep-last", 0, "keep the newest N scheduled backups")
 	fs.IntVar(&ret.Policy.Hourly, "keep-hourly", 0, "keep the newest scheduled backup of each of the last N hours")
@@ -230,6 +232,10 @@ func runBackup(ctx context.Context, fs *flag.FlagSet, c *common, args []string) 
 	e, err := c.env()
 	if err != nil {
 		return finish(c.terminationLog, result.Failed(result.StepConnect, err))
+	}
+	if o.Copies, err = agent.CopyTargetsFromEnv(e.Restic, copies); err != nil {
+		fmt.Fprintln(os.Stderr, "backup:", err)
+		return 2
 	}
 	return finish(c.terminationLog, agent.Backup(ctx, e, o))
 }

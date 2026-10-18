@@ -171,7 +171,7 @@ func collectBackups(ch chan<- prometheus.Metric, backups []odoov1.OdooBackup) {
 			lastDone[key] = b
 		}
 		switch b.Status.Phase {
-		case odoov1.BackupPhaseCompleted, odoov1.BackupPhaseCompletedWithWarnings:
+		case odoov1.BackupPhaseCompleted, odoov1.BackupPhaseCompletedWithWarnings, odoov1.BackupPhasePartiallyCompleted:
 			if cur := lastOK[key]; cur == nil || b.Status.CompletedAt.After(cur.Status.CompletedAt.Time) {
 				lastOK[key] = b
 			}

@@ -271,6 +271,8 @@ type Snapshot struct {
 	Hostname string    `json:"hostname"`
 	Tags     []string  `json:"tags"`
 	Paths    []string  `json:"paths"`
+	// Original is the snapshot this one was copied from, if it is a copy.
+	Original string `json:"original,omitempty"`
 }
 
 // HasTag reports whether the snapshot carries tag.
@@ -317,6 +319,55 @@ func (r *Restic) Snapshot(ctx context.Context, id string) (Snapshot, error) {
 		return Snapshot{}, fmt.Errorf("snapshot %s not found in the repository", id)
 	}
 	return snaps[0], nil
+}
+
+// lookup returns the value of an environment variable as the restic
+// process sees it: r.Env, the later entry winning, over the process's own.
+func (r *Restic) lookup(key string) string {
+	for i := len(r.Env) - 1; i >= 0; i-- {
+		if k, v, ok := strings.Cut(r.Env[i], "="); ok && k == key {
+			return v
+		}
+	}
+	return os.Getenv(key)
+}
+
+// fromEnv points restic's --from-repo at src's repository.
+func (r *Restic) fromEnv(src *Restic) []string {
+	env := append([]string(nil), r.Env...)
+	for _, k := range []string{"REPOSITORY", "PASSWORD_FILE", "PASSWORD"} {
+		if v := src.lookup("RESTIC_" + k); v != "" {
+			env = append(env, "RESTIC_FROM_"+k+"="+v)
+		}
+	}
+	return env
+}
+
+// EnsureCopyOf creates the repository, unless it exists, with src's chunker
+// parameters, so that snapshots copied from src stay deduplicated.
+func (r *Restic) EnsureCopyOf(ctx context.Context, src *Restic) (created bool, err error) {
+	exists, err := r.Exists(ctx)
+	if err != nil || exists {
+		return false, err
+	}
+	with := *r
+	with.Env = r.fromEnv(src)
+	if _, err := with.run(ctx, "init", "--copy-chunker-params"); err != nil {
+		if exists, existsErr := r.Exists(ctx); existsErr == nil && exists {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// CopyFrom copies snapshot id from src into this repository. A snapshot
+// copied before is not copied again.
+func (r *Restic) CopyFrom(ctx context.Context, src *Restic, id string) error {
+	with := *r
+	with.Env = r.fromEnv(src)
+	_, err := with.run(ctx, "copy", id)
+	return err
 }
 
 // Forget removes snapshots by ID. Their data stays in the repository until

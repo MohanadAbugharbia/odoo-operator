@@ -48,8 +48,9 @@ func applyRetention(ctx context.Context, e *Env, rs *restic.Restic, host, curren
 	for _, s := range snaps {
 		in = append(in, retention.Snapshot{
 			ID: s.ID, Time: s.Time,
-			Kind:   s.TagValue(layout.TagKind),
-			Backup: s.TagValue(layout.TagBackup),
+			Kind:     s.TagValue(layout.TagKind),
+			Backup:   s.TagValue(layout.TagBackup),
+			Original: s.Original,
 		})
 	}
 	protect := retention.Protect{Backups: map[string]bool{}, SnapshotIDs: ret.ProtectSnapshots, Current: current}

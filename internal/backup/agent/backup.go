@@ -63,6 +63,8 @@ type BackupOptions struct {
 
 	// Retention, when set, thins the repository after the backup.
 	Retention *Retention
+	// Copies are the other stores the new snapshot is copied to.
+	Copies []CopyTarget
 }
 
 // maxListed is how many file names a Result lists.
@@ -255,6 +257,9 @@ func Backup(ctx context.Context, e *Env, o BackupOptions) result.Result {
 			res.RetentionError = tail(err.Error())
 		}
 		res.Forgotten = forgotten
+	}
+	if len(o.Copies) > 0 {
+		res.Copies = copyAll(ctx, e, o.Copies, host, o.Backup, up.Summary.SnapshotID, o.Retention)
 	}
 	return res
 }

@@ -42,18 +42,32 @@ var hostKeyAlgorithms = map[string][]string{
 // LimitHostKeyAlgorithms makes rclone ask an SFTP server only for the host
 // key types known_hosts holds. Without it the server may present another
 // of its keys (an RSA one, when known_hosts has its ed25519 key) and the
-// connection fails with "knownhosts: key mismatch". It does nothing when no
-// known_hosts file is configured or the algorithms are already set.
+// connection fails with "knownhosts: key mismatch". It does this for every
+// remote with a known_hosts file (the store and each copy store), and
+// nothing for a remote whose algorithms are already set.
 func LimitHostKeyAlgorithms() error {
-	path := os.Getenv(envKnownHosts)
-	if path == "" || os.Getenv(envHostKeyAlgorithms) != "" {
-		return nil
+	for _, kv := range os.Environ() {
+		key, path, _ := strings.Cut(kv, "=")
+		remote, ok := strings.CutSuffix(key, "_KNOWN_HOSTS_FILE")
+		if !ok || !strings.HasPrefix(remote, "RCLONE_CONFIG_") || path == "" {
+			continue
+		}
+		target := remote + "_HOST_KEY_ALGORITHMS"
+		if os.Getenv(target) != "" {
+			continue
+		}
+		algorithms, err := knownHostAlgorithms(path)
+		if err != nil {
+			return err
+		}
+		if len(algorithms) == 0 {
+			continue
+		}
+		if err := os.Setenv(target, strings.Join(algorithms, " ")); err != nil {
+			return err
+		}
 	}
-	algorithms, err := knownHostAlgorithms(path)
-	if err != nil || len(algorithms) == 0 {
-		return err
-	}
-	return os.Setenv(envHostKeyAlgorithms, strings.Join(algorithms, " "))
+	return nil
 }
 
 // knownHostAlgorithms lists the algorithms for the key types in a

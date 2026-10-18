@@ -69,6 +69,9 @@ type Snapshot struct {
 	// Kind and Backup are the snapshot's kind= and backup= tags.
 	Kind   string
 	Backup string
+	// Original is the snapshot a copy was made from; protections by ID
+	// match it too.
+	Original string
 }
 
 // Protect lists what is never forgotten.
@@ -90,7 +93,7 @@ func (p Protect) pinned(s Snapshot) bool {
 		return true
 	}
 	for _, id := range p.SnapshotIDs {
-		if id != "" && strings.HasPrefix(s.ID, id) {
+		if id != "" && (strings.HasPrefix(s.ID, id) || (s.Original != "" && strings.HasPrefix(s.Original, id))) {
 			return true
 		}
 	}

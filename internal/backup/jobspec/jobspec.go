@@ -106,8 +106,39 @@ func plainEnv(name, value string) corev1.EnvVar {
 	return corev1.EnvVar{Name: name, Value: value}
 }
 
-func rcloneEnv(option, value string) corev1.EnvVar {
-	return plainEnv("RCLONE_CONFIG_"+strings.ToUpper(rcloneRemote)+"_"+option, value)
+func rcloneEnvFor(remote, option, value string) corev1.EnvVar {
+	return plainEnv("RCLONE_CONFIG_"+strings.ToUpper(remote)+"_"+option, value)
+}
+
+// slot names what one store uses inside a Job's pod. The store a Job reads
+// or writes uses the plain names (RESTIC_REPOSITORY, the "store" rclone
+// remote, /store); each store a backup is copied to has its own (copy1:
+// COPY1_RESTIC_REPOSITORY, the "copy1" remote, /store-copy1), so stores with
+// different credentials never share a variable.
+type slot struct {
+	env, remote, storeMount, sshMount, passMount, volStore, volPass, volSSH string
+	// rcloneS3 reaches an S3 store through rclone, whose remote carries its
+	// own keys, instead of restic's s3 backend, which reads AWS_* and so
+	// can serve only one set of keys per process.
+	rcloneS3 bool
+}
+
+var primarySlot = slot{
+	remote: rcloneRemote, storeMount: layout.StoreMount, sshMount: sshMount, passMount: passwordMount,
+	volStore: volStore, volPass: volStorePass, volSSH: volStoreSSH,
+}
+
+// CopySlot is the name prefix of the n-th (from 1) store a backup is copied to.
+func CopySlot(n int) string { return fmt.Sprintf("copy%d", n) }
+
+func copySlot(n int) slot {
+	name := CopySlot(n)
+	return slot{
+		env: strings.ToUpper(name) + "_", remote: name,
+		storeMount: layout.StoreMount + "-" + name, sshMount: sshMount + "-" + name, passMount: passwordMount + "-" + name,
+		volStore: volStore + "-" + name, volPass: volStorePass + "-" + name, volSSH: volStoreSSH + "-" + name,
+		rcloneS3: true,
+	}
 }
 
 // S3Repository is the restic repository URL of repo inside an S3 store.
@@ -128,18 +159,37 @@ func S3Repository(s3 *odoov1.S3Store, repo string) string {
 // Locate returns how a Job reaches store; repo is the instance's folder
 // (layout.Repository), or "" for a probe of the store root.
 func Locate(store *odoov1.OdooBackupStore, repo string) (Location, error) {
+	return locate(store, repo, primarySlot)
+}
+
+// LocateCopy returns how a backup Job reaches store as the n-th (from 1)
+// store it copies the backup to.
+func LocateCopy(store *odoov1.OdooBackupStore, repo string, n int) (Location, error) {
+	return locate(store, repo, copySlot(n))
+}
+
+//nolint:gocyclo // one case per store type
+func locate(store *odoov1.OdooBackupStore, repo string, sl slot) (Location, error) {
 	spec := &store.Spec
 	loc := Location{}
+	rcloneEnv := func(option, value string) corev1.EnvVar { return rcloneEnvFor(sl.remote, option, value) }
+	rcloneSecretEnv := func(option, secret, key string) corev1.EnvVar {
+		return secretEnv("RCLONE_CONFIG_"+strings.ToUpper(sl.remote)+"_"+option, secret, key)
+	}
 	switch {
 	case spec.S3 != nil:
 		s3 := spec.S3
 		creds := s3.CredentialsSecret.Name
+		if !sl.rcloneS3 {
+			loc.Env = append(loc.Env,
+				secretEnv("AWS_ACCESS_KEY_ID", creds, odoov1.S3AccessKeyIDKey),
+				secretEnv("AWS_SECRET_ACCESS_KEY", creds, odoov1.S3SecretAccessKeyKey),
+			)
+		}
 		loc.Env = append(loc.Env,
-			secretEnv("AWS_ACCESS_KEY_ID", creds, odoov1.S3AccessKeyIDKey),
-			secretEnv("AWS_SECRET_ACCESS_KEY", creds, odoov1.S3SecretAccessKeyKey),
 			rcloneEnv("TYPE", "s3"),
-			secretEnv("RCLONE_CONFIG_STORE_ACCESS_KEY_ID", creds, odoov1.S3AccessKeyIDKey),
-			secretEnv("RCLONE_CONFIG_STORE_SECRET_ACCESS_KEY", creds, odoov1.S3SecretAccessKeyKey),
+			rcloneSecretEnv("ACCESS_KEY_ID", creds, odoov1.S3AccessKeyIDKey),
+			rcloneSecretEnv("SECRET_ACCESS_KEY", creds, odoov1.S3SecretAccessKeyKey),
 		)
 		if s3.Endpoint != "" {
 			loc.Env = append(loc.Env, rcloneEnv("PROVIDER", "Other"), rcloneEnv("ENDPOINT", s3.Endpoint))
@@ -147,15 +197,26 @@ func Locate(store *odoov1.OdooBackupStore, repo string) (Location, error) {
 			loc.Env = append(loc.Env, rcloneEnv("PROVIDER", "AWS"))
 		}
 		if s3.Region != "" {
-			loc.Env = append(loc.Env, plainEnv("AWS_DEFAULT_REGION", s3.Region), rcloneEnv("REGION", s3.Region))
-			loc.ResticOptions = append(loc.ResticOptions, "s3.region="+s3.Region)
+			if !sl.rcloneS3 {
+				loc.Env = append(loc.Env, plainEnv("AWS_DEFAULT_REGION", s3.Region))
+				loc.ResticOptions = append(loc.ResticOptions, "s3.region="+s3.Region)
+			}
+			loc.Env = append(loc.Env, rcloneEnv("REGION", s3.Region))
 		}
 		if s3.ForcePathStyle {
-			loc.ResticOptions = append(loc.ResticOptions, "s3.bucket-lookup=path")
+			if !sl.rcloneS3 {
+				loc.ResticOptions = append(loc.ResticOptions, "s3.bucket-lookup=path")
+			}
 			loc.Env = append(loc.Env, rcloneEnv("FORCE_PATH_STYLE", "true"))
 		}
-		loc.Repository = S3Repository(s3, repo)
-		loc.ProbeTarget = rcloneRemote + ":" + strings.TrimSuffix(s3.Bucket+"/"+strings.TrimPrefix(layout.JoinStorePath(string(s3.Path), ""), "/"), "/")
+		bucketPath := strings.TrimSuffix(s3.Bucket+"/"+strings.TrimPrefix(layout.JoinStorePath(string(s3.Path), ""), "/"), "/")
+		if sl.rcloneS3 {
+			loc.Repository = "rclone:" + sl.remote + ":" + strings.TrimSuffix(
+				s3.Bucket+"/"+strings.TrimPrefix(layout.JoinStorePath(string(s3.Path), repo), "/"), "/")
+		} else {
+			loc.Repository = S3Repository(s3, repo)
+		}
+		loc.ProbeTarget = sl.remote + ":" + bucketPath
 	case spec.SFTP != nil:
 		sftp := spec.SFTP
 		port := sftp.Port
@@ -167,14 +228,14 @@ func Locate(store *odoov1.OdooBackupStore, repo string) (Location, error) {
 			rcloneEnv("HOST", sftp.Host),
 			rcloneEnv("PORT", strconv.Itoa(int(port))),
 			rcloneEnv("USER", sftp.User),
-			rcloneEnv("KEY_FILE", sshMount+"/"+odoov1.SSHPrivateKeyKey),
-			rcloneEnv("KNOWN_HOSTS_FILE", sshMount+"/"+odoov1.SSHKnownHostsKey),
+			rcloneEnv("KEY_FILE", sl.sshMount+"/"+odoov1.SSHPrivateKeyKey),
+			rcloneEnv("KNOWN_HOSTS_FILE", sl.sshMount+"/"+odoov1.SSHKnownHostsKey),
 			// No remote commands: many SFTP-only servers refuse them.
 			rcloneEnv("SHELL_TYPE", "none"),
 			rcloneEnv("DISABLE_HASHCHECK", "true"),
 		)
 		loc.Volumes = append(loc.Volumes, corev1.Volume{
-			Name: volStoreSSH,
+			Name: sl.volSSH,
 			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
 				SecretName:  sftp.SSHSecret.Name,
 				DefaultMode: ptr(int32(0o440)),
@@ -184,28 +245,28 @@ func Locate(store *odoov1.OdooBackupStore, repo string) (Location, error) {
 				},
 			}},
 		})
-		loc.Mounts = append(loc.Mounts, corev1.VolumeMount{Name: volStoreSSH, MountPath: sshMount, ReadOnly: true})
-		loc.Repository = "rclone:" + rcloneRemote + ":" + layout.JoinStorePath(string(sftp.Path), repo)
-		loc.ProbeTarget = rcloneRemote + ":" + layout.JoinStorePath(string(sftp.Path), "")
+		loc.Mounts = append(loc.Mounts, corev1.VolumeMount{Name: sl.volSSH, MountPath: sl.sshMount, ReadOnly: true})
+		loc.Repository = "rclone:" + sl.remote + ":" + layout.JoinStorePath(string(sftp.Path), repo)
+		loc.ProbeTarget = sl.remote + ":" + layout.JoinStorePath(string(sftp.Path), "")
 	case spec.NFS != nil:
 		loc.Volumes = append(loc.Volumes, corev1.Volume{
-			Name:         volStore,
+			Name:         sl.volStore,
 			VolumeSource: corev1.VolumeSource{NFS: &corev1.NFSVolumeSource{Server: spec.NFS.Server, Path: spec.NFS.Path}},
 		})
-		loc.Mounts = append(loc.Mounts, corev1.VolumeMount{Name: volStore, MountPath: layout.StoreMount})
-		loc.Repository = strings.TrimSuffix(layout.StoreMount+"/"+repo, "/")
-		loc.ProbeTarget = layout.StoreMount
+		loc.Mounts = append(loc.Mounts, corev1.VolumeMount{Name: sl.volStore, MountPath: sl.storeMount})
+		loc.Repository = strings.TrimSuffix(sl.storeMount+"/"+repo, "/")
+		loc.ProbeTarget = sl.storeMount
 	case spec.PVC != nil:
 		// The claim's root is mounted and the folders are created by restic:
 		// a subPath mount would have the kubelet create them as root.
 		loc.Volumes = append(loc.Volumes, corev1.Volume{
-			Name: volStore,
+			Name: sl.volStore,
 			VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 				ClaimName: spec.PVC.ClaimName,
 			}},
 		})
-		loc.Mounts = append(loc.Mounts, corev1.VolumeMount{Name: volStore, MountPath: layout.StoreMount})
-		root := layout.StoreMount
+		loc.Mounts = append(loc.Mounts, corev1.VolumeMount{Name: sl.volStore, MountPath: sl.storeMount})
+		root := sl.storeMount
 		if sub := layout.JoinStorePath(string(spec.PVC.SubPath), ""); sub != "" {
 			root += "/" + strings.TrimPrefix(sub, "/")
 		}
@@ -220,17 +281,17 @@ func Locate(store *odoov1.OdooBackupStore, repo string) (Location, error) {
 		key = passwordFile
 	}
 	loc.Volumes = append(loc.Volumes, corev1.Volume{
-		Name: volStorePass,
+		Name: sl.volPass,
 		VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
 			SecretName:  spec.EncryptionKeySecret.Name,
 			DefaultMode: ptr(int32(0o440)),
 			Items:       []corev1.KeyToPath{{Key: key, Path: passwordFile}},
 		}},
 	})
-	loc.Mounts = append(loc.Mounts, corev1.VolumeMount{Name: volStorePass, MountPath: passwordMount, ReadOnly: true})
-	loc.Env = append(loc.Env, plainEnv("RESTIC_PASSWORD_FILE", passwordMount+"/"+passwordFile))
+	loc.Mounts = append(loc.Mounts, corev1.VolumeMount{Name: sl.volPass, MountPath: sl.passMount, ReadOnly: true})
+	loc.Env = append(loc.Env, plainEnv(sl.env+"RESTIC_PASSWORD_FILE", sl.passMount+"/"+passwordFile))
 	if repo != "" {
-		loc.Env = append(loc.Env, plainEnv("RESTIC_REPOSITORY", loc.Repository))
+		loc.Env = append(loc.Env, plainEnv(sl.env+"RESTIC_REPOSITORY", loc.Repository))
 	}
 	return loc, nil
 }
@@ -295,6 +356,8 @@ type Params struct {
 	Offline bool
 	// Retention, when set, is applied by the backup Job after the backup.
 	Retention *Retention
+	// Copies are the stores a backup Job copies the new snapshot to.
+	Copies []*odoov1.OdooBackupStore
 }
 
 // Retention is what a backup Job needs to thin the repository.
@@ -483,7 +546,18 @@ func BackupJob(p Params, backup *odoov1.OdooBackup, kind string, attempt int32, 
 			SubPath: layout.FilestorePath(p.Database), ReadOnly: true},
 		{Name: volTmp, MountPath: tmpDir},
 	}, loc.Mounts...)
-	spec := p.podSpec(command, append(baseEnv(), loc.Env...), volumes, mounts)
+	env := append(baseEnv(), loc.Env...)
+	for i, store := range p.Copies {
+		copyLoc, err := LocateCopy(store, layout.Repository(od.Namespace, od.Name), i+1)
+		if err != nil {
+			return batchv1.Job{}, err
+		}
+		command = append(command, "--copy", store.Name)
+		env = append(env, copyLoc.Env...)
+		volumes = append(volumes, copyLoc.Volumes...)
+		mounts = append(mounts, copyLoc.Mounts...)
+	}
+	spec := p.podSpec(command, env, volumes, mounts)
 	// The kubelet would create a missing subPath folder as root; the init
 	// container creates it as Odoo's user first.
 	spec.InitContainers = []corev1.Container{{

@@ -27,6 +27,7 @@ import (
 
 	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/jobspec"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/result"
 )
 
 // backupRetention is the retention a backup Job applies, or nil when
@@ -95,4 +96,31 @@ func (r *OdooDeploymentReconciler) deleteForgotten(ctx context.Context, od *odoo
 		log.FromContext(ctx).Info("Deleted expired backup", "backup", b.Name, "snapshot", b.Status.SnapshotID)
 	}
 	return nil
+}
+
+// copyStores are the stores after the first in spec.backup.stores, the ones
+// a backup is copied to. A store that cannot be used (missing, or a Secret it
+// names is) is left out of the Job and reported as a failed copy.
+func (r *OdooDeploymentReconciler) copyStores(ctx context.Context, od *odoov1.OdooDeployment) ([]*odoov1.OdooBackupStore, []odoov1.BackupCopy) {
+	var stores []*odoov1.OdooBackupStore
+	var skipped []odoov1.BackupCopy
+	for _, name := range od.Spec.Backup.Stores[1:] {
+		store, err := r.getStore(ctx, od.Namespace, name)
+		if err != nil {
+			skipped = append(skipped, odoov1.BackupCopy{Store: name, Error: err.Error()})
+			continue
+		}
+		stores = append(stores, store)
+	}
+	return stores, skipped
+}
+
+// mergeCopies is the copies of a backup: the stores the operator left out,
+// then what the Job reported for the others, in spec order.
+func mergeCopies(skipped []odoov1.BackupCopy, reported []result.Copy) []odoov1.BackupCopy {
+	out := append([]odoov1.BackupCopy(nil), skipped...)
+	for _, c := range reported {
+		out = append(out, odoov1.BackupCopy{Store: c.Store, SnapshotID: c.SnapshotID, Error: c.Error})
+	}
+	return out
 }

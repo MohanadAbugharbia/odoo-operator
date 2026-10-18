@@ -86,3 +86,31 @@ func TestRetentionFailureIsReported(t *testing.T) {
 		t.Fatal("the backup is still there")
 	}
 }
+
+func TestFailedCopyLeavesTheBackup(t *testing.T) {
+	f := newFixture(t)
+	f.seed(1)
+	broken := *f.env.Restic
+	broken.Env = append(append([]string(nil), broken.Env...), "RESTIC_REPOSITORY=/proc/no-such-store/repo")
+	good := *f.env.Restic
+	good.Env = append(append([]string(nil), good.Env...), "RESTIC_REPOSITORY="+t.TempDir()+"/copy", "RESTIC_PASSWORD=other")
+	res := f.mustBackup("one", func(o *BackupOptions) {
+		o.Copies = []CopyTarget{{Store: "gone", Restic: &broken}, {Store: "fine", Restic: &good}}
+	})
+	if len(res.Copies) != 2 {
+		t.Fatalf("copies %+v", res.Copies)
+	}
+	if res.Copies[0].Error == "" || res.Copies[0].SnapshotID != "" {
+		t.Fatalf("the unreachable store reports an error: %+v", res.Copies[0])
+	}
+	if res.Copies[1].Error != "" || res.Copies[1].SnapshotID == "" {
+		t.Fatalf("the next store is still copied to: %+v", res.Copies[1])
+	}
+
+	t.Log("copying the same backup again finds the copy instead of making another")
+	id, err := copySnapshot(context.Background(), f.env, CopyTarget{Store: "fine", Restic: &good},
+		layout.Host(itNamespace, itDeployment), "one", res.SnapshotID, nil)
+	if err != nil || id != res.Copies[1].SnapshotID {
+		t.Fatalf("second copy: %s, %v (want %s)", id, err, res.Copies[1].SnapshotID)
+	}
+}

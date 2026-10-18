@@ -875,4 +875,10 @@ func TestKnownHostAlgorithms(t *testing.T) {
 	if err := LimitHostKeyAlgorithms(); err != nil || os.Getenv(envHostKeyAlgorithms) != "" {
 		t.Fatal("without known_hosts nothing is set")
 	}
+
+	t.Setenv("RCLONE_CONFIG_COPY2_KNOWN_HOSTS_FILE", path)
+	t.Setenv("RCLONE_CONFIG_COPY2_HOST_KEY_ALGORITHMS", "")
+	if err := LimitHostKeyAlgorithms(); err != nil || os.Getenv("RCLONE_CONFIG_COPY2_HOST_KEY_ALGORITHMS") != want {
+		t.Fatalf("a copy store's remote is limited too: %v", err)
+	}
 }

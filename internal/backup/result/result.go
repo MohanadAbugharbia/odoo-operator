@@ -81,6 +81,8 @@ type Result struct {
 	// RetentionError says why retention did not run; the backup itself
 	// succeeded.
 	RetentionError string `json:"retentionError,omitempty"`
+	// Copies are the copies of the new snapshot in the other stores.
+	Copies []Copy `json:"copies,omitempty"`
 
 	// Restore.
 	// Image and UpgradeToken are what the backup's instance ran.
@@ -96,6 +98,13 @@ type Result struct {
 	// PreviousKept is true when the replaced database or filestore was kept
 	// under its _prev name.
 	PreviousKept bool `json:"previousKept,omitempty"`
+}
+
+// Copy is the copy of a backup in one other store.
+type Copy struct {
+	Store      string `json:"store"`
+	SnapshotID string `json:"snapshotID,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 // Failed returns a failed Result.
@@ -133,6 +142,14 @@ func Encode(r Result) []byte {
 			r.Error = r.Error[:512-len(errorCut)] + errorCut
 		case len(r.RetentionError) > 512:
 			r.RetentionError = r.RetentionError[:512-len(errorCut)] + errorCut
+		case copyErrorsOver(r.Copies, 256):
+			cs := append([]Copy(nil), r.Copies...)
+			for i := range cs {
+				if len(cs[i].Error) > 256 {
+					cs[i].Error = cs[i].Error[:256-len(errorCut)] + errorCut
+				}
+			}
+			r.Copies = cs
 		case len(r.Warnings) > 0 && len(r.Warnings[0]) > 512:
 			// A new slice: r shares its backing array with the caller's.
 			r.Warnings = append([]string{r.Warnings[0][:512-len("…")] + "…"}, r.Warnings[1:]...)
@@ -142,7 +159,7 @@ func Encode(r Result) []byte {
 			b, err := json.Marshal(Result{OK: r.OK, Step: truncate(r.Step, 64), Error: truncate(r.Error, 256),
 				Deferred: r.Deferred, SnapshotID: truncate(r.SnapshotID, 128),
 				LiveChanged: r.LiveChanged, PreviousKept: r.PreviousKept, Forgotten: r.Forgotten,
-				RetentionError: truncate(r.RetentionError, 256)})
+				RetentionError: truncate(r.RetentionError, 256), Copies: shortCopies(r.Copies)})
 			if err != nil || len(b) > MaxBytes {
 				return []byte(`{"ok":false,"error":"could not encode the result"}`)
 			}
@@ -154,6 +171,24 @@ func Encode(r Result) []byte {
 // Write writes r to path (the container's termination message file).
 func Write(path string, r Result) error {
 	return os.WriteFile(path, Encode(r), 0o644)
+}
+
+func copyErrorsOver(cs []Copy, n int) bool {
+	for _, c := range cs {
+		if len(c.Error) > n {
+			return true
+		}
+	}
+	return false
+}
+
+// shortCopies keeps whether each copy worked, with a short error.
+func shortCopies(cs []Copy) []Copy {
+	out := make([]Copy, 0, len(cs))
+	for _, c := range cs {
+		out = append(out, Copy{Store: truncate(c.Store, 64), SnapshotID: truncate(c.SnapshotID, 64), Error: truncate(c.Error, 64)})
+	}
+	return out
 }
 
 func truncate(s string, n int) string {

@@ -32,6 +32,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -41,6 +42,7 @@ import (
 	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/jobspec"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/layout"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/retention"
 )
 
 // secrets are the emulated Secrets: name → key → value.
@@ -60,11 +62,20 @@ func emulateJob(t *testing.T, store *odoov1.OdooBackupStore, sec secrets, repo s
 	if err != nil {
 		t.Fatalf("locate: %v", err)
 	}
+	return emulateLocation(t, loc, sec, filepath.Join(t.TempDir(), "store"))
+}
+
+// storeMountRE is where a Job mounts an nfs or pvc store, its own or a copy's.
+var storeMountRE = regexp.MustCompile(regexp.QuoteMeta(layout.StoreMount) + `(-copy[0-9]+)?`)
+
+// emulateLocation resolves one store's part of a Job on this machine, with
+// an nfs or pvc store's mount at storeDir.
+func emulateLocation(t *testing.T, loc jobspec.Location, sec secrets, storeDir string) jobEnvironment {
+	t.Helper()
 	secretsDir := t.TempDir()
-	storeDir := filepath.Join(t.TempDir(), "store")
 	rewrite := func(s string) string {
 		s = strings.ReplaceAll(s, layout.SecretsMount, secretsDir)
-		return strings.ReplaceAll(s, layout.StoreMount, storeDir)
+		return storeMountRE.ReplaceAllString(s, storeDir)
 	}
 	volumes := map[string]corev1.Volume{}
 	for _, v := range loc.Volumes {
@@ -106,6 +117,83 @@ func emulateJob(t *testing.T, store *odoov1.OdooBackupStore, sec secrets, repo s
 		je.env = append(je.env, e.Name+"="+rewrite(value))
 	}
 	return je
+}
+
+// TestCopies copies backups between every two kinds of store, each with its
+// own key (and its own credentials), applies retention in the copy, and
+// restores from the copy as from a store of its own.
+func TestCopies(t *testing.T) {
+	cases := storeCases(t)
+	for i := range cases {
+		from, to := cases[i], cases[(i+1)%len(cases)]
+		t.Run(from.name+"-to-"+to.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.seed(8)
+			repo := layout.Repository(itNamespace, itDeployment)
+			primary := emulateJob(t, from.store, from.secrets, repo)
+			copyStore := to.store.DeepCopy()
+			copyStore.Name = "copy-store"
+			copyStore.Spec.EncryptionKeySecret.Name = "copy-key"
+			// Its own folder: the same store is another case's own store.
+			switch sp := &copyStore.Spec; {
+			case sp.S3 != nil:
+				sp.S3.Path += "-copy"
+			case sp.SFTP != nil:
+				sp.SFTP.Path += "-copy"
+			}
+			copySecrets := copySecrets(to.secrets)
+			copySecrets["copy-key"] = map[string]string{"password": "another key " + randomHex(t, 8)}
+			loc, err := jobspec.LocateCopy(copyStore, repo, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			copyDir := filepath.Join(t.TempDir(), "copy-store")
+			second := emulateLocation(t, loc, copySecrets, copyDir)
+			f.env.Restic.Env = f.env.Restic.Env[2:]
+			f.env.Restic.Options = primary.options
+			setEnv(t, append(primary.env, second.env...))
+			targets, err := CopyTargetsFromEnv(f.env.Restic, []string{copyStore.Name})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ret := &Retention{Policy: retention.Policy{Last: 1}}
+			withCopies := func(o *BackupOptions) { o.Kind = retention.KindScheduled; o.Copies = targets; o.Retention = ret }
+
+			res1 := f.mustBackup("one", withCopies)
+			if len(res1.Copies) != 1 || res1.Copies[0].Error != "" || res1.Copies[0].SnapshotID == "" {
+				t.Fatalf("copy: %+v\n%s", res1.Copies, f.logs.String())
+			}
+			before := f.state(f.db)
+			res2 := f.mustBackup("two", withCopies)
+			c := res2.Copies[0]
+			if c.Error != "" || c.SnapshotID == "" || c.SnapshotID == res1.Copies[0].SnapshotID {
+				t.Fatalf("second copy: %+v", res2.Copies)
+			}
+			host := layout.Host(itNamespace, itDeployment)
+			left, err := targets[0].Restic.Snapshots(context.Background(), host)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(left) != 1 || left[0].ID != c.SnapshotID {
+				t.Fatalf("retention in the copy left %d snapshot(s), want only the second", len(left))
+			}
+
+			By := t.Log
+			By("the copy restores on its own, through the store's normal configuration")
+			f.mutate()
+			ownLoc, err := jobspec.Locate(copyStore, repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			own := emulateLocation(t, ownLoc, copySecrets, copyDir)
+			f.env.Restic.Options = own.options
+			setEnv(t, own.env)
+			if rr := f.restore(c.SnapshotID, f.nextSuffix()); !rr.OK {
+				t.Fatalf("restore from the copy: %+v", rr)
+			}
+			f.assertState(f.db, before, "restored from the copy in "+to.name)
+		})
+	}
 }
 
 func storeObject(spec odoov1.OdooBackupStoreSpec) *odoov1.OdooBackupStore {
@@ -231,8 +319,10 @@ func parseInt32(s string) (int32, error) {
 // odoo-backup starts: with the host key algorithms limited to known_hosts.
 func setEnv(t *testing.T, env []string) {
 	t.Helper()
-	t.Setenv(envHostKeyAlgorithms, "")
-	_ = os.Unsetenv(envHostKeyAlgorithms)
+	for _, name := range []string{envHostKeyAlgorithms, "RCLONE_CONFIG_COPY1_HOST_KEY_ALGORITHMS"} {
+		t.Setenv(name, "")
+		_ = os.Unsetenv(name)
+	}
 	for _, kv := range env {
 		k, v, _ := strings.Cut(kv, "=")
 		t.Setenv(k, v)

@@ -78,6 +78,8 @@ const (
 	ReasonWaitingForOperation = "WaitingForOperation"
 	ReasonRetentionFailed     = "RetentionFailed"
 	ReasonBackupExpired       = "BackupExpired"
+	ReasonRestoreFromCopy     = "RestoreFromCopy"
+	ReasonCopyFailed          = "BackupCopyFailed"
 )
 
 // instanceWork is every OdooBackup and OdooRestore of one instance, oldest first.
@@ -722,6 +724,8 @@ func (r *OdooDeploymentReconciler) driveBackup(ctx context.Context, s *reconcile
 		}
 		params.Offline = op.StoppedOdoo
 		params.Retention = backupRetention(od, w)
+		var skipped []odoov1.BackupCopy
+		params.Copies, skipped = r.copyStores(ctx, od)
 		attempt := b.Status.Attempts + 1
 		wait := od.Spec.Backup.ConsistencyValue() == odoov1.BackupConsistencyOnline && !op.StoppedOdoo
 		if b.Status.WaitingSince != nil && time.Since(b.Status.WaitingSince.Time) > cleanupWaitLimit {
@@ -755,6 +759,7 @@ func (r *OdooDeploymentReconciler) driveBackup(ctx context.Context, s *reconcile
 			if st.StartedAt == nil {
 				st.StartedAt = op.StartedAt
 			}
+			st.Copies = skipped
 		})
 		if err != nil {
 			return ctrl.Result{}, false, err
@@ -820,6 +825,17 @@ func (r *OdooDeploymentReconciler) driveBackup(ctx context.Context, s *reconcile
 			phase = odoov1.BackupPhaseCompletedWithWarnings
 			msg += "; " + strings.Join(res.Warnings, "; ")
 		}
+		copies := mergeCopies(b.Status.Copies, res.Copies)
+		var failedCopies []string
+		for _, c := range copies {
+			if c.Error != "" {
+				failedCopies = append(failedCopies, c.Store)
+			}
+		}
+		if len(failedCopies) > 0 {
+			phase = odoov1.BackupPhasePartiallyCompleted
+			msg += fmt.Sprintf("; the copy to %s failed", strings.Join(failedCopies, ", "))
+		}
 		var warnings []string
 		if res.RetentionError != "" {
 			warnings = append(warnings, "retention did not run: "+res.RetentionError)
@@ -828,6 +844,7 @@ func (r *OdooDeploymentReconciler) driveBackup(ctx context.Context, s *reconcile
 			st.Phase = phase
 			st.Message = msg
 			st.Warnings = warnings
+			st.Copies = copies
 			st.SnapshotID = res.SnapshotID
 			st.OdooVersion = res.OdooVersion
 			st.PgServerVersion = res.PgServerVersion
@@ -860,6 +877,11 @@ func (r *OdooDeploymentReconciler) driveBackup(ctx context.Context, s *reconcile
 		r.objectEvent(b, eventType, ReasonBackupCompleted, msg)
 		for _, warning := range warnings {
 			r.objectEvent(b, corev1.EventTypeWarning, ReasonRetentionFailed, warning)
+		}
+		for _, c := range copies {
+			if c.Error != "" {
+				r.objectEvent(b, corev1.EventTypeWarning, ReasonCopyFailed, fmt.Sprintf("copy to %s failed: %s", c.Store, c.Error))
+			}
 		}
 		metrics.BackupFinished(backupKind(b), metrics.BackupSucceeded, took)
 		od.Status.CurrentOperation = odoov1.OperationStatus{}
@@ -919,13 +941,34 @@ func (r *OdooDeploymentReconciler) resolveRestore(ctx context.Context, od *odoov
 		if b.Spec.OdooDeployment != od.Name {
 			return src, fmt.Sprintf("OdooBackup %q is a backup of %s, not of %s", b.Name, b.Spec.OdooDeployment, od.Name), nil
 		}
-		if b.Status.Phase != odoov1.BackupPhaseCompleted && b.Status.Phase != odoov1.BackupPhaseCompletedWithWarnings {
+		switch b.Status.Phase {
+		case odoov1.BackupPhaseCompleted, odoov1.BackupPhaseCompletedWithWarnings, odoov1.BackupPhasePartiallyCompleted:
+		default:
 			return src, fmt.Sprintf("OdooBackup %q has not completed (phase %q)", b.Name, b.Status.Phase), nil
 		}
 		if b.Status.SnapshotID == "" || b.Status.Store == "" {
 			return src, fmt.Sprintf("OdooBackup %q records no snapshot", b.Name), nil
 		}
 		store, err := r.getStore(ctx, od.Namespace, b.Status.Store)
+		if err == nil && store.Status.Ready {
+			return restoreSource{store: store, snapshot: b.Status.SnapshotID}, "", nil
+		}
+		// The store the backup was written to is gone or not working: a
+		// copy in a store that is will do.
+		for _, c := range b.Status.Copies {
+			if c.SnapshotID == "" {
+				continue
+			}
+			if copyStore, copyErr := r.getStore(ctx, od.Namespace, c.Store); copyErr == nil && copyStore.Status.Ready {
+				why := "is not ready"
+				if err != nil {
+					why = "cannot be used: " + err.Error()
+				}
+				r.objectEvent(rs, corev1.EventTypeWarning, ReasonRestoreFromCopy, fmt.Sprintf(
+					"Restoring the copy in store %s: store %s %s", c.Store, b.Status.Store, why))
+				return restoreSource{store: copyStore, snapshot: c.SnapshotID}, "", nil
+			}
+		}
 		if err != nil {
 			return src, err.Error(), nil
 		}
