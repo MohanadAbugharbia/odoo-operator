@@ -1261,24 +1261,66 @@
 
 
 <h1 id="continuous-integration">Continuous integration<a class="headerlink" href="#continuous-integration" title="Permanent link">&para;</a></h1>
-<p><code>.github/workflows/ci.yml</code> runs on every pull request and on pushes to <code>main</code>,
-in these jobs:</p>
+<p><code>.github/workflows/ci.yml</code> runs on pull requests and on pushes to <code>main</code>. Its
+first job, <strong>Changes</strong>, decides which of the others run, so a pull request
+pays only for the tests its change needs:</p>
+<table>
+<thead>
+<tr>
+<th>Job</th>
+<th>What it runs</th>
+<th>Runs on a pull request</th>
+<th>Runs on <code>main</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Unit and envtest</strong></td>
+<td><code>make test</code> (the envtest suites against a real API server), a check that <code>api/v1/zz_generated.deepcopy.go</code>, <code>config/crd</code> and <code>config/rbac</code> are in sync with the types, and a <code>make build-installer</code> of the release bundle</td>
+<td>when anything but docs changed</td>
+<td>when anything but docs changed</td>
+</tr>
+<tr>
+<td><strong>Lint</strong></td>
+<td><code>make lint</code> (golangci-lint)</td>
+<td>when anything but docs changed</td>
+<td>when anything but docs changed</td>
+</tr>
+<tr>
+<td><strong>Backup on PostgreSQL 16–18</strong></td>
+<td><code>hack/backup-it.sh</code> once per major</td>
+<td>when backup code changed, or with <code>full-ci</code> or <code>backup-ci</code></td>
+<td>when anything but docs changed</td>
+</tr>
+<tr>
+<td><strong>Backup e2e (kind)</strong></td>
+<td><code>hack/backup-e2e.sh</code></td>
+<td>when backup code changed, or with <code>full-ci</code> or <code>backup-ci</code></td>
+<td>when anything but docs changed</td>
+</tr>
+<tr>
+<td><strong>Images</strong></td>
+<td>pushes the operator and backup images (amd64 and arm64) tagged <code>sha-&lt;head sha&gt;</code> and <code>pr-&lt;number&gt;</code>, to try a branch on a real cluster</td>
+<td>with <code>full-ci</code> or <code>images-ci</code>, and only from this repository</td>
+<td>never</td>
+</tr>
+</tbody>
+</table>
 <ul>
-<li><strong>Unit and envtest</strong> — <code>make test</code> (the envtest suites against a real API
-  server), a check that the generated files in <code>api/v1/zz_generated.deepcopy.go</code>,
-  <code>config/crd</code> and <code>config/rbac</code> are in sync with the types, and a
-  <code>make build-installer</code> of the release bundle.</li>
-<li><strong>Backup on PostgreSQL 16–18</strong> — <code>hack/backup-it.sh</code> once per major.</li>
-<li><strong>Backup e2e (kind)</strong> — <code>hack/backup-e2e.sh</code>.</li>
-<li><strong>Lint</strong> — <code>make lint</code> (golangci-lint).</li>
-<li><strong>Images</strong> — on pull requests from this repository, pushes the operator and
-  backup images (amd64 and arm64) tagged <code>sha-&lt;head sha&gt;</code> and <code>pr-&lt;number&gt;</code>, so
-  a branch can be tried on a real cluster before it is released.</li>
+<li><strong>Docs</strong> means <code>docs/</code>, Markdown files, <code>mkdocs.yml</code>, <code>LICENSE</code> and the Docs
+  workflow. A docs-only change skips every job here.</li>
+<li><strong>Backup code</strong> is the list in the <code>backup</code> filter of the Changes job: the
+  backup agent and its image, the backup and restore types, CRDs and RBAC,
+  the backup controllers and the instance work queue, schedules, <code>go.mod</code> and
+  <code>go.sum</code>, and <code>ci.yml</code> itself. A backup-related change outside that list is
+  still caught by the full run on <code>main</code>; add the path to the filter when that
+  happens.</li>
+<li><strong>Labels.</strong> <code>full-ci</code> runs everything, <code>backup-ci</code> the backup suite and
+  <code>images-ci</code> the images. Adding one of them runs CI again with it, and the
+  newer run replaces the one in progress. Other labels do not start CI.</li>
+<li>A skipped job counts as passed, so these jobs can be required checks.</li>
+<li>The Changes job's summary says what ran and why.</li>
 </ul>
-<p>A change that touches only documentation (<code>docs/</code>, Markdown files,
-<code>mkdocs.yml</code>, <code>LICENSE</code> or the Docs workflow) skips all of these: the first
-job, <strong>Changes</strong>, sees that no other file changed. The skipped jobs count as
-passed.</p>
 <p><code>.github/workflows/docs.yml</code> builds this site on every pull request and
 publishes it; see <a href="../docs/">Writing the docs</a>.</p>
 <h2 id="test-results">Test results<a class="headerlink" href="#test-results" title="Permanent link">&para;</a></h2>
