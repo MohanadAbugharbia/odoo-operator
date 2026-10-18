@@ -532,6 +532,11 @@ type OdooBackupDrill struct {
 	// Schedule in cron format, in spec.backup.timeZone; empty turns drills off.
 	// +kubebuilder:validation:MaxLength=100
 	Schedule string `json:"schedule,omitempty"`
+	// ScratchSizeLimit caps the node disk the drill's scratch filestore
+	// (an emptyDir) may use; unset leaves it uncapped. A drill that needs
+	// more is evicted and reported failed.
+	// +optional
+	ScratchSizeLimit *resource.Quantity `json:"scratchSizeLimit,omitempty"`
 }
 
 // OdooBackupConfig turns on backups of this instance.
@@ -750,6 +755,9 @@ type OdooBackupScheduleStatus struct {
 	NextDrillTime *metav1.Time `json:"nextDrillTime,omitempty"`
 	// DrillSchedule the drill times above were computed for.
 	DrillSchedule string `json:"drillSchedule,omitempty"`
+	// DrillDue is the scheduled time of a drill waiting in the instance's
+	// queue.
+	DrillDue *metav1.Time `json:"drillDue,omitempty"`
 	// LastDrill is the result of the latest restore drill.
 	LastDrill *OdooDrillResult `json:"lastDrill,omitempty"`
 }

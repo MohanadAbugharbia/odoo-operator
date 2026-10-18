@@ -440,7 +440,9 @@ func (r *OdooDeploymentReconciler) createJob(ctx context.Context, od *odoov1.Odo
 
 // operationJobKinds are the Job kinds of backups, restores and cleanups, of
 // which an instance runs one at a time.
-var operationJobKinds = map[string]bool{jobspec.KindBackup: true, jobspec.KindRestore: true, jobspec.KindCleanup: true}
+var operationJobKinds = map[string]bool{
+	jobspec.KindBackup: true, jobspec.KindRestore: true, jobspec.KindCleanup: true, jobspec.KindDrill: true,
+}
 
 // sameOperation reports whether two Job names differ at most in their
 // attempt suffix.
@@ -593,6 +595,8 @@ func (r *OdooDeploymentReconciler) observeOperation(ctx context.Context, s *reco
 			return r.abandonOperation(ctx, s, "OdooRestore "+op.Name+" was deleted")
 		}
 		return r.driveCleanup(ctx, s, rs, configHash)
+	case odoov1.OperationDrill:
+		return r.driveDrill(ctx, s, w)
 	}
 	s.od.Status.CurrentOperation = odoov1.OperationStatus{}
 	return ctrl.Result{}, true, nil
@@ -946,33 +950,9 @@ func (r *OdooDeploymentReconciler) resolveRestore(ctx context.Context, od *odoov
 		default:
 			return src, fmt.Sprintf("OdooBackup %q has not completed (phase %q)", b.Name, b.Status.Phase), nil
 		}
-		if b.Status.SnapshotID == "" || b.Status.Store == "" {
-			return src, fmt.Sprintf("OdooBackup %q records no snapshot", b.Name), nil
-		}
-		store, err := r.getStore(ctx, od.Namespace, b.Status.Store)
-		if err == nil && store.Status.Ready {
-			return restoreSource{store: store, snapshot: b.Status.SnapshotID}, "", nil
-		}
-		// The store the backup was written to is gone or not working: a
-		// copy in a store that is will do.
-		for _, c := range b.Status.Copies {
-			if c.SnapshotID == "" {
-				continue
-			}
-			if copyStore, copyErr := r.getStore(ctx, od.Namespace, c.Store); copyErr == nil && copyStore.Status.Ready {
-				why := "is not ready"
-				if err != nil {
-					why = "cannot be used: " + err.Error()
-				}
-				r.objectEvent(rs, corev1.EventTypeWarning, ReasonRestoreFromCopy, fmt.Sprintf(
-					"Restoring the copy in store %s: store %s %s", c.Store, b.Status.Store, why))
-				return restoreSource{store: copyStore, snapshot: c.SnapshotID}, "", nil
-			}
-		}
-		if err != nil {
-			return src, err.Error(), nil
-		}
-		return restoreSource{store: store, snapshot: b.Status.SnapshotID}, "", nil
+		return r.backupSource(ctx, od, b, func(msg string) {
+			r.objectEvent(rs, corev1.EventTypeWarning, ReasonRestoreFromCopy, "Restoring the copy in store "+msg)
+		})
 	case spec.SnapshotID != "":
 		if len(od.Spec.Backup.Stores) == 0 {
 			return src, fmt.Sprintf("OdooDeployment %s has no spec.backup.stores to find snapshot %s in", od.Name, spec.SnapshotID), nil
@@ -1007,6 +987,37 @@ func (r *OdooDeploymentReconciler) resolveRestore(ctx context.Context, od *odoov
 		return restoreSource{undo: target}, "", nil
 	}
 	return src, "set one of backup, snapshotID, undo", nil
+}
+
+// backupSource finds where a finished backup can be read from: the store it
+// was written to, or, when that store is gone or not ready, a copy in a
+// store that is (fromCopy is told which and why).
+func (r *OdooDeploymentReconciler) backupSource(ctx context.Context, od *odoov1.OdooDeployment, b *odoov1.OdooBackup,
+	fromCopy func(msg string)) (src restoreSource, refusal string, err error) {
+	if b.Status.SnapshotID == "" || b.Status.Store == "" {
+		return src, fmt.Sprintf("OdooBackup %q records no snapshot", b.Name), nil
+	}
+	store, err := r.getStore(ctx, od.Namespace, b.Status.Store)
+	if err == nil && store.Status.Ready {
+		return restoreSource{store: store, snapshot: b.Status.SnapshotID}, "", nil
+	}
+	for _, c := range b.Status.Copies {
+		if c.SnapshotID == "" {
+			continue
+		}
+		if copyStore, copyErr := r.getStore(ctx, od.Namespace, c.Store); copyErr == nil && copyStore.Status.Ready {
+			why := "is not ready"
+			if err != nil {
+				why = "cannot be used: " + err.Error()
+			}
+			fromCopy(fmt.Sprintf("%s: store %s %s", c.Store, b.Status.Store, why))
+			return restoreSource{store: copyStore, snapshot: c.SnapshotID}, "", nil
+		}
+	}
+	if err != nil {
+		return src, err.Error(), nil
+	}
+	return restoreSource{store: store, snapshot: b.Status.SnapshotID}, "", nil
 }
 
 func orDefault(s, d string) string {

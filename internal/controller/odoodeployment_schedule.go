@@ -85,14 +85,19 @@ func (r *OdooDeploymentReconciler) scheduleBackups(ctx context.Context, s *recon
 	}
 
 	if drillExpr == "" {
-		st.DrillSchedule, st.LastDrillScheduleTime, st.NextDrillTime = "", nil, nil
+		st.DrillSchedule, st.LastDrillScheduleTime, st.NextDrillTime, st.DrillDue = "", nil, nil, nil
 	} else if sched, err := schedule.Parse(drillExpr, tz); err != nil {
 		problems = append(problems, fmt.Sprintf("spec.backup.drill.schedule: %v", err))
 		st.NextDrillTime = nil
 	} else {
-		// The drill itself is started by the operation queue; here its
-		// times are only kept.
-		stepSchedule(sched, drillExpr != st.DrillSchedule || tz != st.TimeZone, &st.LastDrillScheduleTime, &st.NextDrillTime, now)
+		// The drill waits in the instance's queue; a time that comes while
+		// one is still waiting adds nothing.
+		due := stepSchedule(sched, drillExpr != st.DrillSchedule || tz != st.TimeZone, &st.LastDrillScheduleTime, &st.NextDrillTime, now)
+		if !due.IsZero() && st.DrillDue == nil {
+			t := metav1.NewTime(due)
+			st.DrillDue = &t
+			r.event(od, corev1.EventTypeNormal, ReasonDrillScheduled, "a restore drill is due at "+due.UTC().Format(time.RFC3339))
+		}
 		st.DrillSchedule = drillExpr
 		if st.NextDrillTime != nil {
 			wait = minPositive(wait, st.NextDrillTime.Sub(now)+scheduleSlack)

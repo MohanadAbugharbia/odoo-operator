@@ -45,6 +45,7 @@ const (
 	KindProbe   = "store-probe"
 	KindCheck   = "store-check"
 	KindPrune   = "store-prune"
+	KindDrill   = "drill"
 )
 
 // Labels on backup Jobs.
@@ -63,6 +64,7 @@ const (
 	volConfig       = "odoo-config"
 	volData         = "odoo-data"
 	volScratch      = "scratch"
+	volDrill        = "drill"
 	volTmp          = "tmp"
 	tmpDir          = "/tmp"
 	volStore        = "store"
@@ -77,6 +79,7 @@ const (
 	backupBackoff   = int32(1)
 	restoreBackoff  = int32(2)
 	cleanupBackoff  = int32(2)
+	drillBackoff    = int32(0)
 	probeDeadline   = int64(300)
 	cleanupDeadline = int64(3600)
 	// storeTaskDeadline bounds a check or prune of a whole store.
@@ -620,6 +623,93 @@ func RestoreJob(p Params, restore *odoov1.OdooRestore, suffix, snapshot, undoSuf
 	spec := p.podSpec(command, env, volumes, mounts)
 	return p.job(RestoreJobName(od, restore.Name, attempt), KindRestore, map[string]string{LabelRestore: restore.Name},
 		spec, restoreBackoff, od.Spec.Backup.ActiveDeadlineSecondsValue()), nil
+}
+
+// DrillJobName is the Job of the drill with suffix.
+func DrillJobName(instance *odoov1.OdooDeployment, suffix string) string {
+	return jobName(instance.Name, KindDrill, 0, instance.Namespace, suffix)
+}
+
+// Drill is one restore drill.
+type Drill struct {
+	// Suffix names the scratch database.
+	Suffix string
+	// Snapshot to restore from p.Store; Backup is its OdooBackup.
+	Snapshot string
+	Backup   string
+	// OdooImage loads the restored database.
+	OdooImage string
+	// ExpectModules are the modules the instance should have.
+	ExpectModules []string
+}
+
+// drillScript runs Odoo when the load succeeded and records how it ended,
+// exiting 0 either way so the last step always drops the scratch database.
+// The file names are the agent's (agent.DrillLoadedFile and the rest).
+const drillScript = `[ -f "$DRILL_ROOT/loaded" ] || exit 0
+"$@" >"$DRILL_ROOT/odoo.log" 2>&1
+rc=$?
+cat "$DRILL_ROOT/odoo.log"
+echo "$rc" >"$DRILL_ROOT/odoo.exit"
+exit 0`
+
+// DrillJob renders the Job of a restore drill: the backup agent restores
+// the snapshot into a scratch database and an emptyDir and checks it, the
+// instance's Odoo image loads it (--stop-after-init), and the agent drops
+// the scratch database and reports. It never mounts the data volume.
+func DrillJob(p Params, d Drill) (batchv1.Job, error) {
+	od := p.Instance
+	loc, err := Locate(p.Store, layout.Repository(od.Namespace, od.Name))
+	if err != nil {
+		return batchv1.Job{}, err
+	}
+	scratch := layout.DrillName(p.Database, d.Suffix)
+	common := append([]string{"--suffix", d.Suffix, "--root", layout.DrillRoot}, p.commonArgs(loc)...)
+	load := append([]string{toolBinary, "drill-load", "--snapshot", d.Snapshot,
+		"--expect-modules", strings.Join(d.ExpectModules, ",")}, common...)
+	finish := append([]string{toolBinary, "drill-finish"}, common...)
+
+	scratchVol := emptyDir(volDrill)
+	if limit := od.Spec.Backup.Drill.ScratchSizeLimit; limit != nil {
+		scratchVol.EmptyDir.SizeLimit = ptr(limit.DeepCopy())
+	}
+	volumes := append([]corev1.Volume{od.ConfigSecretVolume(volConfig), scratchVol, emptyDir(volTmp)}, loc.Volumes...)
+	agentMounts := []corev1.VolumeMount{
+		{Name: volConfig, MountPath: layout.ConfigMount, ReadOnly: true},
+		{Name: volDrill, MountPath: layout.DrillRoot},
+		{Name: volTmp, MountPath: tmpDir},
+	}
+	spec := p.podSpec(finish, baseEnv(), volumes, agentMounts)
+	loader := spec.Containers[0]
+	loader.Name = "load"
+	loader.Command = load
+	loader.Env = append(baseEnv(), loc.Env...)
+	loader.VolumeMounts = append(append([]corev1.VolumeMount(nil), agentMounts...), loc.Mounts...)
+	loader.TerminationMessagePath = ""
+	loader.TerminationMessagePolicy = ""
+
+	odooCmd := make([]string, 0, 13+len(od.Spec.OdooCommand))
+	odooCmd = append(odooCmd, "sh", "-c", drillScript, "sh")
+	odooCmd = append(odooCmd, od.Spec.OdooCommand...)
+	odooCmd = append(odooCmd, "-c", odoov1.OdooConfigFile, "--stop-after-init", "--no-http",
+		"--max-cron-threads=0", "-d", scratch, "--data-dir", layout.DrillRoot)
+	odoo := corev1.Container{
+		Name:            "odoo",
+		Image:           d.OdooImage,
+		ImagePullPolicy: od.ImagePullPolicyValue(),
+		Command:         odooCmd,
+		Env:             append(append([]corev1.EnvVar(nil), od.Spec.Env...), plainEnv("DRILL_ROOT", layout.DrillRoot)),
+		EnvFrom:         od.Spec.EnvFrom,
+		Resources:       *od.Spec.Resources.DeepCopy(),
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: volConfig, MountPath: odoov1.OdooConfigMountPath, ReadOnly: true},
+			{Name: volDrill, MountPath: layout.DrillRoot},
+		},
+	}
+	spec.InitContainers = []corev1.Container{loader, odoo}
+	spec.ImagePullSecrets = od.Spec.ImagePullSecrets
+	return p.job(DrillJobName(od, d.Suffix), KindDrill, map[string]string{LabelBackup: d.Backup},
+		spec, drillBackoff, od.Spec.Backup.ActiveDeadlineSecondsValue()), nil
 }
 
 // CleanupJobName is the name of attempt of a restore's cleanup Job.

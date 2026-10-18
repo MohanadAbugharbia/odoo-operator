@@ -942,6 +942,11 @@ func (o *OdooDeployment) UsesService(serviceName string) bool {
 	return o.GetHttpServiceName() == serviceName || o.GetPollServiceName() == serviceName
 }
 
+// ImagePullPolicyValue is the pull policy of the Odoo containers.
+func (o *OdooDeployment) ImagePullPolicyValue() corev1.PullPolicy {
+	return o.imagePullPolicy()
+}
+
 // PodSecurityContextValue is the security context of the Odoo pods, which
 // the backup and restore Jobs share so the files they write belong to Odoo.
 func (o *OdooDeployment) PodSecurityContextValue() *corev1.PodSecurityContext {

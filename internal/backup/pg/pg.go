@@ -340,6 +340,19 @@ func Database(ctx context.Context, conn *pgx.Conn, name string) (DatabaseInfo, e
 	return info, nil
 }
 
+// Databases lists the server's databases.
+func Databases(ctx context.Context, conn *pgx.Conn) ([]string, error) {
+	rows, err := conn.Query(ctx, "SELECT datname FROM pg_database WHERE NOT datistemplate ORDER BY datname")
+	if err != nil {
+		return nil, fmt.Errorf("list databases: %w", err)
+	}
+	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("list databases: %w", err)
+	}
+	return names, nil
+}
+
 // Exists reports whether a database exists.
 func Exists(ctx context.Context, conn *pgx.Conn, name string) (bool, error) {
 	info, err := Database(ctx, conn, name)

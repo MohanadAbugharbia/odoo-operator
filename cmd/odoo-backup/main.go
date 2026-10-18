@@ -51,6 +51,8 @@ commands:
   cleanup   delete the data a restore replaced
   prepare   create the instance's filestore folder if it is missing
   probe     check that a store can be written, read and deleted from
+  drill-load    restore a snapshot into scratch space and check it (drill, step 1)
+  drill-finish  drop the drill's scratch database and report the drill (step 3)
   check     check the store's repositories (restic check)
   prune     free the space of forgotten snapshots (restic prune)
   version   print the version
@@ -150,6 +152,8 @@ func run(ctx context.Context, command string, args []string) int {
 		return runRestore(ctx, fs, &c, command, args)
 	case "cleanup":
 		return runCleanup(ctx, fs, &c, args)
+	case "drill-load", "drill-finish":
+		return runDrill(ctx, fs, &c, command, args)
 	case "prepare":
 		dataRoot := fs.String("data", layout.DataMount, "root of the instance's data volume")
 		database := fs.String("database", "", "database name (the filestore folder)")
@@ -270,6 +274,40 @@ func runRestore(ctx context.Context, fs *flag.FlagSet, c *common, command string
 		return finish(c.terminationLog, result.Failed(result.StepConnect, err))
 	}
 	return finish(c.terminationLog, agent.Restore(ctx, e, o))
+}
+
+func runDrill(ctx context.Context, fs *flag.FlagSet, c *common, command string, args []string) int {
+	c.register(fs)
+	var o agent.DrillOptions
+	var modules string
+	fs.StringVar(&o.Suffix, "suffix", "", "this drill's suffix")
+	fs.StringVar(&o.Snapshot, "snapshot", "", "snapshot to restore (drill-load)")
+	fs.StringVar(&o.Root, "root", layout.DrillRoot, "scratch folder shared by the drill's steps")
+	fs.StringVar(&modules, "expect-modules", "", "comma-separated modules the instance should have")
+	fs.IntVar(&o.CheckSample, "check-sample", 200, "restored files whose content is checked")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	for _, m := range strings.Split(modules, ",") {
+		if m = strings.TrimSpace(m); m != "" {
+			o.ExpectModules = append(o.ExpectModules, m)
+		}
+	}
+	e, err := c.env()
+	if command == "drill-finish" {
+		if err != nil {
+			return finish(c.terminationLog, result.Failed(result.StepConnect, err))
+		}
+		return finish(c.terminationLog, agent.DrillFinish(ctx, e, o))
+	}
+	if err == nil {
+		err = agent.DrillLoad(ctx, e, o)
+	}
+	if err != nil {
+		// Without a report the last step says the load did not finish.
+		fmt.Fprintln(os.Stderr, "drill-load:", err)
+	}
+	return 0
 }
 
 func runStoreTask(ctx context.Context, fs *flag.FlagSet, task string, args []string) int {

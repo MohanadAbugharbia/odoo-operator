@@ -55,6 +55,8 @@ const (
 	StoreMount = "/store"
 	// ConfigMount holds odoo.conf in the Jobs.
 	ConfigMount = "/etc/odoo"
+	// DrillRoot is the scratch folder of a restore drill's containers.
+	DrillRoot = "/drill"
 	// SecretsMount holds the store's Secrets in the Jobs.
 	SecretsMount = "/secrets"
 	// TerminationLog is where a Job writes its Result.
@@ -125,6 +127,7 @@ const maxIdentifier = 63
 const (
 	restoreInfix = "_restore_"
 	prevInfix    = "_prev_"
+	drillInfix   = "_drill_"
 )
 
 // base trims db so that db + the longest infix + a suffix fits a
@@ -153,6 +156,22 @@ func PrevName(db, suffix string) string {
 	return base(db) + prevInfix + suffix
 }
 
+// DrillName is the scratch database (and filestore folder) a restore drill
+// loads the backup into.
+func DrillName(db, suffix string) string {
+	return base(db) + drillInfix + suffix
+}
+
+// DrillSuffix returns the suffix of a drill's scratch database name, or ""
+// when name is not one for db.
+func DrillSuffix(name, db string) string {
+	prefix := base(db) + drillInfix
+	if name == db || !strings.HasPrefix(name, prefix) || !ValidSuffix(name[len(prefix):]) {
+		return ""
+	}
+	return name[len(prefix):]
+}
+
 // JournalFile is the restore's journal, relative to the data PVC root.
 func JournalFile(suffix string) string {
 	return path.Join(OperatorDir, "restore-"+suffix+".json")
@@ -179,7 +198,7 @@ func CheckName(name, db, suffix string) error {
 		// A live database can itself be named like a restore copy.
 		return fmt.Errorf("%q is the live database", name)
 	}
-	if name == RestoreName(db, suffix) || name == PrevName(db, suffix) {
+	if name == RestoreName(db, suffix) || name == PrevName(db, suffix) || name == DrillName(db, suffix) {
 		return nil
 	}
 	return fmt.Errorf("%q is not a name the operator creates for database %q and suffix %s", name, db, suffix)

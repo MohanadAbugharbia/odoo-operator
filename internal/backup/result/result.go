@@ -48,6 +48,7 @@ const (
 	StepCleanup   = "cleanup"
 	StepProbe     = "probe"
 	StepStoreTask = "store-task"
+	StepOdoo      = "odoo"
 )
 
 // Result is the outcome of one Job.
