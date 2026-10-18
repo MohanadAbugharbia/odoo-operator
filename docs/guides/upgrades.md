@@ -2,6 +2,28 @@
 
 An upgrade runs Odoo's `-u` on the database in a Job, with the Deployment scaled to zero, whenever the image changes or you ask for it.
 
+```mermaid
+flowchart TD
+  trigger["spec.image changes (onImageChange: true)<br/>or spec.upgrade.token changes"]
+  check["image check Job<br/>pulls the new image, runs odoo --version<br/>(skipped when the image is unchanged)"]
+  old["old image keeps serving<br/>Degraded: ImagePullFailed or ImageCheckFailed"]
+  modules{"spec.upgrade.modules<br/>empty?"}
+  roll["roll the Deployment<br/>to the new image, no Job"]
+  stop["scale Odoo to 0<br/>phase Upgrading"]
+  job["upgrade Job<br/>-u spec.upgrade.modules,<br/>-i new spec.modules"]
+  running["Odoo starts on the new image<br/>phase Running"]
+  failed["phase Failed, Odoo stays stopped<br/>delete the Job to retry,<br/>or restore a backup"]
+
+  trigger --> check
+  check -- "cannot pull or run" --> old
+  old -- "a later spec.image replaces the check" --> check
+  check -- "succeeds" --> modules
+  modules -- yes --> roll --> running
+  modules -- no --> stop --> job
+  job -- succeeds --> running
+  job -- fails --> failed
+```
+
 - `spec.upgrade.onImageChange: true` (default): every `spec.image` change runs
   an upgrade Job with `-u <spec.upgrade.modules>` before the Deployment rolls
   to the new image. New entries in `spec.modules` are installed in the same Job.
