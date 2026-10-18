@@ -32,6 +32,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -41,6 +42,7 @@ import (
 	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/jobspec"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/layout"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/retention"
 )
 
 // secrets are the emulated Secrets: name → key → value.
@@ -60,11 +62,20 @@ func emulateJob(t *testing.T, store *odoov1.OdooBackupStore, sec secrets, repo s
 	if err != nil {
 		t.Fatalf("locate: %v", err)
 	}
+	return emulateLocation(t, loc, sec, filepath.Join(t.TempDir(), "store"))
+}
+
+// storeMountRE is where a Job mounts an nfs or pvc store, its own or a copy's.
+var storeMountRE = regexp.MustCompile(regexp.QuoteMeta(layout.StoreMount) + `(-copy[0-9]+)?`)
+
+// emulateLocation resolves one store's part of a Job on this machine, with
+// an nfs or pvc store's mount at storeDir.
+func emulateLocation(t *testing.T, loc jobspec.Location, sec secrets, storeDir string) jobEnvironment {
+	t.Helper()
 	secretsDir := t.TempDir()
-	storeDir := filepath.Join(t.TempDir(), "store")
 	rewrite := func(s string) string {
 		s = strings.ReplaceAll(s, layout.SecretsMount, secretsDir)
-		return strings.ReplaceAll(s, layout.StoreMount, storeDir)
+		return storeMountRE.ReplaceAllString(s, storeDir)
 	}
 	volumes := map[string]corev1.Volume{}
 	for _, v := range loc.Volumes {
@@ -81,6 +92,9 @@ func emulateJob(t *testing.T, store *odoov1.OdooBackupStore, sec secrets, repo s
 		}
 		for _, item := range v.Secret.Items {
 			value, ok := sec[v.Secret.SecretName][item.Key]
+			if !ok && v.Secret.Optional != nil && *v.Secret.Optional {
+				continue // the kubelet leaves a missing key out
+			}
 			if !ok {
 				t.Fatalf("the Job mounts key %s of Secret %s, which the test does not have", item.Key, v.Secret.SecretName)
 			}
@@ -106,6 +120,83 @@ func emulateJob(t *testing.T, store *odoov1.OdooBackupStore, sec secrets, repo s
 		je.env = append(je.env, e.Name+"="+rewrite(value))
 	}
 	return je
+}
+
+// TestCopies copies backups between every two kinds of store, each with its
+// own key (and its own credentials), applies retention in the copy, and
+// restores from the copy as from a store of its own.
+func TestCopies(t *testing.T) {
+	cases := storeCases(t)
+	for i := range cases {
+		from, to := cases[i], cases[(i+1)%len(cases)]
+		t.Run(from.name+"-to-"+to.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.seed(8)
+			repo := layout.Repository(itNamespace, itDeployment)
+			primary := emulateJob(t, from.store, from.secrets, repo)
+			copyStore := to.store.DeepCopy()
+			copyStore.Name = "copy-store"
+			copyStore.Spec.EncryptionKeySecret.Name = "copy-key"
+			// Its own folder: the same store is another case's own store.
+			switch sp := &copyStore.Spec; {
+			case sp.S3 != nil:
+				sp.S3.Path += "-copy"
+			case sp.SFTP != nil:
+				sp.SFTP.Path += "-copy"
+			}
+			copySecrets := copySecrets(to.secrets)
+			copySecrets["copy-key"] = map[string]string{"password": "another key " + randomHex(t, 8)}
+			loc, err := jobspec.LocateCopy(copyStore, repo, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			copyDir := filepath.Join(t.TempDir(), "copy-store")
+			second := emulateLocation(t, loc, copySecrets, copyDir)
+			f.env.Restic.Env = f.env.Restic.Env[2:]
+			f.env.Restic.Options = primary.options
+			setEnv(t, append(primary.env, second.env...))
+			targets, err := CopyTargetsFromEnv(f.env.Restic, []string{copyStore.Name})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ret := &Retention{Policy: retention.Policy{Last: 1}}
+			withCopies := func(o *BackupOptions) { o.Kind = retention.KindScheduled; o.Copies = targets; o.Retention = ret }
+
+			res1 := f.mustBackup("one", withCopies)
+			if len(res1.Copies) != 1 || res1.Copies[0].Error != "" || res1.Copies[0].SnapshotID == "" {
+				t.Fatalf("copy: %+v\n%s", res1.Copies, f.logs.String())
+			}
+			before := f.state(f.db)
+			res2 := f.mustBackup("two", withCopies)
+			c := res2.Copies[0]
+			if c.Error != "" || c.SnapshotID == "" || c.SnapshotID == res1.Copies[0].SnapshotID {
+				t.Fatalf("second copy: %+v", res2.Copies)
+			}
+			host := layout.Host(itNamespace, itDeployment)
+			left, err := targets[0].Restic.Snapshots(context.Background(), host)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(left) != 1 || left[0].ID != c.SnapshotID {
+				t.Fatalf("retention in the copy left %d snapshot(s), want only the second", len(left))
+			}
+
+			By := t.Log
+			By("the copy restores on its own, through the store's normal configuration")
+			f.mutate()
+			ownLoc, err := jobspec.Locate(copyStore, repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			own := emulateLocation(t, ownLoc, copySecrets, copyDir)
+			f.env.Restic.Options = own.options
+			setEnv(t, own.env)
+			if rr := f.restore(c.SnapshotID, f.nextSuffix()); !rr.OK {
+				t.Fatalf("restore from the copy: %+v", rr)
+			}
+			f.assertState(f.db, before, "restored from the copy in "+to.name)
+		})
+	}
 }
 
 func storeObject(spec odoov1.OdooBackupStoreSpec) *odoov1.OdooBackupStore {
@@ -169,24 +260,42 @@ func storeCases(t *testing.T) []storeCase {
 			}
 			port = n
 		}
-		sec := copySecrets(key)
-		sec["sftp"] = map[string]string{odoov1.SSHPrivateKeyKey: string(keyData), odoov1.SSHKnownHostsKey: string(knownHosts)}
-		cases = append(cases, storeCase{
-			name: "sftp",
-			store: storeObject(odoov1.OdooBackupStoreSpec{SFTP: &odoov1.SFTPStore{
-				Host: host, Port: port, User: os.Getenv("TEST_SFTP_USER"),
-				Path:      odoov1.StorePath(os.Getenv("TEST_SFTP_PATH") + "/" + randomHex(t, 4)),
-				SSHSecret: corev1.LocalObjectReference{Name: "sftp"},
-			}}),
-			secrets: sec,
-			broken: func(s secrets) secrets {
-				// A server whose host key does not match is refused.
-				s = copySecrets(s)
-				s["sftp"][odoov1.SSHKnownHostsKey] = "[" + host + "]:1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN3iAlYu0OFlbFtu1hWW2fb+qv/lDpobr1GQY/3t7dJI\n" +
-					strings.Replace(string(knownHosts), "AAAA", "AAAB", 1)
-				return s
-			},
-		})
+		sftpCase := func(name, secretKey string, keyData []byte) storeCase {
+			sec := copySecrets(key)
+			sec["sftp"] = map[string]string{secretKey: string(keyData), odoov1.SSHKnownHostsKey: string(knownHosts)}
+			return storeCase{
+				name: name,
+				store: storeObject(odoov1.OdooBackupStoreSpec{SFTP: &odoov1.SFTPStore{
+					Host: host, Port: port, User: os.Getenv("TEST_SFTP_USER"),
+					Path:      odoov1.StorePath(os.Getenv("TEST_SFTP_PATH") + "/" + randomHex(t, 4)),
+					SSHSecret: corev1.LocalObjectReference{Name: "sftp"},
+				}}),
+				secrets: sec,
+				broken: func(s secrets) secrets {
+					// A server whose host key does not match is refused.
+					s = copySecrets(s)
+					s["sftp"][odoov1.SSHKnownHostsKey] = "[" + host + "]:1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN3iAlYu0OFlbFtu1hWW2fb+qv/lDpobr1GQY/3t7dJI\n" +
+						strings.Replace(string(knownHosts), "AAAA", "AAAB", 1)
+					return s
+				},
+			}
+		}
+		cases = append(cases, sftpCase("sftp", odoov1.SSHPrivateKeyKey, keyData))
+		// Other client key types, also under the ssh-auth Secret's key name.
+		for _, k := range []struct{ name, env, secretKey string }{
+			{"sftp-rsa", "TEST_SFTP_RSA_KEY_FILE", odoov1.SSHAuthPrivateKeyKey},
+			{"sftp-ecdsa", "TEST_SFTP_ECDSA_KEY_FILE", odoov1.SSHPrivateKeyKey},
+		} {
+			if os.Getenv(k.env) == "" {
+				t.Logf("%s is not set, skipping %s", k.env, k.name)
+				continue
+			}
+			data, err := os.ReadFile(os.Getenv(k.env))
+			if err != nil {
+				t.Fatalf("%s: %v", k.env, err)
+			}
+			cases = append(cases, sftpCase(k.name, k.secretKey, data))
+		}
 	} else {
 		t.Log("TEST_SFTP_HOST is not set, skipping the SFTP store")
 	}
@@ -228,16 +337,22 @@ func parseInt32(s string) (int32, error) {
 }
 
 // setEnv sets a Job's environment for the rest of the test, the way
-// odoo-backup starts: with the host key algorithms limited to known_hosts.
+// odoo-backup starts: with the host key algorithms limited to known_hosts
+// and the private key found under either name.
 func setEnv(t *testing.T, env []string) {
 	t.Helper()
-	t.Setenv(envHostKeyAlgorithms, "")
-	_ = os.Unsetenv(envHostKeyAlgorithms)
+	for _, name := range []string{envHostKeyAlgorithms, "RCLONE_CONFIG_COPY1_HOST_KEY_ALGORITHMS"} {
+		t.Setenv(name, "")
+		_ = os.Unsetenv(name)
+	}
 	for _, kv := range env {
 		k, v, _ := strings.Cut(kv, "=")
 		t.Setenv(k, v)
 	}
 	if err := LimitHostKeyAlgorithms(); err != nil {
+		t.Fatal(err)
+	}
+	if err := UseSSHAuthPrivateKey(); err != nil {
 		t.Fatal(err)
 	}
 }

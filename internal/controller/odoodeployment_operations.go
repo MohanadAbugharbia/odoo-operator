@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -43,7 +44,7 @@ import (
 	"github.com/MohanadAbugharbia/odoo-operator/pkg/utils"
 )
 
-// +kubebuilder:rbac:groups=odoo.abugharbia.com,resources=odoobackups,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=odoo.abugharbia.com,resources=odoobackups,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=odoo.abugharbia.com,resources=odoobackups/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=odoo.abugharbia.com,resources=odoorestores,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=odoo.abugharbia.com,resources=odoorestores/status,verbs=get;update;patch
@@ -76,6 +77,10 @@ const (
 	ReasonCleanupFailed       = "RestoreCleanupFailed"
 	ReasonBackupImageUnknown  = "BackupImageUnknown"
 	ReasonWaitingForOperation = "WaitingForOperation"
+	ReasonRetentionFailed     = "RetentionFailed"
+	ReasonBackupExpired       = "BackupExpired"
+	ReasonRestoreFromCopy     = "RestoreFromCopy"
+	ReasonCopyFailed          = "BackupCopyFailed"
 )
 
 // instanceWork is every OdooBackup and OdooRestore of one instance, oldest first.
@@ -344,8 +349,9 @@ func checkStoreSecrets(ctx context.Context, c client.Reader, store *odoov1.OdooB
 			return err
 		}
 		for _, k := range keys {
-			if _, ok := secret.Data[k]; !ok {
-				return fmt.Errorf("secret %q of OdooBackupStore %s has no key %q", name, store.Name, k)
+			if !slices.ContainsFunc(strings.Split(k, "|"), func(k string) bool { _, ok := secret.Data[k]; return ok }) {
+				return fmt.Errorf("secret %q of OdooBackupStore %s has no key %s", name, store.Name,
+					`"`+strings.ReplaceAll(k, "|", `" or "`)+`"`)
 			}
 		}
 	}
@@ -436,7 +442,9 @@ func (r *OdooDeploymentReconciler) createJob(ctx context.Context, od *odoov1.Odo
 
 // operationJobKinds are the Job kinds of backups, restores and cleanups, of
 // which an instance runs one at a time.
-var operationJobKinds = map[string]bool{jobspec.KindBackup: true, jobspec.KindRestore: true, jobspec.KindCleanup: true}
+var operationJobKinds = map[string]bool{
+	jobspec.KindBackup: true, jobspec.KindRestore: true, jobspec.KindCleanup: true, jobspec.KindDrill: true,
+}
 
 // sameOperation reports whether two Job names differ at most in their
 // attempt suffix.
@@ -576,7 +584,7 @@ func (r *OdooDeploymentReconciler) observeOperation(ctx context.Context, s *reco
 		if b == nil {
 			return r.abandonOperation(ctx, s, "OdooBackup "+op.Name+" was deleted")
 		}
-		return r.driveBackup(ctx, s, b, configHash)
+		return r.driveBackup(ctx, s, w, b, configHash)
 	case odoov1.OperationRestore:
 		rs := w.restore(op.Name)
 		if rs == nil {
@@ -589,6 +597,8 @@ func (r *OdooDeploymentReconciler) observeOperation(ctx context.Context, s *reco
 			return r.abandonOperation(ctx, s, "OdooRestore "+op.Name+" was deleted")
 		}
 		return r.driveCleanup(ctx, s, rs, configHash)
+	case odoov1.OperationDrill:
+		return r.driveDrill(ctx, s, w)
 	}
 	s.od.Status.CurrentOperation = odoov1.OperationStatus{}
 	return ctrl.Result{}, true, nil
@@ -639,7 +649,7 @@ func (r *OdooDeploymentReconciler) stopOdoo(ctx context.Context, s *reconcileSta
 // ---- backups -------------------------------------------------------------------
 
 // startBackup claims the instance for backup b.
-func (r *OdooDeploymentReconciler) startBackup(ctx context.Context, s *reconcileState, b *odoov1.OdooBackup, configHash string) (ctrl.Result, error) {
+func (r *OdooDeploymentReconciler) startBackup(ctx context.Context, s *reconcileState, w instanceWork, b *odoov1.OdooBackup, configHash string) (ctrl.Result, error) {
 	od := s.od
 	fail := func(msg string) (ctrl.Result, error) {
 		r.objectEvent(b, corev1.EventTypeWarning, ReasonBackupFailed, msg)
@@ -671,7 +681,7 @@ func (r *OdooDeploymentReconciler) startBackup(ctx context.Context, s *reconcile
 		Kind: odoov1.OperationBackup, Name: b.Name, StoppedOdoo: stop, StartedAt: &now,
 	}
 	log.FromContext(ctx).Info("Starting backup", "backup", b.Name, "offline", stop)
-	result, _, err := r.driveBackup(ctx, s, b, configHash)
+	result, _, err := r.driveBackup(ctx, s, w, b, configHash)
 	return result, err
 }
 
@@ -685,7 +695,7 @@ func backupKind(b *odoov1.OdooBackup) string {
 // driveBackup moves the backup in status.currentOperation along.
 //
 //nolint:gocyclo // one switch over the backup job outcomes
-func (r *OdooDeploymentReconciler) driveBackup(ctx context.Context, s *reconcileState, b *odoov1.OdooBackup, configHash string) (ctrl.Result, bool, error) {
+func (r *OdooDeploymentReconciler) driveBackup(ctx context.Context, s *reconcileState, w instanceWork, b *odoov1.OdooBackup, configHash string) (ctrl.Result, bool, error) {
 	od := s.od
 	op := &od.Status.CurrentOperation
 	if op.StoppedOdoo {
@@ -719,6 +729,9 @@ func (r *OdooDeploymentReconciler) driveBackup(ctx context.Context, s *reconcile
 			}
 		}
 		params.Offline = op.StoppedOdoo
+		params.Retention = backupRetention(od, w)
+		var skipped []odoov1.BackupCopy
+		params.Copies, skipped = r.copyStores(ctx, od)
 		attempt := b.Status.Attempts + 1
 		wait := od.Spec.Backup.ConsistencyValue() == odoov1.BackupConsistencyOnline && !op.StoppedOdoo
 		if b.Status.WaitingSince != nil && time.Since(b.Status.WaitingSince.Time) > cleanupWaitLimit {
@@ -752,6 +765,7 @@ func (r *OdooDeploymentReconciler) driveBackup(ctx context.Context, s *reconcile
 			if st.StartedAt == nil {
 				st.StartedAt = op.StartedAt
 			}
+			st.Copies = skipped
 		})
 		if err != nil {
 			return ctrl.Result{}, false, err
@@ -817,9 +831,26 @@ func (r *OdooDeploymentReconciler) driveBackup(ctx context.Context, s *reconcile
 			phase = odoov1.BackupPhaseCompletedWithWarnings
 			msg += "; " + strings.Join(res.Warnings, "; ")
 		}
+		copies := mergeCopies(b.Status.Copies, res.Copies)
+		var failedCopies []string
+		for _, c := range copies {
+			if c.Error != "" {
+				failedCopies = append(failedCopies, c.Store)
+			}
+		}
+		if len(failedCopies) > 0 {
+			phase = odoov1.BackupPhasePartiallyCompleted
+			msg += fmt.Sprintf("; the copy to %s failed", strings.Join(failedCopies, ", "))
+		}
+		var warnings []string
+		if res.RetentionError != "" {
+			warnings = append(warnings, "retention did not run: "+res.RetentionError)
+		}
 		err := r.patchBackupStatus(ctx, b, func(st *odoov1.OdooBackupStatus) {
 			st.Phase = phase
 			st.Message = msg
+			st.Warnings = warnings
+			st.Copies = copies
 			st.SnapshotID = res.SnapshotID
 			st.OdooVersion = res.OdooVersion
 			st.PgServerVersion = res.PgServerVersion
@@ -838,6 +869,10 @@ func (r *OdooDeploymentReconciler) driveBackup(ctx context.Context, s *reconcile
 		if err != nil {
 			return ctrl.Result{}, false, err
 		}
+		// Before the Job goes: its result is how a failed delete is retried.
+		if err := r.deleteForgotten(ctx, od, w, b.Status.Store, res.Forgotten); err != nil {
+			return ctrl.Result{}, false, err
+		}
 		if err := reconcileloops.DeleteMaintenanceJob(ctx, r.Client, out.job); err != nil {
 			return ctrl.Result{}, false, err
 		}
@@ -846,6 +881,14 @@ func (r *OdooDeploymentReconciler) driveBackup(ctx context.Context, s *reconcile
 			eventType = corev1.EventTypeWarning
 		}
 		r.objectEvent(b, eventType, ReasonBackupCompleted, msg)
+		for _, warning := range warnings {
+			r.objectEvent(b, corev1.EventTypeWarning, ReasonRetentionFailed, warning)
+		}
+		for _, c := range copies {
+			if c.Error != "" {
+				r.objectEvent(b, corev1.EventTypeWarning, ReasonCopyFailed, fmt.Sprintf("copy to %s failed: %s", c.Store, c.Error))
+			}
+		}
 		metrics.BackupFinished(backupKind(b), metrics.BackupSucceeded, took)
 		od.Status.CurrentOperation = odoov1.OperationStatus{}
 		return ctrl.Result{RequeueAfter: time.Second}, true, nil
@@ -904,17 +947,14 @@ func (r *OdooDeploymentReconciler) resolveRestore(ctx context.Context, od *odoov
 		if b.Spec.OdooDeployment != od.Name {
 			return src, fmt.Sprintf("OdooBackup %q is a backup of %s, not of %s", b.Name, b.Spec.OdooDeployment, od.Name), nil
 		}
-		if b.Status.Phase != odoov1.BackupPhaseCompleted && b.Status.Phase != odoov1.BackupPhaseCompletedWithWarnings {
+		switch b.Status.Phase {
+		case odoov1.BackupPhaseCompleted, odoov1.BackupPhaseCompletedWithWarnings, odoov1.BackupPhasePartiallyCompleted:
+		default:
 			return src, fmt.Sprintf("OdooBackup %q has not completed (phase %q)", b.Name, b.Status.Phase), nil
 		}
-		if b.Status.SnapshotID == "" || b.Status.Store == "" {
-			return src, fmt.Sprintf("OdooBackup %q records no snapshot", b.Name), nil
-		}
-		store, err := r.getStore(ctx, od.Namespace, b.Status.Store)
-		if err != nil {
-			return src, err.Error(), nil
-		}
-		return restoreSource{store: store, snapshot: b.Status.SnapshotID}, "", nil
+		return r.backupSource(ctx, od, b, func(msg string) {
+			r.objectEvent(rs, corev1.EventTypeWarning, ReasonRestoreFromCopy, "Restoring the copy in store "+msg)
+		})
 	case spec.SnapshotID != "":
 		if len(od.Spec.Backup.Stores) == 0 {
 			return src, fmt.Sprintf("OdooDeployment %s has no spec.backup.stores to find snapshot %s in", od.Name, spec.SnapshotID), nil
@@ -949,6 +989,37 @@ func (r *OdooDeploymentReconciler) resolveRestore(ctx context.Context, od *odoov
 		return restoreSource{undo: target}, "", nil
 	}
 	return src, "set one of backup, snapshotID, undo", nil
+}
+
+// backupSource finds where a finished backup can be read from: the store it
+// was written to, or, when that store is gone or not ready, a copy in a
+// store that is (fromCopy is told which and why).
+func (r *OdooDeploymentReconciler) backupSource(ctx context.Context, od *odoov1.OdooDeployment, b *odoov1.OdooBackup,
+	fromCopy func(msg string)) (src restoreSource, refusal string, err error) {
+	if b.Status.SnapshotID == "" || b.Status.Store == "" {
+		return src, fmt.Sprintf("OdooBackup %q records no snapshot", b.Name), nil
+	}
+	store, err := r.getStore(ctx, od.Namespace, b.Status.Store)
+	if err == nil && store.Status.Ready {
+		return restoreSource{store: store, snapshot: b.Status.SnapshotID}, "", nil
+	}
+	for _, c := range b.Status.Copies {
+		if c.SnapshotID == "" {
+			continue
+		}
+		if copyStore, copyErr := r.getStore(ctx, od.Namespace, c.Store); copyErr == nil && copyStore.Status.Ready {
+			why := "is not ready"
+			if err != nil {
+				why = "cannot be used: " + err.Error()
+			}
+			fromCopy(fmt.Sprintf("%s: store %s %s", c.Store, b.Status.Store, why))
+			return restoreSource{store: copyStore, snapshot: c.SnapshotID}, "", nil
+		}
+	}
+	if err != nil {
+		return src, err.Error(), nil
+	}
+	return restoreSource{store: store, snapshot: b.Status.SnapshotID}, "", nil
 }
 
 func orDefault(s, d string) string {

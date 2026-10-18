@@ -1,0 +1,101 @@
+# Example alerts for backups, restores, restore drills and backup stores.
+# They read the operator's /metrics (see monitor.yaml). Copy them and adjust
+# the thresholds to your schedules: a daily backup schedule is assumed for
+# OdooBackupStale and a weekly drill for OdooRestoreDrillStale.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  labels:
+    app.kubernetes.io/name: odoo-operator
+  name: odoo-operator-backup-alerts
+  namespace: system
+spec:
+  groups:
+    - name: odoo-operator-backups
+      rules:
+        - alert: OdooBackupStale
+          # No successful backup for a day and a bit, or none at all, while
+          # scheduled backups are on.
+          expr: |
+            (
+              (time() - odoo_operator_backup_last_success_timestamp_seconds > 26 * 3600)
+              or on (namespace, name) (odoo_operator_backup_enabled == 1 unless on (namespace, name) odoo_operator_backup_last_success_timestamp_seconds)
+            )
+            and on (namespace, name) odoo_operator_backup_enabled == 1
+          for: 30m
+          labels:
+            severity: critical
+          annotations:
+            summary: "No recent backup of {{ $labels.namespace }}/{{ $labels.name }}"
+            description: "The newest successful backup is more than 26 hours old, or there is none. Check the instance's OdooBackups and their Jobs."
+        - alert: OdooBackupFailed
+          expr: odoo_operator_backup_last_failed == 1
+          labels:
+            severity: warning
+          annotations:
+            summary: "The last backup of {{ $labels.namespace }}/{{ $labels.name }} failed"
+            description: "kubectl -n {{ $labels.namespace }} get odoobackups names the failed backup; its status.message says why."
+        - alert: OdooBackupMissingFiles
+          expr: odoo_operator_backup_missing_files > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $value }} attachments of {{ $labels.namespace }}/{{ $labels.name }} are missing from its backup"
+            description: "The database refers to files no backup holds. The newest OdooBackup's status names them."
+        - alert: OdooBackupCopyFailed
+          expr: odoo_operator_backup_last_copy_failed == 1
+          labels:
+            severity: warning
+          annotations:
+            summary: "The last backup of {{ $labels.namespace }}/{{ $labels.name }} was not copied to store {{ $labels.store }}"
+            description: "The backup itself completed (phase PartiallyCompleted); its status.copies says why the copy failed."
+        - alert: OdooRestoreFailed
+          expr: odoo_operator_restore_last_failed == 1
+          labels:
+            severity: critical
+          annotations:
+            summary: "The last restore of {{ $labels.namespace }}/{{ $labels.name }} failed"
+            description: "kubectl -n {{ $labels.namespace }} get odoorestores names the failed restore; its status.message says why."
+        - alert: OdooRestoreDrillFailed
+          expr: odoo_operator_restore_drill_last_failed == 1
+          labels:
+            severity: warning
+          annotations:
+            summary: "The last restore drill of {{ $labels.namespace }}/{{ $labels.name }} failed"
+            description: "status.backup.lastDrill of the OdooDeployment says why; a failed drill keeps its Job for its log."
+        - alert: OdooRestoreDrillStale
+          # No passed drill for over a week while drills are on.
+          expr: |
+            (
+              (time() - odoo_operator_restore_drill_last_success_timestamp_seconds > 8 * 86400)
+              or on (namespace, name) (odoo_operator_restore_drill_enabled == 1 unless on (namespace, name) odoo_operator_restore_drill_last_success_timestamp_seconds)
+            )
+            and on (namespace, name) odoo_operator_restore_drill_enabled == 1
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "No passed restore drill of {{ $labels.namespace }}/{{ $labels.name }} for over a week"
+            description: "Nothing proves the backups can be restored. Check status.backup.lastDrill of the OdooDeployment."
+        - alert: OdooBackupStoreNotReady
+          expr: odoo_operator_backup_store_ready == 0
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Backup store {{ $labels.namespace }}/{{ $labels.store }} cannot be reached"
+            description: "The store's probe failed; its Ready condition says why. Backups to it fail until it is fixed."
+        - alert: OdooBackupStoreCheckFailed
+          expr: odoo_operator_backup_store_task_last_failed{task="check"} == 1
+          labels:
+            severity: critical
+          annotations:
+            summary: "Backup store {{ $labels.namespace }}/{{ $labels.store }} failed its check"
+            description: "restic check found a problem in the store's repositories, or could not run. status.lastCheck of the OdooBackupStore names the Job to read."
+        - alert: OdooBackupStorePruneFailed
+          expr: odoo_operator_backup_store_task_last_failed{task="prune"} == 1
+          labels:
+            severity: warning
+          annotations:
+            summary: "Backup store {{ $labels.namespace }}/{{ $labels.store }} failed to prune"
+            description: "The space of removed backups is not freed. status.lastPrune of the OdooBackupStore names the Job to read."

@@ -43,6 +43,9 @@ const (
 	KindRestore = "restore"
 	KindCleanup = "cleanup"
 	KindProbe   = "store-probe"
+	KindCheck   = "store-check"
+	KindPrune   = "store-prune"
+	KindDrill   = "drill"
 )
 
 // Labels on backup Jobs.
@@ -61,6 +64,7 @@ const (
 	volConfig       = "odoo-config"
 	volData         = "odoo-data"
 	volScratch      = "scratch"
+	volDrill        = "drill"
 	volTmp          = "tmp"
 	tmpDir          = "/tmp"
 	volStore        = "store"
@@ -75,8 +79,11 @@ const (
 	backupBackoff   = int32(1)
 	restoreBackoff  = int32(2)
 	cleanupBackoff  = int32(2)
+	drillBackoff    = int32(0)
 	probeDeadline   = int64(300)
 	cleanupDeadline = int64(3600)
+	// storeTaskDeadline bounds a check or prune of a whole store.
+	storeTaskDeadline = int64(6 * 3600)
 )
 
 // Location is how a Job reaches one store: environment, volumes and restic
@@ -106,8 +113,39 @@ func plainEnv(name, value string) corev1.EnvVar {
 	return corev1.EnvVar{Name: name, Value: value}
 }
 
-func rcloneEnv(option, value string) corev1.EnvVar {
-	return plainEnv("RCLONE_CONFIG_"+strings.ToUpper(rcloneRemote)+"_"+option, value)
+func rcloneEnvFor(remote, option, value string) corev1.EnvVar {
+	return plainEnv("RCLONE_CONFIG_"+strings.ToUpper(remote)+"_"+option, value)
+}
+
+// slot names what one store uses inside a Job's pod. The store a Job reads
+// or writes uses the plain names (RESTIC_REPOSITORY, the "store" rclone
+// remote, /store); each store a backup is copied to has its own (copy1:
+// COPY1_RESTIC_REPOSITORY, the "copy1" remote, /store-copy1), so stores with
+// different credentials never share a variable.
+type slot struct {
+	env, remote, storeMount, sshMount, passMount, volStore, volPass, volSSH string
+	// rcloneS3 reaches an S3 store through rclone, whose remote carries its
+	// own keys, instead of restic's s3 backend, which reads AWS_* and so
+	// can serve only one set of keys per process.
+	rcloneS3 bool
+}
+
+var primarySlot = slot{
+	remote: rcloneRemote, storeMount: layout.StoreMount, sshMount: sshMount, passMount: passwordMount,
+	volStore: volStore, volPass: volStorePass, volSSH: volStoreSSH,
+}
+
+// CopySlot is the name prefix of the n-th (from 1) store a backup is copied to.
+func CopySlot(n int) string { return fmt.Sprintf("copy%d", n) }
+
+func copySlot(n int) slot {
+	name := CopySlot(n)
+	return slot{
+		env: strings.ToUpper(name) + "_", remote: name,
+		storeMount: layout.StoreMount + "-" + name, sshMount: sshMount + "-" + name, passMount: passwordMount + "-" + name,
+		volStore: volStore + "-" + name, volPass: volStorePass + "-" + name, volSSH: volStoreSSH + "-" + name,
+		rcloneS3: true,
+	}
 }
 
 // S3Repository is the restic repository URL of repo inside an S3 store.
@@ -128,18 +166,37 @@ func S3Repository(s3 *odoov1.S3Store, repo string) string {
 // Locate returns how a Job reaches store; repo is the instance's folder
 // (layout.Repository), or "" for a probe of the store root.
 func Locate(store *odoov1.OdooBackupStore, repo string) (Location, error) {
+	return locate(store, repo, primarySlot)
+}
+
+// LocateCopy returns how a backup Job reaches store as the n-th (from 1)
+// store it copies the backup to.
+func LocateCopy(store *odoov1.OdooBackupStore, repo string, n int) (Location, error) {
+	return locate(store, repo, copySlot(n))
+}
+
+//nolint:gocyclo // one case per store type
+func locate(store *odoov1.OdooBackupStore, repo string, sl slot) (Location, error) {
 	spec := &store.Spec
 	loc := Location{}
+	rcloneEnv := func(option, value string) corev1.EnvVar { return rcloneEnvFor(sl.remote, option, value) }
+	rcloneSecretEnv := func(option, secret, key string) corev1.EnvVar {
+		return secretEnv("RCLONE_CONFIG_"+strings.ToUpper(sl.remote)+"_"+option, secret, key)
+	}
 	switch {
 	case spec.S3 != nil:
 		s3 := spec.S3
 		creds := s3.CredentialsSecret.Name
+		if !sl.rcloneS3 {
+			loc.Env = append(loc.Env,
+				secretEnv("AWS_ACCESS_KEY_ID", creds, odoov1.S3AccessKeyIDKey),
+				secretEnv("AWS_SECRET_ACCESS_KEY", creds, odoov1.S3SecretAccessKeyKey),
+			)
+		}
 		loc.Env = append(loc.Env,
-			secretEnv("AWS_ACCESS_KEY_ID", creds, odoov1.S3AccessKeyIDKey),
-			secretEnv("AWS_SECRET_ACCESS_KEY", creds, odoov1.S3SecretAccessKeyKey),
 			rcloneEnv("TYPE", "s3"),
-			secretEnv("RCLONE_CONFIG_STORE_ACCESS_KEY_ID", creds, odoov1.S3AccessKeyIDKey),
-			secretEnv("RCLONE_CONFIG_STORE_SECRET_ACCESS_KEY", creds, odoov1.S3SecretAccessKeyKey),
+			rcloneSecretEnv("ACCESS_KEY_ID", creds, odoov1.S3AccessKeyIDKey),
+			rcloneSecretEnv("SECRET_ACCESS_KEY", creds, odoov1.S3SecretAccessKeyKey),
 		)
 		if s3.Endpoint != "" {
 			loc.Env = append(loc.Env, rcloneEnv("PROVIDER", "Other"), rcloneEnv("ENDPOINT", s3.Endpoint))
@@ -147,15 +204,26 @@ func Locate(store *odoov1.OdooBackupStore, repo string) (Location, error) {
 			loc.Env = append(loc.Env, rcloneEnv("PROVIDER", "AWS"))
 		}
 		if s3.Region != "" {
-			loc.Env = append(loc.Env, plainEnv("AWS_DEFAULT_REGION", s3.Region), rcloneEnv("REGION", s3.Region))
-			loc.ResticOptions = append(loc.ResticOptions, "s3.region="+s3.Region)
+			if !sl.rcloneS3 {
+				loc.Env = append(loc.Env, plainEnv("AWS_DEFAULT_REGION", s3.Region))
+				loc.ResticOptions = append(loc.ResticOptions, "s3.region="+s3.Region)
+			}
+			loc.Env = append(loc.Env, rcloneEnv("REGION", s3.Region))
 		}
 		if s3.ForcePathStyle {
-			loc.ResticOptions = append(loc.ResticOptions, "s3.bucket-lookup=path")
+			if !sl.rcloneS3 {
+				loc.ResticOptions = append(loc.ResticOptions, "s3.bucket-lookup=path")
+			}
 			loc.Env = append(loc.Env, rcloneEnv("FORCE_PATH_STYLE", "true"))
 		}
-		loc.Repository = S3Repository(s3, repo)
-		loc.ProbeTarget = rcloneRemote + ":" + strings.TrimSuffix(s3.Bucket+"/"+strings.TrimPrefix(layout.JoinStorePath(string(s3.Path), ""), "/"), "/")
+		bucketPath := strings.TrimSuffix(s3.Bucket+"/"+strings.TrimPrefix(layout.JoinStorePath(string(s3.Path), ""), "/"), "/")
+		if sl.rcloneS3 {
+			loc.Repository = "rclone:" + sl.remote + ":" + strings.TrimSuffix(
+				s3.Bucket+"/"+strings.TrimPrefix(layout.JoinStorePath(string(s3.Path), repo), "/"), "/")
+		} else {
+			loc.Repository = S3Repository(s3, repo)
+		}
+		loc.ProbeTarget = sl.remote + ":" + bucketPath
 	case spec.SFTP != nil:
 		sftp := spec.SFTP
 		port := sftp.Port
@@ -167,45 +235,51 @@ func Locate(store *odoov1.OdooBackupStore, repo string) (Location, error) {
 			rcloneEnv("HOST", sftp.Host),
 			rcloneEnv("PORT", strconv.Itoa(int(port))),
 			rcloneEnv("USER", sftp.User),
-			rcloneEnv("KEY_FILE", sshMount+"/"+odoov1.SSHPrivateKeyKey),
-			rcloneEnv("KNOWN_HOSTS_FILE", sshMount+"/"+odoov1.SSHKnownHostsKey),
+			rcloneEnv("KEY_FILE", sl.sshMount+"/"+odoov1.SSHPrivateKeyKey),
+			rcloneEnv("KNOWN_HOSTS_FILE", sl.sshMount+"/"+odoov1.SSHKnownHostsKey),
 			// No remote commands: many SFTP-only servers refuse them.
 			rcloneEnv("SHELL_TYPE", "none"),
 			rcloneEnv("DISABLE_HASHCHECK", "true"),
 		)
 		loc.Volumes = append(loc.Volumes, corev1.Volume{
-			Name: volStoreSSH,
+			Name: sl.volSSH,
 			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
 				SecretName:  sftp.SSHSecret.Name,
 				DefaultMode: ptr(int32(0o440)),
+				// The private key is under either name, so a missing key
+				// must not stop the Pod; the operator checks the Secret
+				// before it creates a Job, and the agent reads the key that
+				// is there.
 				Items: []corev1.KeyToPath{
 					{Key: odoov1.SSHPrivateKeyKey, Path: odoov1.SSHPrivateKeyKey},
+					{Key: odoov1.SSHAuthPrivateKeyKey, Path: odoov1.SSHAuthPrivateKeyKey},
 					{Key: odoov1.SSHKnownHostsKey, Path: odoov1.SSHKnownHostsKey},
 				},
+				Optional: ptr(true),
 			}},
 		})
-		loc.Mounts = append(loc.Mounts, corev1.VolumeMount{Name: volStoreSSH, MountPath: sshMount, ReadOnly: true})
-		loc.Repository = "rclone:" + rcloneRemote + ":" + layout.JoinStorePath(string(sftp.Path), repo)
-		loc.ProbeTarget = rcloneRemote + ":" + layout.JoinStorePath(string(sftp.Path), "")
+		loc.Mounts = append(loc.Mounts, corev1.VolumeMount{Name: sl.volSSH, MountPath: sl.sshMount, ReadOnly: true})
+		loc.Repository = "rclone:" + sl.remote + ":" + layout.JoinStorePath(string(sftp.Path), repo)
+		loc.ProbeTarget = sl.remote + ":" + layout.JoinStorePath(string(sftp.Path), "")
 	case spec.NFS != nil:
 		loc.Volumes = append(loc.Volumes, corev1.Volume{
-			Name:         volStore,
+			Name:         sl.volStore,
 			VolumeSource: corev1.VolumeSource{NFS: &corev1.NFSVolumeSource{Server: spec.NFS.Server, Path: spec.NFS.Path}},
 		})
-		loc.Mounts = append(loc.Mounts, corev1.VolumeMount{Name: volStore, MountPath: layout.StoreMount})
-		loc.Repository = strings.TrimSuffix(layout.StoreMount+"/"+repo, "/")
-		loc.ProbeTarget = layout.StoreMount
+		loc.Mounts = append(loc.Mounts, corev1.VolumeMount{Name: sl.volStore, MountPath: sl.storeMount})
+		loc.Repository = strings.TrimSuffix(sl.storeMount+"/"+repo, "/")
+		loc.ProbeTarget = sl.storeMount
 	case spec.PVC != nil:
 		// The claim's root is mounted and the folders are created by restic:
 		// a subPath mount would have the kubelet create them as root.
 		loc.Volumes = append(loc.Volumes, corev1.Volume{
-			Name: volStore,
+			Name: sl.volStore,
 			VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 				ClaimName: spec.PVC.ClaimName,
 			}},
 		})
-		loc.Mounts = append(loc.Mounts, corev1.VolumeMount{Name: volStore, MountPath: layout.StoreMount})
-		root := layout.StoreMount
+		loc.Mounts = append(loc.Mounts, corev1.VolumeMount{Name: sl.volStore, MountPath: sl.storeMount})
+		root := sl.storeMount
 		if sub := layout.JoinStorePath(string(spec.PVC.SubPath), ""); sub != "" {
 			root += "/" + strings.TrimPrefix(sub, "/")
 		}
@@ -220,22 +294,23 @@ func Locate(store *odoov1.OdooBackupStore, repo string) (Location, error) {
 		key = passwordFile
 	}
 	loc.Volumes = append(loc.Volumes, corev1.Volume{
-		Name: volStorePass,
+		Name: sl.volPass,
 		VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
 			SecretName:  spec.EncryptionKeySecret.Name,
 			DefaultMode: ptr(int32(0o440)),
 			Items:       []corev1.KeyToPath{{Key: key, Path: passwordFile}},
 		}},
 	})
-	loc.Mounts = append(loc.Mounts, corev1.VolumeMount{Name: volStorePass, MountPath: passwordMount, ReadOnly: true})
-	loc.Env = append(loc.Env, plainEnv("RESTIC_PASSWORD_FILE", passwordMount+"/"+passwordFile))
+	loc.Mounts = append(loc.Mounts, corev1.VolumeMount{Name: sl.volPass, MountPath: sl.passMount, ReadOnly: true})
+	loc.Env = append(loc.Env, plainEnv(sl.env+"RESTIC_PASSWORD_FILE", sl.passMount+"/"+passwordFile))
 	if repo != "" {
-		loc.Env = append(loc.Env, plainEnv("RESTIC_REPOSITORY", loc.Repository))
+		loc.Env = append(loc.Env, plainEnv(sl.env+"RESTIC_REPOSITORY", loc.Repository))
 	}
 	return loc, nil
 }
 
-// StoreSecrets are the Secrets (and keys) a store's Jobs read.
+// StoreSecrets are the Secrets (and keys) a store's Jobs read. A key written
+// "a|b" is either of them.
 func StoreSecrets(store *odoov1.OdooBackupStore) map[string][]string {
 	out := map[string][]string{}
 	add := func(name string, keys ...string) {
@@ -248,7 +323,7 @@ func StoreSecrets(store *odoov1.OdooBackupStore) map[string][]string {
 	case spec.S3 != nil:
 		add(spec.S3.CredentialsSecret.Name, odoov1.S3AccessKeyIDKey, odoov1.S3SecretAccessKeyKey)
 	case spec.SFTP != nil:
-		add(spec.SFTP.SSHSecret.Name, odoov1.SSHPrivateKeyKey, odoov1.SSHKnownHostsKey)
+		add(spec.SFTP.SSHSecret.Name, odoov1.SSHPrivateKeyKey+"|"+odoov1.SSHAuthPrivateKeyKey, odoov1.SSHKnownHostsKey)
 	}
 	key := spec.EncryptionKeySecret.Key
 	if key == "" {
@@ -293,6 +368,47 @@ type Params struct {
 	// Offline is set when Odoo is stopped for the backup, whatever
 	// spec.backup.consistency says (a ReadWriteOncePod volume).
 	Offline bool
+	// Retention, when set, is applied by the backup Job after the backup.
+	Retention *Retention
+	// Copies are the stores a backup Job copies the new snapshot to.
+	Copies []*odoov1.OdooBackupStore
+}
+
+// Retention is what a backup Job needs to thin the repository.
+type Retention struct {
+	Spec     odoov1.OdooBackupRetention
+	TimeZone string
+	// ProtectBackups are OdooBackups marked keep.
+	ProtectBackups []string
+	// ProtectSnapshots are snapshot IDs a pending restore needs.
+	ProtectSnapshots []string
+}
+
+func (r *Retention) args() []string {
+	c := r.Spec.Counts()
+	args := []string{"--retention", "--time-zone", r.TimeZone}
+	for _, k := range []struct {
+		flag string
+		n    int32
+	}{
+		{"--keep-last", c.Last}, {"--keep-hourly", c.Hourly}, {"--keep-daily", c.Daily},
+		{"--keep-weekly", c.Weekly}, {"--keep-monthly", c.Monthly}, {"--keep-yearly", c.Yearly},
+		{"--keep-manual", c.Manual},
+	} {
+		if k.n > 0 {
+			args = append(args, k.flag, strconv.Itoa(int(k.n)))
+		}
+	}
+	if r.Spec.Within != "" {
+		args = append(args, "--keep-within", r.Spec.Within)
+	}
+	for _, b := range r.ProtectBackups {
+		args = append(args, "--protect-backup", b)
+	}
+	for _, id := range r.ProtectSnapshots {
+		args = append(args, "--protect-snapshot", id)
+	}
+	return args
 }
 
 func (p Params) labels(kind string) map[string]string {
@@ -426,6 +542,9 @@ func BackupJob(p Params, backup *odoov1.OdooBackup, kind string, attempt int32, 
 	if waitForCleanup {
 		command = append(command, "--wait-for-cleanup")
 	}
+	if p.Retention != nil {
+		command = append(command, p.Retention.args()...)
+	}
 	command = append(command, p.commonArgs(loc)...)
 	volumes := append([]corev1.Volume{
 		od.ConfigSecretVolume(volConfig),
@@ -441,7 +560,18 @@ func BackupJob(p Params, backup *odoov1.OdooBackup, kind string, attempt int32, 
 			SubPath: layout.FilestorePath(p.Database), ReadOnly: true},
 		{Name: volTmp, MountPath: tmpDir},
 	}, loc.Mounts...)
-	spec := p.podSpec(command, append(baseEnv(), loc.Env...), volumes, mounts)
+	env := append(baseEnv(), loc.Env...)
+	for i, store := range p.Copies {
+		copyLoc, err := LocateCopy(store, layout.Repository(od.Namespace, od.Name), i+1)
+		if err != nil {
+			return batchv1.Job{}, err
+		}
+		command = append(command, "--copy", store.Name)
+		env = append(env, copyLoc.Env...)
+		volumes = append(volumes, copyLoc.Volumes...)
+		mounts = append(mounts, copyLoc.Mounts...)
+	}
+	spec := p.podSpec(command, env, volumes, mounts)
 	// The kubelet would create a missing subPath folder as root; the init
 	// container creates it as Odoo's user first.
 	spec.InitContainers = []corev1.Container{{
@@ -502,6 +632,108 @@ func RestoreJob(p Params, restore *odoov1.OdooRestore, suffix, snapshot, undoSuf
 		spec, restoreBackoff, od.Spec.Backup.ActiveDeadlineSecondsValue()), nil
 }
 
+// DrillJobName is the Job of the drill with suffix.
+func DrillJobName(instance *odoov1.OdooDeployment, suffix string) string {
+	return jobName(instance.Name, KindDrill, 0, instance.Namespace, suffix)
+}
+
+// Drill is one restore drill.
+type Drill struct {
+	// Suffix names the scratch database.
+	Suffix string
+	// Snapshot to restore from p.Store; Backup is its OdooBackup.
+	Snapshot string
+	Backup   string
+	// OdooImage loads the restored database.
+	OdooImage string
+	// ExpectModules are the modules the instance should have.
+	ExpectModules []string
+}
+
+// drillScript runs "odoo shell" on the restored database when the load
+// succeeded: Odoo loads its registry, reads records of core models through
+// the ORM and reads attachments from the scratch filestore, which must give
+// every byte of the file (a missing file the load step already judged). It
+// records how that ended, exiting 0 either way so the last step always drops the scratch
+// database. The file names are the agent's (agent.DrillLoadedFile and the
+// rest).
+const drillScript = `[ -f "$DRILL_ROOT/loaded" ] || exit 0
+"$@" >"$DRILL_ROOT/odoo.log" 2>&1 <<'PY'
+import os
+for model in ("res.company", "res.users", "res.partner"):
+    env[model].sudo().with_context(active_test=False).search([], limit=1).read()
+atts = env["ir.attachment"].sudo().search(
+    [("store_fname", "!=", False), "|", ("res_field", "=", False), ("res_field", "!=", False)], limit=20)
+paths = {a: a._full_path(a.store_fname) for a in atts}
+bad = [a.store_fname for a, p in paths.items() if os.path.isfile(p) and len(a.raw or b"") != os.path.getsize(p)]
+if bad:
+    raise SystemExit("Odoo cannot read %d attachment(s), e.g. %s" % (len(bad), ", ".join(bad[:3])))
+print("drill: Odoo read core records and %d attachments" % len(atts))
+PY
+rc=$?
+cat "$DRILL_ROOT/odoo.log"
+echo "$rc" >"$DRILL_ROOT/odoo.exit"
+exit 0`
+
+// DrillJob renders the Job of a restore drill: the backup agent restores
+// the snapshot into a scratch database and an emptyDir and checks it, the
+// backup's Odoo image reads it (odoo shell), and the agent drops
+// the scratch database and reports. It never mounts the data volume.
+func DrillJob(p Params, d Drill) (batchv1.Job, error) {
+	od := p.Instance
+	loc, err := Locate(p.Store, layout.Repository(od.Namespace, od.Name))
+	if err != nil {
+		return batchv1.Job{}, err
+	}
+	scratch := layout.DrillName(p.Database, d.Suffix)
+	common := append([]string{"--suffix", d.Suffix, "--root", layout.DrillRoot}, p.commonArgs(loc)...)
+	load := append([]string{toolBinary, "drill-load", "--snapshot", d.Snapshot,
+		"--expect-modules", strings.Join(d.ExpectModules, ",")}, common...)
+	finish := append([]string{toolBinary, "drill-finish"}, common...)
+
+	scratchVol := emptyDir(volDrill)
+	if limit := od.Spec.Backup.Drill.ScratchSizeLimit; limit != nil {
+		scratchVol.EmptyDir.SizeLimit = ptr(limit.DeepCopy())
+	}
+	volumes := append([]corev1.Volume{od.ConfigSecretVolume(volConfig), scratchVol, emptyDir(volTmp)}, loc.Volumes...)
+	agentMounts := []corev1.VolumeMount{
+		{Name: volConfig, MountPath: layout.ConfigMount, ReadOnly: true},
+		{Name: volDrill, MountPath: layout.DrillRoot},
+		{Name: volTmp, MountPath: tmpDir},
+	}
+	spec := p.podSpec(finish, baseEnv(), volumes, agentMounts)
+	loader := spec.Containers[0]
+	loader.Name = "load"
+	loader.Command = load
+	loader.Env = append(baseEnv(), loc.Env...)
+	loader.VolumeMounts = append(append([]corev1.VolumeMount(nil), agentMounts...), loc.Mounts...)
+	loader.TerminationMessagePath = ""
+	loader.TerminationMessagePolicy = ""
+
+	odooCmd := make([]string, 0, 13+len(od.Spec.OdooCommand))
+	odooCmd = append(odooCmd, "sh", "-c", drillScript, "sh")
+	odooCmd = append(odooCmd, od.Spec.OdooCommand...)
+	odooCmd = append(odooCmd, "shell", "-c", odoov1.OdooConfigFile, "--no-http",
+		"--max-cron-threads=0", "-d", scratch, "--data-dir", layout.DrillRoot)
+	odoo := corev1.Container{
+		Name:            "odoo",
+		Image:           d.OdooImage,
+		ImagePullPolicy: od.ImagePullPolicyValue(),
+		Command:         odooCmd,
+		Env:             append(append([]corev1.EnvVar(nil), od.Spec.Env...), plainEnv("DRILL_ROOT", layout.DrillRoot)),
+		EnvFrom:         od.Spec.EnvFrom,
+		Resources:       *od.Spec.Resources.DeepCopy(),
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: volConfig, MountPath: odoov1.OdooConfigMountPath, ReadOnly: true},
+			{Name: volDrill, MountPath: layout.DrillRoot},
+		},
+	}
+	spec.InitContainers = []corev1.Container{loader, odoo}
+	spec.ImagePullSecrets = od.Spec.ImagePullSecrets
+	return p.job(DrillJobName(od, d.Suffix), KindDrill, map[string]string{LabelBackup: d.Backup},
+		spec, drillBackoff, od.Spec.Backup.ActiveDeadlineSecondsValue()), nil
+}
+
 // CleanupJobName is the name of attempt of a restore's cleanup Job.
 func CleanupJobName(instance *odoov1.OdooDeployment, restore string, attempt int32) string {
 	return jobName(instance.Name, KindCleanup, attempt, instance.Namespace, restore)
@@ -534,16 +766,69 @@ func ProbeJob(image string, store *odoov1.OdooBackupStore, hash string) (batchv1
 	if err != nil {
 		return batchv1.Job{}, err
 	}
-	labels := map[string]string{odoov1.LabelJobKind: KindProbe, LabelStore: store.Name}
 	resources := corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("32Mi")},
 		Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("256Mi")},
 	}
+	return storeJob(image, store, ProbeJobName(store, hash), KindProbe, loc,
+		[]string{toolBinary, "probe", "--target", loc.ProbeTarget}, resources, probeDeadline, 3600), nil
+}
+
+// StoreTaskJobName is the Job of a store's check or prune for one
+// scheduled time.
+func StoreTaskJobName(store *odoov1.OdooBackupStore, kind string, scheduled string) string {
+	return jobName(store.Name, strings.TrimPrefix(kind, "store-"), 0, store.Namespace, scheduled)
+}
+
+// StoreTask is a check or prune over some of a store's repositories.
+type StoreTask struct {
+	// Kind is KindCheck or KindPrune.
+	Kind string
+	// Scheduled identifies the scheduled time the task runs for.
+	Scheduled string
+	// Repositories are instance folders (layout.Repository) in the store.
+	Repositories []string
+	// Part is the part of the data a check reads ("3/7"), "all", or "" for
+	// the structure only.
+	Part string
+}
+
+// StoreTaskJob renders the Job that checks or prunes a store's repositories.
+func StoreTaskJob(image string, store *odoov1.OdooBackupStore, task StoreTask) (batchv1.Job, error) {
+	loc, err := Locate(store, "")
+	if err != nil {
+		return batchv1.Job{}, err
+	}
+	command := []string{toolBinary, strings.TrimPrefix(task.Kind, "store-")}
+	if task.Kind == KindCheck && task.Part != "" {
+		command = append(command, "--read-data", task.Part)
+	}
+	for _, o := range loc.ResticOptions {
+		command = append(command, "--restic-option", o)
+	}
+	for _, repo := range task.Repositories {
+		repoLoc, err := Locate(store, repo)
+		if err != nil {
+			return batchv1.Job{}, err
+		}
+		command = append(command, "--repository", repo+"="+repoLoc.Repository)
+	}
+	resources := corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("256Mi")},
+		Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("2Gi")},
+	}
+	return storeJob(image, store, StoreTaskJobName(store, task.Kind, task.Scheduled), task.Kind, loc,
+		command, resources, storeTaskDeadline, defaultTTL), nil
+}
+
+func storeJob(image string, store *odoov1.OdooBackupStore, name, kind string, loc Location, command []string,
+	resources corev1.ResourceRequirements, deadline int64, ttl int32) batchv1.Job {
+	labels := map[string]string{odoov1.LabelJobKind: kind, LabelStore: store.Name}
 	if store.Spec.Resources != nil {
 		resources = *store.Spec.Resources.DeepCopy()
 	}
 	return batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: ProbeJobName(store, hash), Namespace: store.Namespace, Labels: labels},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: store.Namespace, Labels: labels},
 		Spec: batchv1.JobSpec{
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
@@ -552,7 +837,7 @@ func ProbeJob(image string, store *odoov1.OdooBackupStore, hash string) (batchv1
 						Name:                     ContainerName,
 						Image:                    image,
 						ImagePullPolicy:          corev1.PullIfNotPresent,
-						Command:                  []string{toolBinary, "probe", "--target", loc.ProbeTarget},
+						Command:                  command,
 						Env:                      append(baseEnv(), loc.Env...),
 						VolumeMounts:             append([]corev1.VolumeMount{{Name: volTmp, MountPath: tmpDir}}, loc.Mounts...),
 						Resources:                resources,
@@ -573,8 +858,8 @@ func ProbeJob(image string, store *odoov1.OdooBackupStore, hash string) (batchv1
 				},
 			},
 			BackoffLimit:            ptr(int32(0)),
-			ActiveDeadlineSeconds:   ptr(probeDeadline),
-			TTLSecondsAfterFinished: ptr(int32(3600)),
+			ActiveDeadlineSeconds:   ptr(deadline),
+			TTLSecondsAfterFinished: ptr(ttl),
 		},
-	}, nil
+	}
 }

@@ -2,7 +2,9 @@
 # End-to-end backup and restore in a kind cluster: the operator and the
 # backup image built from this checkout, a real Odoo, PostgreSQL, an S3
 # server and a PVC store. It backs up, changes the data, restores, undoes the
-# restore and checks the database and filestore at every step.
+# restore and checks the database and filestore at every step; then runs
+# scheduled backups with retention and a copy, a restore drill through the
+# real Odoo image, and a store check and prune.
 #
 #   kind create cluster && hack/backup-e2e.sh
 set -Eeuo pipefail
@@ -142,6 +144,58 @@ YAML
 
 backup_restore_cycle s3
 backup_restore_cycle pvc
+
+scheduled_count() { k get odoobackup -l odoo.abugharbia.com/backup-kind=scheduled,odoo.abugharbia.com/odoodeployment="$OD" -o name | wc -l; }
+
+log "scheduled backups every minute, keeping the last 2, copied to the PVC store"
+k patch odoodeployment "$OD" --type=merge -p '{"spec":{"backup":{"stores":["s3","pvc"],"schedule":"* * * * *",
+  "retention":{"last":2,"daily":0,"weekly":0,"monthly":0}}}}'
+deadline=$((SECONDS + 900))
+first=""
+while :; do
+	[ $SECONDS -ge $deadline ] && fail "retention never deleted the first scheduled backup ($first)"
+	names="$(k get odoobackup -l odoo.abugharbia.com/backup-kind=scheduled -o jsonpath='{range .items[*]}{.metadata.name}={.status.phase} {end}')"
+	case "$names" in *=Failed*) fail "a scheduled backup failed: $names" ;; esac
+	[ -z "$first" ] && first="$(printf '%s\n' $names | sort | head -1 | cut -d= -f1)"
+	if [ -n "$first" ] && ! k get odoobackup "$first" >/dev/null 2>&1; then break; fi
+	sleep 10
+done
+k patch odoodeployment "$OD" --type=merge -p '{"spec":{"backup":{"schedule":""}}}'
+[ "$(scheduled_count)" -le 3 ] || fail "retention keeps $(scheduled_count) scheduled backups, want at most 2 (+1 running)"
+newest="$(k get odoobackup -l odoo.abugharbia.com/backup-kind=scheduled -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | sort | tail -1)"
+wait_for odoobackup/"$newest" .status.phase Completed 600
+[ "$(k get odoobackup "$newest" -o jsonpath='{.status.copies[0].store}')" = pvc ] || fail "$newest was not copied to pvc"
+[ -n "$(k get odoobackup "$newest" -o jsonpath='{.status.copies[0].snapshotID}')" ] || fail "$newest has no copy snapshot"
+for b in e2e-s3 e2e-pvc; do k get odoobackup "$b" >/dev/null || fail "retention deleted manual backup $b"; done
+
+log "a restore drill through the real Odoo image"
+k patch odoodeployment "$OD" --type=merge -p '{"spec":{"backup":{"drill":{"schedule":"* * * * *"}}}}'
+deadline=$((SECONDS + 900))
+while :; do
+	[ $SECONDS -ge $deadline ] && fail "no restore drill finished"
+	done_at="$(k get odoodeployment "$OD" -o jsonpath='{.status.backup.lastDrill.completedAt}')"
+	[ -n "$done_at" ] && break
+	sleep 10
+done
+k patch odoodeployment "$OD" --type=merge -p '{"spec":{"backup":{"drill":{"schedule":""}}}}'
+# A drill that came due meanwhile finishes before the scratch databases are counted.
+while [ "$(k get odoodeployment "$OD" -o jsonpath='{.status.currentOperation.kind}')" = drill ]; do
+	[ $SECONDS -ge $deadline ] && fail "a drill is still running"
+	sleep 5
+done
+[ "$(k get odoodeployment "$OD" -o jsonpath='{.status.backup.lastDrill.succeeded}')" = true ] ||
+	fail "the drill failed: $(k get odoodeployment "$OD" -o jsonpath='{.status.backup.lastDrill.message}')"
+k get odoodeployment "$OD" -o jsonpath='{.status.backup.lastDrill.message}{"\n"}'
+left="$(psql_q "SELECT string_agg(datname, ',') FROM pg_database WHERE datname LIKE '${DB}\_drill\_%'" postgres)"
+[ -z "$left" ] || fail "scratch databases left after the drill: $left"
+check_state "after-pvc" "after the drill"
+
+log "check and prune the S3 store"
+kubectl -n "$NS" patch odoobackupstore s3 --type=merge -p '{"spec":{"check":{"schedule":"* * * * *","readDataParts":1},"prune":{"schedule":"* * * * *"}}}'
+wait_for odoobackupstore/s3 .status.lastPrune.result Passed 900
+wait_for odoobackupstore/s3 .status.lastCheck.result Passed 900
+kubectl -n "$NS" patch odoobackupstore s3 --type=merge -p '{"spec":{"check":{"schedule":""},"prune":{"schedule":""}}}'
+k get odoobackupstore s3 -o jsonpath='{.status.lastCheck.message}{"\n"}{.status.lastPrune.message}{"\n"}'
 
 # The restore Jobs and their finished pods stay until their TTL; they must not
 # hold up deleting the instance.

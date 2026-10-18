@@ -374,8 +374,15 @@ func TestLocateSFTP(t *testing.T) {
 			ssh = &loc.Volumes[i]
 		}
 	}
-	if ssh == nil || ssh.Secret.SecretName != "ssh" || len(ssh.Secret.Items) != 2 {
+	if ssh == nil || ssh.Secret.SecretName != "ssh" || len(ssh.Secret.Items) != 3 {
 		t.Fatalf("ssh volume = %+v", ssh)
+	}
+	// The private key is under either name, so neither may be required.
+	if ssh.Secret.Optional == nil || !*ssh.Secret.Optional ||
+		!slices.ContainsFunc(ssh.Secret.Items, func(k corev1.KeyToPath) bool {
+			return k.Key == "ssh-privatekey" && k.Path == "ssh-privatekey"
+		}) {
+		t.Errorf("ssh volume = %+v", ssh.Secret)
 	}
 	if !slices.ContainsFunc(loc.Mounts, func(m corev1.VolumeMount) bool {
 		return m.Name == "store-ssh" && m.MountPath == "/secrets/ssh" && m.ReadOnly
@@ -508,7 +515,7 @@ func TestLocateInvalid(t *testing.T) {
 func TestStoreSecrets(t *testing.T) {
 	cases := map[string]map[string][]string{
 		"s3":   {"s3-creds": {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"}, "restic-pw": {"password"}},
-		"sftp": {"ssh": {"id_ed25519", "known_hosts"}, "restic-pw": {"restic"}},
+		"sftp": {"ssh": {"id_ed25519|ssh-privatekey", "known_hosts"}, "restic-pw": {"restic"}},
 		"nfs":  {"restic-pw": {"password"}},
 		"pvc":  {"restic-pw": {"password"}},
 	}

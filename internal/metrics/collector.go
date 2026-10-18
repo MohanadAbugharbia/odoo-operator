@@ -89,7 +89,34 @@ var (
 		[]string{labelNamespace, labelName}, nil)
 	descStoreReady = prometheus.NewDesc("odoo_operator_backup_store_ready",
 		"1 when the OdooBackupStore's last probe could write, read and delete a file.",
-		[]string{labelNamespace, "store"}, nil)
+		[]string{labelNamespace, labelStore}, nil)
+	descBackupEnabled = prometheus.NewDesc("odoo_operator_backup_enabled",
+		"1 when the OdooDeployment takes scheduled backups (spec.backup.schedule is set).",
+		[]string{labelNamespace, labelName}, nil)
+	descBackupCopyFailed = prometheus.NewDesc("odoo_operator_backup_last_copy_failed",
+		"Per copy store, 1 when the instance's most recently finished backup could not be copied there.",
+		[]string{labelNamespace, labelName, labelStore}, nil)
+	descRestoreLastFailed = prometheus.NewDesc("odoo_operator_restore_last_failed",
+		"1 when the instance's most recently finished OdooRestore failed.",
+		[]string{labelNamespace, labelName}, nil)
+	descDrillEnabled = prometheus.NewDesc("odoo_operator_restore_drill_enabled",
+		"1 when the OdooDeployment runs restore drills (spec.backup.drill.schedule is set).",
+		[]string{labelNamespace, labelName}, nil)
+	descDrillLastSuccess = prometheus.NewDesc("odoo_operator_restore_drill_last_success_timestamp_seconds",
+		"When a restore drill of the instance last passed, as a Unix timestamp. Absent until one passes.",
+		[]string{labelNamespace, labelName}, nil)
+	descDrillLastFailed = prometheus.NewDesc("odoo_operator_restore_drill_last_failed",
+		"1 when the instance's latest restore drill failed.",
+		[]string{labelNamespace, labelName}, nil)
+	descStoreTaskLast = prometheus.NewDesc("odoo_operator_backup_store_task_last_timestamp_seconds",
+		"When the store's latest check or prune (task) finished, as a Unix timestamp.",
+		[]string{labelNamespace, labelStore, "task"}, nil)
+	descStoreTaskFailed = prometheus.NewDesc("odoo_operator_backup_store_task_last_failed",
+		"1 when the store's latest check or prune (task) failed.",
+		[]string{labelNamespace, labelStore, "task"}, nil)
+	descStoreBytes = prometheus.NewDesc("odoo_operator_backup_store_stored_bytes",
+		"What the instance repositories in the store hold together, as of its latest check or prune.",
+		[]string{labelNamespace, labelStore}, nil)
 )
 
 // Collector reports every OdooDeployment's status at scrape time. Reading
@@ -111,6 +138,8 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 		descInfo, descPhase, descCondition, descConditionTransition, descReplicasDesired,
 		descImagePending, descJobStart, descLastUpgrade, descDatabaseReady,
 		descBackupLastSuccess, descBackupLastSize, descBackupMissingFiles, descBackupLastFailed, descStoreReady,
+		descBackupEnabled, descBackupCopyFailed, descRestoreLastFailed, descDrillEnabled, descDrillLastSuccess,
+		descDrillLastFailed, descStoreTaskLast, descStoreTaskFailed, descStoreBytes,
 	} {
 		ch <- d
 	}
@@ -149,9 +178,53 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	if err := c.Reader.List(ctx, stores); err != nil {
 		logf.Log.WithName("metrics").Error(err, "could not list OdooBackupStores for /metrics")
 	} else {
-		for _, st := range stores.Items {
-			ch <- prometheus.MustNewConstMetric(descStoreReady, prometheus.GaugeValue, boolValue(st.Status.Ready), st.Namespace, st.Name)
+		for i := range stores.Items {
+			collectStore(ch, &stores.Items[i])
 		}
+	}
+	restores := &odoov1.OdooRestoreList{}
+	if err := c.Reader.List(ctx, restores); err != nil {
+		logf.Log.WithName("metrics").Error(err, "could not list OdooRestores for /metrics")
+	} else {
+		collectRestores(ch, restores.Items)
+	}
+}
+
+func collectStore(ch chan<- prometheus.Metric, st *odoov1.OdooBackupStore) {
+	gauge := func(desc *prometheus.Desc, value float64, labels ...string) {
+		ch <- prometheus.MustNewConstMetric(desc, prometheus.GaugeValue, value, append([]string{st.Namespace, st.Name}, labels...)...)
+	}
+	gauge(descStoreReady, boolValue(st.Status.Ready))
+	for task, outcome := range map[string]*odoov1.StoreTaskStatus{"check": st.Status.LastCheck, "prune": st.Status.LastPrune} {
+		if outcome == nil || outcome.Time == nil {
+			continue
+		}
+		gauge(descStoreTaskLast, unixSeconds(*outcome.Time), task)
+		gauge(descStoreTaskFailed, boolValue(outcome.Result == odoov1.StoreTaskFailed), task)
+	}
+	if st.Status.LastCheck != nil || st.Status.LastPrune != nil {
+		gauge(descStoreBytes, float64(st.Status.StoredBytes))
+	}
+}
+
+// collectRestores reports, per instance, whether its most recently finished
+// restore failed.
+func collectRestores(ch chan<- prometheus.Metric, restores []odoov1.OdooRestore) {
+	type instance struct{ namespace, name string }
+	last := map[instance]*odoov1.OdooRestore{}
+	for i := range restores {
+		rs := &restores[i]
+		if rs.Status.CompletedAt == nil {
+			continue
+		}
+		key := instance{rs.Namespace, rs.Spec.OdooDeployment}
+		if cur := last[key]; cur == nil || rs.Status.CompletedAt.After(cur.Status.CompletedAt.Time) {
+			last[key] = rs
+		}
+	}
+	for key, rs := range last {
+		ch <- prometheus.MustNewConstMetric(descRestoreLastFailed, prometheus.GaugeValue,
+			boolValue(rs.Status.Phase == odoov1.RestorePhaseFailed), key.namespace, key.name)
 	}
 }
 
@@ -171,7 +244,7 @@ func collectBackups(ch chan<- prometheus.Metric, backups []odoov1.OdooBackup) {
 			lastDone[key] = b
 		}
 		switch b.Status.Phase {
-		case odoov1.BackupPhaseCompleted, odoov1.BackupPhaseCompletedWithWarnings:
+		case odoov1.BackupPhaseCompleted, odoov1.BackupPhaseCompletedWithWarnings, odoov1.BackupPhasePartiallyCompleted:
 			if cur := lastOK[key]; cur == nil || b.Status.CompletedAt.After(cur.Status.CompletedAt.Time) {
 				lastOK[key] = b
 			}
@@ -190,6 +263,10 @@ func collectBackups(ch chan<- prometheus.Metric, backups []odoov1.OdooBackup) {
 	for key, b := range lastDone {
 		ch <- prometheus.MustNewConstMetric(descBackupLastFailed, prometheus.GaugeValue,
 			boolValue(b.Status.Phase == odoov1.BackupPhaseFailed), key.namespace, key.name)
+		for _, c := range b.Status.Copies {
+			ch <- prometheus.MustNewConstMetric(descBackupCopyFailed, prometheus.GaugeValue,
+				boolValue(c.Error != ""), key.namespace, key.name, c.Store)
+		}
 	}
 }
 
@@ -223,6 +300,14 @@ func collectOne(ch chan<- prometheus.Metric, od *odoov1.OdooDeployment) {
 		gauge(descLastUpgrade, st.LastMaintenanceDuration.Seconds())
 	}
 	gauge(descDatabaseReady, boolValue(meta.IsStatusConditionTrue(st.Conditions, odoov1.ConditionDatabaseReady)), st.Database.ProvisionedBy)
+	gauge(descBackupEnabled, boolValue(strings.TrimSpace(od.Spec.Backup.Schedule) != ""))
+	gauge(descDrillEnabled, boolValue(strings.TrimSpace(od.Spec.Backup.Drill.Schedule) != ""))
+	if d := st.Backup.LastDrill; d != nil {
+		gauge(descDrillLastFailed, boolValue(!d.Succeeded))
+	}
+	if t := st.Backup.LastSuccessfulDrillTime; t != nil {
+		gauge(descDrillLastSuccess, unixSeconds(*t))
+	}
 }
 
 func boolValue(b bool) float64 {

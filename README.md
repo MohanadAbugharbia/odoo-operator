@@ -197,9 +197,24 @@ backup can be read). The kinds:
 | Kind | Fields | Secret |
 |---|---|---|
 | `s3` | `endpoint` (empty for AWS), `region`, `bucket`, `path`, `forcePathStyle` | `credentialsSecret`: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` |
-| `sftp` | `host`, `port` (22), `user`, `path` | `sshSecret`: `id_ed25519` (private key) and `known_hosts` (the server's host key; nothing else is trusted) |
+| `sftp` | `host`, `port` (22), `user`, `path` | `sshSecret`: the private key under `id_ed25519` or `ssh-privatekey`, and `known_hosts` (the server's host key; nothing else is trusted) |
 | `nfs` | `server`, `path` | |
 | `pvc` | `claimName`, `subPath` | |
+
+The SFTP private key can be any unencrypted Ed25519, ECDSA or RSA key, in
+OpenSSH or PEM format; a key with a passphrase does not work. The key name
+only says where the key is, not its type: `id_ed25519` is read first, and
+`ssh-privatekey` is the key of Secrets of type `kubernetes.io/ssh-auth`.
+`known_hosts` takes the server's host key of any type:
+
+```sh
+ssh-keyscan -p 22 backup.example.com > known_hosts
+kubectl -n shop create secret generic my-odoo-sftp \
+  --from-file=id_ed25519=$HOME/.ssh/backup_key --from-file=known_hosts
+```
+
+Check the scanned key against the one the server's provider shows before you
+trust it.
 
 The operator probes each store with a short Job that writes, reads and deletes
 a file (`.odoo-operator-probe-<random>`), on every change to the store or its
@@ -272,6 +287,86 @@ spec:
 Only the latest restore can be undone. Deleting an OdooRestore deletes the data
 it kept.
 
+**Schedules and retention.** Backups can run on a schedule, and old ones are
+deleted after each backup:
+
+```yaml
+spec:
+  backup:
+    stores: [offsite, cold]           # the first is written; the others get copies
+    schedule: "0 3 * * *"             # cron or @daily; empty (default) = no scheduled backups
+    timeZone: Europe/Berlin           # of the schedules and the retention periods (default UTC)
+    retention:                        # defaults: daily 7, weekly 4, monthly 12
+      daily: 7
+      weekly: 4
+      monthly: 12
+      within: 2d                      # also keep everything from the last 2 days (y, m, d, h)
+      manual: 10                      # newest manual and pre-upgrade backups kept; 0 (default) keeps all
+    drill:
+      schedule: "0 5 * * 0"           # restore drill, see below
+```
+
+A scheduled backup is an ordinary OdooBackup named `<instance>-<yyyymmdd-hhmm>`
+(the time in `timeZone`) that waits in the instance's queue like any other. A
+time missed while the operator was down is taken once when it is back; a time
+that comes while the previous scheduled backup is still unfinished is skipped
+with an event. `status.backup` shows the last and next scheduled times, and the
+`BackupSchedule` condition reports a schedule that cannot be read.
+
+Retention runs in the backup Job, after the new backup is verified. The keep
+rules are restic's (`last`, `hourly`, `daily`, `weekly`, `monthly`, `yearly`,
+`within`, with restic's meaning), but the periods are counted in `timeZone`,
+and they apply to scheduled backups; manual and pre-upgrade backups each keep
+their newest `manual`. Never deleted: the newest backup, a backup with
+`spec.keep: true` (it does not use up a slot of the rules either), a snapshot
+an unfinished restore needs, and snapshots the operator did not take. The
+OdooBackups of deleted snapshots are deleted too; a retention that fails leaves
+the backup `Completed` with a warning. `retention.keepAll: true` turns it off.
+Deleting the snapshot frees no space by itself: the store's prune does (below).
+
+**Copies.** Each backup is copied (`restic copy`) to every store after the
+first in `spec.backup.stores`, in the same Job, and retention runs in each
+copy too. A store that is missing or not ready, or a copy that fails, leaves
+the backup `PartiallyCompleted` with `status.copies` saying why; the backup in
+the first store is still good. A restore (or drill) whose backup's store is
+not ready restores a copy from a ready store instead, with an event saying so.
+Stores may use different kinds and different encryption keys.
+
+**Checking and pruning a store.** On their own schedules a store's repositories
+are checked (`restic check`) and pruned (`restic prune`, which frees the space
+of deleted backups):
+
+```yaml
+spec:                                 # OdooBackupStore
+  check:
+    schedule: "0 4 * * 0"
+    readDataParts: 7                  # each check reads 1/7 of the data, all of it over 7 checks;
+                                      # 1 = everything every time, 0 = structure only
+  prune:
+    schedule: "0 2 * * 6"
+  timeZone: Europe/Berlin
+```
+
+One Job runs at a time per store, prune first when both are due, over the
+repositories of every instance in the namespace that lists the store. The
+outcome is in `status.lastCheck` and `status.lastPrune` (with the part read,
+the repositories and what they hold); a failed task keeps its Job for its log
+and warns. A backup that starts while a prune holds a repository's lock waits
+up to half an hour for it.
+
+**Restore drills.** A drill proves the newest backup can be restored, without
+touching the instance: on `spec.backup.drill.schedule` it waits in the
+instance's queue, then one Job restores the newest finished backup into a
+scratch database `<db>_drill_<suffix>` and a scratch filestore on an
+`emptyDir` (never the data volume), runs the same checks as a restore, has the
+backup's own Odoo image read it (`odoo shell -d <db>_drill_<suffix>`, run
+through `sh`: Odoo loads its registry, reads records of core models and reads
+attachments from the scratch filestore), and drops the scratch database. Odoo
+keeps serving throughout. The outcome is in `status.backup.lastDrill`
+(`lastSuccessfulDrillTime` keeps the last pass); a failed drill keeps its Job
+(`kubectl logs job/<name> --all-containers`). The scratch filestore needs node
+disk the size of the filestore; `drill.scratchSizeLimit` caps it.
+
 **The backup image.** The Jobs run `ghcr.io/mohanadabugharbia/odoo-operator-backup`
 at the operator's own tag (derived from the operator's image; `--backup-image`
 overrides it). It carries the PostgreSQL 14–18 clients, restic, rclone and the
@@ -305,7 +400,16 @@ next scrape. Every series has `namespace` and `name` labels.
 | `odoo_operator_backup_last_size_bytes` | `part` (`database`/`filestore`/`added`) | sizes of the newest successful backup |
 | `odoo_operator_backup_missing_files` | | attachments the newest successful backup could not include |
 | `odoo_operator_backup_last_failed` | | 1 when the most recently finished backup failed |
+| `odoo_operator_backup_enabled` | | 1 when `spec.backup.schedule` is set |
+| `odoo_operator_backup_last_copy_failed` | `store` | 1 when the most recently finished backup could not be copied to that store |
+| `odoo_operator_restore_last_failed` | | 1 when the most recently finished OdooRestore failed |
+| `odoo_operator_restore_drill_enabled` | | 1 when `spec.backup.drill.schedule` is set |
+| `odoo_operator_restore_drill_last_success_timestamp_seconds` | | when a drill last passed |
+| `odoo_operator_restore_drill_last_failed` | | 1 when the latest drill failed |
 | `odoo_operator_backup_store_ready` | `store` (no `name`) | 1 when the store's last probe succeeded |
+| `odoo_operator_backup_store_task_last_timestamp_seconds` | `store`, `task` (`check`/`prune`) (no `name`) | when the store's latest check or prune finished |
+| `odoo_operator_backup_store_task_last_failed` | `store`, `task` (no `name`) | 1 when it failed |
+| `odoo_operator_backup_store_stored_bytes` | `store` (no `name`) | what the store's repositories hold, as of its latest check or prune |
 
 **Events, counted by the reconciler.** Each event is counted once, on the
 reconcile that causes it: a Job that stays failed, an image that keeps failing
@@ -324,6 +428,11 @@ OdooDeployment is gone.
 | `odoo_operator_backup_duration_seconds` (histogram) | `kind` | start to completion of successful backups |
 | `odoo_operator_restores_total` | `mode` (`restore`/`undo`), `result` (`succeeded`/`failed`) | finished restores |
 | `odoo_operator_build_info` | `version` | 1 |
+
+`config/prometheus/backup-alerts.yaml` holds example alerts on these metrics
+(stale or failed backups, failed copies, restores and drills, stores that are
+not ready or fail their check or prune). Adjust the staleness thresholds to
+your schedules.
 
 ## Upgrading to 0.3.0
 

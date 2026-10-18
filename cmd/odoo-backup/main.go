@@ -36,6 +36,7 @@ import (
 	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/pg"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/restic"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/result"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/schedule"
 )
 
 // version is set with -ldflags "-X main.version=...".
@@ -50,6 +51,10 @@ commands:
   cleanup   delete the data a restore replaced
   prepare   create the instance's filestore folder if it is missing
   probe     check that a store can be written, read and deleted from
+  drill-load    restore a snapshot into scratch space and check it (drill, step 1)
+  drill-finish  drop the drill's scratch database and report the drill (step 3)
+  check     check the store's repositories (restic check)
+  prune     free the space of forgotten snapshots (restic prune)
   version   print the version
 `
 
@@ -137,6 +142,9 @@ func run(ctx context.Context, command string, args []string) int {
 	if err := agent.LimitHostKeyAlgorithms(); err != nil {
 		fmt.Fprintln(os.Stderr, "read the SFTP known_hosts:", err)
 	}
+	if err := agent.UseSSHAuthPrivateKey(); err != nil {
+		fmt.Fprintln(os.Stderr, "find the SFTP private key:", err)
+	}
 	switch command {
 	case "version":
 		fmt.Println(version)
@@ -147,6 +155,8 @@ func run(ctx context.Context, command string, args []string) int {
 		return runRestore(ctx, fs, &c, command, args)
 	case "cleanup":
 		return runCleanup(ctx, fs, &c, args)
+	case "drill-load", "drill-finish":
+		return runDrill(ctx, fs, &c, command, args)
 	case "prepare":
 		dataRoot := fs.String("data", layout.DataMount, "root of the instance's data volume")
 		database := fs.String("database", "", "database name (the filestore folder)")
@@ -162,6 +172,8 @@ func run(ctx context.Context, command string, args []string) int {
 			return 1
 		}
 		return 0
+	case agent.TaskCheck, agent.TaskPrune:
+		return runStoreTask(ctx, fs, command, args)
 	case "probe":
 		target := fs.String("target", "", "the store root, as rclone names it")
 		terminationLog := fs.String("termination-log", layout.TerminationLog, "where the result is written")
@@ -188,8 +200,40 @@ func runBackup(ctx context.Context, fs *flag.FlagSet, c *common, args []string) 
 	fs.StringVar(&o.Consistency, "consistency", "Online", "Online or Offline")
 	fs.BoolVar(&o.WaitForCleanup, "wait-for-cleanup", false, "defer while Odoo's filestore cleanup runs or is due")
 	fs.DurationVar(&o.CleanupWindow, "cleanup-window", 10*time.Minute, "how soon a due cleanup defers the backup")
+	var ret agent.Retention
+	var withRetention bool
+	var timeZone string
+	var protectBackups, protectSnapshots, copies stringList
+	fs.Var(&copies, "copy", "store to copy the backup to (repeatable); the n-th is reached through "+
+		"COPY<n>_RESTIC_REPOSITORY and COPY<n>_RESTIC_PASSWORD_FILE")
+	fs.BoolVar(&withRetention, "retention", false, "forget the snapshots the keep rules no longer keep after the backup")
+	fs.IntVar(&ret.Policy.Last, "keep-last", 0, "keep the newest N scheduled backups")
+	fs.IntVar(&ret.Policy.Hourly, "keep-hourly", 0, "keep the newest scheduled backup of each of the last N hours")
+	fs.IntVar(&ret.Policy.Daily, "keep-daily", 0, "keep the newest scheduled backup of each of the last N days")
+	fs.IntVar(&ret.Policy.Weekly, "keep-weekly", 0, "keep the newest scheduled backup of each of the last N weeks")
+	fs.IntVar(&ret.Policy.Monthly, "keep-monthly", 0, "keep the newest scheduled backup of each of the last N months")
+	fs.IntVar(&ret.Policy.Yearly, "keep-yearly", 0, "keep the newest scheduled backup of each of the last N years")
+	fs.StringVar(&ret.Policy.Within, "keep-within", "", "keep scheduled backups this close to the newest (1y6m, 30d)")
+	fs.IntVar(&ret.Policy.Manual, "keep-manual", 0, "keep the newest N manual (and N pre-upgrade) backups; 0 keeps all")
+	fs.StringVar(&timeZone, "time-zone", "UTC", "IANA time zone the periods are counted in")
+	fs.Var(&protectBackups, "protect-backup", "OdooBackup never forgotten (repeatable)")
+	fs.Var(&protectSnapshots, "protect-snapshot", "snapshot ID never forgotten (repeatable)")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if withRetention {
+		loc, err := schedule.Location(timeZone)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "backup: --time-zone:", err)
+			return 2
+		}
+		ret.Policy.Location = loc
+		if err := ret.Policy.Validate(); err != nil {
+			fmt.Fprintln(os.Stderr, "backup:", err)
+			return 2
+		}
+		ret.ProtectBackups, ret.ProtectSnapshots = protectBackups, protectSnapshots
+		o.Retention = &ret
 	}
 	if o.Namespace == "" || o.Deployment == "" || o.Backup == "" {
 		fmt.Fprintln(os.Stderr, "backup: --namespace, --deployment and --backup are required")
@@ -199,6 +243,10 @@ func runBackup(ctx context.Context, fs *flag.FlagSet, c *common, args []string) 
 	e, err := c.env()
 	if err != nil {
 		return finish(c.terminationLog, result.Failed(result.StepConnect, err))
+	}
+	if o.Copies, err = agent.CopyTargetsFromEnv(e.Restic, copies); err != nil {
+		fmt.Fprintln(os.Stderr, "backup:", err)
+		return 2
 	}
 	return finish(c.terminationLog, agent.Backup(ctx, e, o))
 }
@@ -229,6 +277,64 @@ func runRestore(ctx context.Context, fs *flag.FlagSet, c *common, command string
 		return finish(c.terminationLog, result.Failed(result.StepConnect, err))
 	}
 	return finish(c.terminationLog, agent.Restore(ctx, e, o))
+}
+
+func runDrill(ctx context.Context, fs *flag.FlagSet, c *common, command string, args []string) int {
+	c.register(fs)
+	var o agent.DrillOptions
+	var modules string
+	fs.StringVar(&o.Suffix, "suffix", "", "this drill's suffix")
+	fs.StringVar(&o.Snapshot, "snapshot", "", "snapshot to restore (drill-load)")
+	fs.StringVar(&o.Root, "root", layout.DrillRoot, "scratch folder shared by the drill's steps")
+	fs.StringVar(&modules, "expect-modules", "", "comma-separated modules the instance should have")
+	fs.IntVar(&o.CheckSample, "check-sample", 200, "restored files whose content is checked")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	for _, m := range strings.Split(modules, ",") {
+		if m = strings.TrimSpace(m); m != "" {
+			o.ExpectModules = append(o.ExpectModules, m)
+		}
+	}
+	e, err := c.env()
+	if command == "drill-finish" {
+		if err != nil {
+			return finish(c.terminationLog, result.Failed(result.StepConnect, err))
+		}
+		return finish(c.terminationLog, agent.DrillFinish(ctx, e, o))
+	}
+	if err == nil {
+		err = agent.DrillLoad(ctx, e, o)
+	}
+	if err != nil {
+		// Without a report the last step says the load did not finish.
+		fmt.Fprintln(os.Stderr, "drill-load:", err)
+	}
+	return 0
+}
+
+func runStoreTask(ctx context.Context, fs *flag.FlagSet, task string, args []string) int {
+	var repos, options stringList
+	readData := fs.String("read-data", "", "check: part of the data to read back (3/7, or all)")
+	resticBin := fs.String("restic", "restic", "restic executable")
+	retryLock := fs.Duration("retry-lock", 2*time.Hour, "how long restic waits for a repository lock")
+	terminationLog := fs.String("termination-log", layout.TerminationLog, "where the result is written")
+	fs.Var(&repos, "repository", "<namespace>/<deployment>=<restic repository> (repeatable)")
+	fs.Var(&options, "restic-option", "restic -o option (repeatable)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	o := agent.StoreTaskOptions{Task: task, ReadData: *readData}
+	for _, r := range repos {
+		name, url, ok := strings.Cut(r, "=")
+		if !ok || name == "" || url == "" {
+			fmt.Fprintf(os.Stderr, "%s: --repository %q is not <name>=<repository>\n", task, r)
+			return 2
+		}
+		o.Repositories = append(o.Repositories, agent.Repository{Name: name, URL: url})
+	}
+	base := &restic.Restic{Bin: *resticBin, Options: options, RetryLock: *retryLock, Log: os.Stderr}
+	return finish(*terminationLog, agent.StoreTask(ctx, base, agent.NewLogger(os.Stderr), o))
 }
 
 func runCleanup(ctx context.Context, fs *flag.FlagSet, c *common, args []string) int {

@@ -60,6 +60,11 @@ type BackupOptions struct {
 	// filestore cleanup runs or is due within CleanupWindow.
 	WaitForCleanup bool
 	CleanupWindow  time.Duration
+
+	// Retention, when set, thins the repository after the backup.
+	Retention *Retention
+	// Copies are the other stores the new snapshot is copied to.
+	Copies []CopyTarget
 }
 
 // maxListed is how many file names a Result lists.
@@ -241,6 +246,20 @@ func Backup(ctx context.Context, e *Env, o BackupOptions) result.Result {
 	}
 	if len(up.Unreadable) > 0 {
 		res.Warnings = append(res.Warnings, fmt.Sprintf("restic could not read %d file(s), e.g. %s", len(up.Unreadable), up.Unreadable[0]))
+	}
+
+	// Retention runs only once the new snapshot is known to be good, and a
+	// failure leaves the backup taken.
+	if o.Retention != nil {
+		forgotten, err := applyRetention(ctx, e, e.Restic, host, up.Summary.SnapshotID, o.Retention)
+		if err != nil {
+			e.logf("retention failed: %v", err)
+			res.RetentionError = tail(err.Error())
+		}
+		res.Forgotten = forgotten
+	}
+	if len(o.Copies) > 0 {
+		res.Copies = copyAll(ctx, e, o.Copies, host, o.Backup, up.Summary.SnapshotID, o.Retention)
 	}
 	return res
 }

@@ -77,6 +77,26 @@ spec:
                     - Online
                     - Offline
                     type: string
+                  drill:
+                    description: Drill restores the newest backup on a schedule to
+                      prove it works.
+                    properties:
+                      schedule:
+                        description: Schedule in cron format, in spec.backup.timeZone;
+                          empty turns drills off.
+                        maxLength: 100
+                        type: string
+                      scratchSizeLimit:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: |-
+                          ScratchSizeLimit caps the node disk the drill's scratch filestore
+                          (an emptyDir) may use; unset leaves it uncapped. A drill that needs
+                          more is evicted and reported failed.
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                    type: object
                   resources:
                     description: Resources of the backup and restore Jobs.
                     properties:
@@ -147,18 +167,102 @@ spec:
                           are kept, so the restore can be undone.
                         type: string
                     type: object
+                  retention:
+                    default: {}
+                    description: Retention says which backups are kept after each
+                      backup.
+                    properties:
+                      daily:
+                        default: 7
+                        description: Daily keeps the newest backup of each of the
+                          last N days that have one.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      hourly:
+                        description: Hourly keeps the newest backup of each of the
+                          last N hours that have one.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      keepAll:
+                        description: 'KeepAll turns retention off: no backup is ever
+                          deleted.'
+                        type: boolean
+                      last:
+                        description: Last keeps the newest N backups.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      manual:
+                        description: Manual keeps the newest N manual backups; 0 keeps
+                          them all.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      monthly:
+                        default: 12
+                        description: Monthly keeps the newest backup of each of the
+                          last N months that have one.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      weekly:
+                        default: 4
+                        description: Weekly keeps the newest backup of each of the
+                          last N weeks that have one.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      within:
+                        description: |-
+                          Within keeps every backup newer than this, counted from the newest
+                          backup, such as 30d, 12h or 1y6m (restic's duration format).
+                        pattern: ^([0-9]+[ymdh])*$
+                        type: string
+                      yearly:
+                        description: Yearly keeps the newest backup of each of the
+                          last N years that have one.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                    type: object
+                  schedule:
+                    description: |-
+                      Schedule takes a backup on a cron schedule ("0 3 * * *" or @daily), in
+                      TimeZone. Empty (the default) takes no scheduled backups. A schedule
+                      missed while the operator was down runs once when it is back.
+                    maxLength: 100
+                    type: string
                   stores:
                     description: |-
                       Stores are OdooBackupStores in this namespace. Backups are written to
                       the first; the instance's repository is <path>/<namespace>/<name>/
-                      inside it.
+                      inside it. Each backup is then copied to the other stores.
                     items:
                       minLength: 1
                       type: string
-                    maxItems: 1
+                    maxItems: 4
                     type: array
                     x-kubernetes-list-type: atomic
+                    x-kubernetes-validations:
+                    - message: spec.backup.stores must not repeat a store
+                      rule: self.all(x, self.exists_one(y, y == x))
+                  timeZone:
+                    default: UTC
+                    description: |-
+                      TimeZone of Schedule, the drill schedule and the retention rules, as an
+                      IANA name such as Europe/Berlin.
+                    maxLength: 100
+                    type: string
                 type: object
+                x-kubernetes-validations:
+                - message: spec.backup.schedule needs spec.backup.stores
+                  rule: '!has(self.schedule) || size(self.schedule) == 0 || (has(self.stores)
+                    && size(self.stores) > 0)'
+                - message: spec.backup.drill.schedule needs spec.backup.stores
+                  rule: '!has(self.drill) || !has(self.drill.schedule) || size(self.drill.schedule)
+                    == 0 || (has(self.stores) && size(self.stores) > 0)'
               config:
                 default: {}
                 description: The configuration for the Odoo
@@ -1698,6 +1802,83 @@ spec:
                 description: AppliedUpgradeToken is the spec.upgrade.token the last
                   upgrade ran with.
                 type: string
+              backup:
+                description: Backup reports the backup schedule and the last restore
+                  drill.
+                properties:
+                  drillDue:
+                    description: |-
+                      DrillDue is the scheduled time of a drill waiting in the instance's
+                      queue.
+                    format: date-time
+                    type: string
+                  drillSchedule:
+                    description: DrillSchedule the drill times above were computed
+                      for.
+                    type: string
+                  lastDrill:
+                    description: LastDrill is the result of the latest restore drill.
+                    properties:
+                      backup:
+                        description: Backup is the OdooBackup the drill restored.
+                        type: string
+                      completedAt:
+                        format: date-time
+                        type: string
+                      job:
+                        description: Job ran the drill; a failed drill's Job is kept
+                          for its log.
+                        type: string
+                      message:
+                        description: Message explains a failure, or sums up a success.
+                        type: string
+                      snapshotID:
+                        description: SnapshotID is the snapshot the drill restored.
+                        type: string
+                      startedAt:
+                        description: StartedAt and CompletedAt bound the drill.
+                        format: date-time
+                        type: string
+                      succeeded:
+                        description: |-
+                          Succeeded is true when the backup restored, passed every check and
+                          Odoo read it.
+                        type: boolean
+                    required:
+                    - succeeded
+                    type: object
+                  lastDrillScheduleTime:
+                    description: LastDrillScheduleTime is the latest drill time the
+                      operator has handled.
+                    format: date-time
+                    type: string
+                  lastScheduleTime:
+                    description: |-
+                      LastScheduleTime is the latest scheduled time the operator has handled,
+                      whether it took a backup then or skipped it.
+                    format: date-time
+                    type: string
+                  lastSuccessfulDrillTime:
+                    description: LastSuccessfulDrillTime is when a restore drill last
+                      passed.
+                    format: date-time
+                    type: string
+                  nextDrillTime:
+                    description: NextDrillTime is when the next drill is due.
+                    format: date-time
+                    type: string
+                  nextScheduleTime:
+                    description: NextScheduleTime is when the next scheduled backup
+                      is due.
+                    format: date-time
+                    type: string
+                  schedule:
+                    description: Schedule and TimeZone the times above were computed
+                      for.
+                    type: string
+                  timeZone:
+                    type: string
+                type: object
               conditions:
                 items:
                   description: Condition contains details for one aspect of the current
@@ -1801,11 +1982,12 @@ spec:
                       stopping Odoo for it.
                     type: string
                   kind:
-                    description: 'Kind: backup, restore or cleanup.'
+                    description: 'Kind: backup, restore, cleanup or drill.'
                     enum:
                     - backup
                     - restore
                     - cleanup
+                    - drill
                     type: string
                   name:
                     description: Name of the OdooBackup or OdooRestore.

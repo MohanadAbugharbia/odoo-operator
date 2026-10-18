@@ -19,9 +19,7 @@ func realRestic(t *testing.T) (*Restic, string) {
 	t.Helper()
 	bin := os.Getenv("TEST_RESTIC_BIN")
 	if bin == "" {
-		if _, err := os.Stat("/tmp/claude-0/bin/restic"); err == nil {
-			bin = "/tmp/claude-0/bin/restic"
-		} else if p, err := exec.LookPath("restic"); err == nil {
+		if p, err := exec.LookPath("restic"); err == nil {
 			bin = p
 		}
 	}

@@ -24,6 +24,10 @@ import (
 // scheduled or pre-upgrade.
 const LabelBackupKind = "odoo.abugharbia.com/backup-kind"
 
+// AnnotationScheduledTime is the scheduled time, RFC 3339, an OdooBackup
+// with kind scheduled was created for.
+const AnnotationScheduledTime = "odoo.abugharbia.com/scheduled-time"
+
 // Backup kinds, in the LabelBackupKind label and the restic "kind=" tag.
 const (
 	BackupKindManual     = "manual"
@@ -38,6 +42,7 @@ const (
 	BackupPhaseRunning                    = "Running"
 	BackupPhaseCompleted                  = "Completed"
 	BackupPhaseCompletedWithWarnings      = "CompletedWithWarnings"
+	BackupPhasePartiallyCompleted         = "PartiallyCompleted"
 	BackupPhaseFailed                     = "Failed"
 )
 
@@ -57,8 +62,9 @@ type OdooBackupSpec struct {
 // OdooBackupStatus describes one backup.
 type OdooBackupStatus struct {
 	// Phase: Pending, WaitingForFilestoreCleanup, Running, Completed,
-	// CompletedWithWarnings or Failed.
-	// +kubebuilder:validation:Enum=Pending;WaitingForFilestoreCleanup;Running;Completed;CompletedWithWarnings;Failed
+	// CompletedWithWarnings, PartiallyCompleted (taken, but a copy to another
+	// store failed) or Failed.
+	// +kubebuilder:validation:Enum=Pending;WaitingForFilestoreCleanup;Running;Completed;CompletedWithWarnings;PartiallyCompleted;Failed
 	Phase string `json:"phase,omitempty"`
 	// Message explains the phase in a sentence.
 	Message string `json:"message,omitempty"`
@@ -111,6 +117,26 @@ type OdooBackupStatus struct {
 	// MissingFileNames lists the first missing files.
 	// +listType=atomic
 	MissingFileNames []string `json:"missingFileNames,omitempty"`
+
+	// Copies are the copies of this backup in the instance's other stores.
+	// +listType=atomic
+	Copies []BackupCopy `json:"copies,omitempty"`
+
+	// Warnings name what went wrong around a backup that was still taken,
+	// such as retention that could not run.
+	// +listType=atomic
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// BackupCopy is one copy of a backup in another store.
+type BackupCopy struct {
+	// Store is the OdooBackupStore holding the copy.
+	Store string `json:"store"`
+	// SnapshotID of the copy in that store's repository; empty when the
+	// copy failed.
+	SnapshotID string `json:"snapshotID,omitempty"`
+	// Error says why the copy failed.
+	Error string `json:"error,omitempty"`
 }
 
 // +kubebuilder:object:root=true

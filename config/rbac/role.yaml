@@ -67,9 +67,10 @@ rules:
   - odoo.abugharbia.com
   resources:
   - odoobackups
-  - odoobackupstores
-  - odoorestores
+  - odoodeployments
   verbs:
+  - create
+  - delete
   - get
   - list
   - patch
@@ -89,10 +90,9 @@ rules:
 - apiGroups:
   - odoo.abugharbia.com
   resources:
-  - odoodeployments
+  - odoobackupstores
+  - odoorestores
   verbs:
-  - create
-  - delete
   - get
   - list
   - patch

@@ -47,6 +47,8 @@ const (
 	StepSwap      = "swap"
 	StepCleanup   = "cleanup"
 	StepProbe     = "probe"
+	StepStoreTask = "store-task"
+	StepOdoo      = "odoo"
 )
 
 // Result is the outcome of one Job.
@@ -74,6 +76,23 @@ type Result struct {
 	RepairedFiles   int      `json:"repairedFiles,omitempty"`
 	MissingFiles    int      `json:"missingFiles,omitempty"`
 	MissingNames    []string `json:"missingNames,omitempty"`
+	// Forgotten are the IDs of the snapshots retention forgot in the
+	// instance's repository (at most retention.MaxForget, so the list is
+	// never trimmed).
+	Forgotten []string `json:"forgotten,omitempty"`
+	// RetentionError says why retention did not run; the backup itself
+	// succeeded.
+	RetentionError string `json:"retentionError,omitempty"`
+	// Copies are the copies of the new snapshot in the other stores.
+	Copies []Copy `json:"copies,omitempty"`
+
+	// Store check or prune.
+	// Repositories is how many instance repositories the task went
+	// through; StoredBytes how much they hold together.
+	Repositories int   `json:"repositories,omitempty"`
+	StoredBytes  int64 `json:"storedBytes,omitempty"`
+	// RepositoryErrors are the repositories that failed, as "<repo>: <error>".
+	RepositoryErrors []string `json:"repositoryErrors,omitempty"`
 
 	// Restore.
 	// Image and UpgradeToken are what the backup's instance ran.
@@ -89,6 +108,13 @@ type Result struct {
 	// PreviousKept is true when the replaced database or filestore was kept
 	// under its _prev name.
 	PreviousKept bool `json:"previousKept,omitempty"`
+}
+
+// Copy is the copy of a backup in one other store.
+type Copy struct {
+	Store      string `json:"store"`
+	SnapshotID string `json:"snapshotID,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 // Failed returns a failed Result.
@@ -118,12 +144,26 @@ func Encode(r Result) []byte {
 		switch {
 		case len(r.MissingNames) > 0:
 			r.MissingNames = r.MissingNames[:len(r.MissingNames)/2]
+		case len(r.RepositoryErrors) > 1:
+			r.RepositoryErrors = r.RepositoryErrors[:len(r.RepositoryErrors)/2]
+		case len(r.RepositoryErrors) == 1 && len(r.RepositoryErrors[0]) > 512:
+			r.RepositoryErrors = []string{r.RepositoryErrors[0][:512-len(errorCut)] + errorCut}
 		case len(r.Warnings) > 2 || (len(r.Warnings) == 2 && r.Warnings[1] != moreWarnings):
 			r.Warnings = append(r.Warnings[:len(r.Warnings)/2:len(r.Warnings)/2], moreWarnings)
 		case len(r.MissingModules) > 0:
 			r.MissingModules = r.MissingModules[:len(r.MissingModules)/2]
 		case len(r.Error) > 512:
 			r.Error = r.Error[:512-len(errorCut)] + errorCut
+		case len(r.RetentionError) > 512:
+			r.RetentionError = r.RetentionError[:512-len(errorCut)] + errorCut
+		case copyErrorsOver(r.Copies, 256):
+			cs := append([]Copy(nil), r.Copies...)
+			for i := range cs {
+				if len(cs[i].Error) > 256 {
+					cs[i].Error = cs[i].Error[:256-len(errorCut)] + errorCut
+				}
+			}
+			r.Copies = cs
 		case len(r.Warnings) > 0 && len(r.Warnings[0]) > 512:
 			// A new slice: r shares its backing array with the caller's.
 			r.Warnings = append([]string{r.Warnings[0][:512-len("…")] + "…"}, r.Warnings[1:]...)
@@ -132,7 +172,9 @@ func Encode(r Result) []byte {
 			// here, so this fits even when every byte is JSON-escaped.
 			b, err := json.Marshal(Result{OK: r.OK, Step: truncate(r.Step, 64), Error: truncate(r.Error, 256),
 				Deferred: r.Deferred, SnapshotID: truncate(r.SnapshotID, 128),
-				LiveChanged: r.LiveChanged, PreviousKept: r.PreviousKept})
+				LiveChanged: r.LiveChanged, PreviousKept: r.PreviousKept, Forgotten: r.Forgotten,
+				RetentionError: truncate(r.RetentionError, 256), Copies: shortCopies(r.Copies),
+				Repositories: r.Repositories, StoredBytes: r.StoredBytes})
 			if err != nil || len(b) > MaxBytes {
 				return []byte(`{"ok":false,"error":"could not encode the result"}`)
 			}
@@ -144,6 +186,24 @@ func Encode(r Result) []byte {
 // Write writes r to path (the container's termination message file).
 func Write(path string, r Result) error {
 	return os.WriteFile(path, Encode(r), 0o644)
+}
+
+func copyErrorsOver(cs []Copy, n int) bool {
+	for _, c := range cs {
+		if len(c.Error) > n {
+			return true
+		}
+	}
+	return false
+}
+
+// shortCopies keeps whether each copy worked, with a short error.
+func shortCopies(cs []Copy) []Copy {
+	out := make([]Copy, 0, len(cs))
+	for _, c := range cs {
+		out = append(out, Copy{Store: truncate(c.Store, 64), SnapshotID: truncate(c.SnapshotID, 64), Error: truncate(c.Error, 64)})
+	}
+	return out
 }
 
 func truncate(s string, n int) string {

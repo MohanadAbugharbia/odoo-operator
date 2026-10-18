@@ -170,7 +170,23 @@ func (r *OdooBackupStoreReconciler) setReady(store *odoov1.OdooBackupStore, read
 	utils.SetCondition(&store.Status.Conditions, odoov1.ConditionReady, status, reason, message, store.Generation)
 }
 
+// reconcile probes the store, then runs its check and prune on their
+// schedules while it is reachable (a task already running is followed to
+// its end either way).
 func (r *OdooBackupStoreReconciler) reconcile(ctx context.Context, store *odoov1.OdooBackupStore) (ctrl.Result, error) {
+	result, err := r.reconcileProbe(ctx, store)
+	if err != nil || (!store.Status.Ready && store.Status.TaskJob == "") {
+		return result, err
+	}
+	wait, err := r.reconcileTasks(ctx, store)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	result.RequeueAfter = minPositive(result.RequeueAfter, wait)
+	return result, nil
+}
+
+func (r *OdooBackupStoreReconciler) reconcileProbe(ctx context.Context, store *odoov1.OdooBackupStore) (ctrl.Result, error) {
 	if _, err := jobspec.Locate(store, ""); err != nil {
 		r.setReady(store, false, ReasonStoreInvalid, err.Error())
 		return ctrl.Result{}, nil
@@ -267,9 +283,14 @@ func (r *OdooBackupStoreReconciler) reconcile(ctx context.Context, store *odoov1
 
 // deleteOldProbeJobs deletes the store's probe Jobs other than keep.
 func (r *OdooBackupStoreReconciler) deleteOldProbeJobs(ctx context.Context, store *odoov1.OdooBackupStore, keep string) error {
+	return r.deleteJobsOfKind(ctx, store, jobspec.KindProbe, keep)
+}
+
+// deleteJobsOfKind deletes the store's Jobs of kind other than keep.
+func (r *OdooBackupStoreReconciler) deleteJobsOfKind(ctx context.Context, store *odoov1.OdooBackupStore, kind, keep string) error {
 	jobs := &batchv1.JobList{}
 	if err := r.List(ctx, jobs, client.InNamespace(store.Namespace),
-		client.MatchingLabels{odoov1.LabelJobKind: jobspec.KindProbe, jobspec.LabelStore: store.Name}); err != nil {
+		client.MatchingLabels{odoov1.LabelJobKind: kind, jobspec.LabelStore: store.Name}); err != nil {
 		return err
 	}
 	for i := range jobs.Items {

@@ -271,6 +271,8 @@ type Snapshot struct {
 	Hostname string    `json:"hostname"`
 	Tags     []string  `json:"tags"`
 	Paths    []string  `json:"paths"`
+	// Original is the snapshot this one was copied from, if it is a copy.
+	Original string `json:"original,omitempty"`
 }
 
 // HasTag reports whether the snapshot carries tag.
@@ -317,6 +319,113 @@ func (r *Restic) Snapshot(ctx context.Context, id string) (Snapshot, error) {
 		return Snapshot{}, fmt.Errorf("snapshot %s not found in the repository", id)
 	}
 	return snaps[0], nil
+}
+
+// lookup returns the value of an environment variable as the restic
+// process sees it: r.Env, the later entry winning, over the process's own.
+func (r *Restic) lookup(key string) string {
+	for i := len(r.Env) - 1; i >= 0; i-- {
+		if k, v, ok := strings.Cut(r.Env[i], "="); ok && k == key {
+			return v
+		}
+	}
+	return os.Getenv(key)
+}
+
+// fromEnv points restic's --from-repo at src's repository.
+func (r *Restic) fromEnv(src *Restic) []string {
+	env := append([]string(nil), r.Env...)
+	for _, k := range []string{"REPOSITORY", "PASSWORD_FILE", "PASSWORD"} {
+		if v := src.lookup("RESTIC_" + k); v != "" {
+			env = append(env, "RESTIC_FROM_"+k+"="+v)
+		}
+	}
+	return env
+}
+
+// EnsureCopyOf creates the repository, unless it exists, with src's chunker
+// parameters, so that snapshots copied from src stay deduplicated.
+func (r *Restic) EnsureCopyOf(ctx context.Context, src *Restic) (created bool, err error) {
+	exists, err := r.Exists(ctx)
+	if err != nil || exists {
+		return false, err
+	}
+	with := *r
+	with.Env = r.fromEnv(src)
+	if _, err := with.run(ctx, "init", "--copy-chunker-params"); err != nil {
+		if exists, existsErr := r.Exists(ctx); existsErr == nil && exists {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// CopyFrom copies snapshot id from src into this repository. A snapshot
+// copied before is not copied again.
+func (r *Restic) CopyFrom(ctx context.Context, src *Restic, id string) error {
+	with := *r
+	with.Env = r.fromEnv(src)
+	_, err := with.run(ctx, "copy", id)
+	return err
+}
+
+// Check checks the repository's structure and, with readData ("3/7" for a
+// part, "all" for everything), reads the data back.
+func (r *Restic) Check(ctx context.Context, readData string) error {
+	args := []string{"check"}
+	switch readData {
+	case "":
+	case "all":
+		args = append(args, "--read-data")
+	default:
+		args = append(args, "--read-data-subset="+readData)
+	}
+	_, err := r.run(ctx, args...)
+	return err
+}
+
+// Prune deletes the data no snapshot refers to any more.
+func (r *Restic) Prune(ctx context.Context) error {
+	_, err := r.run(ctx, "prune")
+	return err
+}
+
+// RawDataSize is how many bytes the repository holds, after deduplication
+// and compression.
+func (r *Restic) RawDataSize(ctx context.Context) (int64, error) {
+	out, err := r.run(ctx, "stats", "--mode", "raw-data", jsonFlag)
+	if err != nil {
+		return 0, err
+	}
+	var st struct {
+		TotalSize int64 `json:"total_size"`
+	}
+	if err := json.Unmarshal(out, &st); err != nil {
+		return 0, fmt.Errorf("restic stats: %w", err)
+	}
+	return st.TotalSize, nil
+}
+
+// Forget removes snapshots by ID. Their data stays in the repository until
+// a prune.
+func (r *Restic) Forget(ctx context.Context, ids ...string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := r.run(ctx, append([]string{"forget"}, ids...)...)
+	return err
+}
+
+// TagValue returns the value of the snapshot's tag with prefix (such as
+// "kind="), or "".
+func (s Snapshot) TagValue(prefix string) string {
+	for _, t := range s.Tags {
+		if strings.HasPrefix(t, prefix) {
+			return strings.TrimPrefix(t, prefix)
+		}
+	}
+	return ""
 }
 
 // Node is one entry of restic ls.

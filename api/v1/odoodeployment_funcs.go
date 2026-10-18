@@ -942,6 +942,11 @@ func (o *OdooDeployment) UsesService(serviceName string) bool {
 	return o.GetHttpServiceName() == serviceName || o.GetPollServiceName() == serviceName
 }
 
+// ImagePullPolicyValue is the pull policy of the Odoo containers.
+func (o *OdooDeployment) ImagePullPolicyValue() corev1.PullPolicy {
+	return o.imagePullPolicy()
+}
+
 // PodSecurityContextValue is the security context of the Odoo pods, which
 // the backup and restore Jobs share so the files they write belong to Odoo.
 func (o *OdooDeployment) PodSecurityContextValue() *corev1.PodSecurityContext {
@@ -984,4 +989,30 @@ func (o *OdooBackupConfig) ActiveDeadlineSecondsValue() int64 {
 		return 21600
 	}
 	return *o.ActiveDeadlineSeconds
+}
+
+// RetentionCounts are the keep counts of a retention with its defaults
+// filled in.
+type RetentionCounts struct {
+	Last, Hourly, Daily, Weekly, Monthly, Yearly, Manual int32
+}
+
+// Counts returns the keep counts, the defaults (daily 7, weekly 4,
+// monthly 12) standing in for unset fields.
+func (r *OdooBackupRetention) Counts() RetentionCounts {
+	val := func(p *int32, d int32) int32 {
+		if p == nil {
+			return d
+		}
+		return *p
+	}
+	return RetentionCounts{
+		Last:    val(r.Last, 0),
+		Hourly:  val(r.Hourly, 0),
+		Daily:   val(r.Daily, 7),
+		Weekly:  val(r.Weekly, 4),
+		Monthly: val(r.Monthly, 12),
+		Yearly:  val(r.Yearly, 0),
+		Manual:  val(r.Manual, 0),
+	}
 }

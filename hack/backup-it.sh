@@ -19,6 +19,7 @@ cd "$(dirname "$0")/.."
 mkdir -p bin
 CGO_ENABLED=0 go build -o bin/odoo-backup ./cmd/odoo-backup
 CGO_ENABLED=0 go test -c -cover -coverpkg=./internal/backup/... -o "$WORK/agent.test" ./internal/backup/agent/
+CGO_ENABLED=0 go test -c -o "$WORK/retention.test" ./internal/backup/retention/
 if [ -z "${SKIP_IMAGE_BUILD:-}" ]; then
 	docker build -q -t "$IMAGE" --build-arg TARGETPLATFORM=bin -f Dockerfile.backup . >/dev/null
 fi
@@ -32,9 +33,14 @@ mkdir -p "$WORK/ssh"
 # The key is made, and made readable for the unprivileged test user, inside
 # the container: its files belong to root, which a CI runner is not.
 docker run --rm -v "$WORK/ssh:/k" --entrypoint sh atmoz/sftp:alpine -c \
-	'ssh-keygen -q -t ed25519 -N "" -f /k/id_ed25519 && chmod 0644 /k/id_ed25519'
+	'ssh-keygen -q -t ed25519 -N "" -f /k/id_ed25519 &&
+	 ssh-keygen -q -t rsa -b 3072 -m PEM -N "" -f /k/id_rsa &&
+	 ssh-keygen -q -t ecdsa -b 256 -N "" -f /k/id_ecdsa &&
+	 chmod 0644 /k/id_ed25519 /k/id_rsa /k/id_ecdsa'
 docker run -d --name backup-it-sftp --network "$NET" \
-	-v "$WORK/ssh/id_ed25519.pub:/home/backup/.ssh/keys/id.pub:ro" atmoz/sftp:alpine backup::1001:1001:upload >/dev/null
+	-v "$WORK/ssh/id_ed25519.pub:/home/backup/.ssh/keys/id.pub:ro" \
+	-v "$WORK/ssh/id_rsa.pub:/home/backup/.ssh/keys/id_rsa.pub:ro" \
+	-v "$WORK/ssh/id_ecdsa.pub:/home/backup/.ssh/keys/id_ecdsa.pub:ro" atmoz/sftp:alpine backup::1001:1001:upload >/dev/null
 
 # S3: SeaweedFS with one identity, so wrong credentials are refused.
 cat >"$WORK/s3.json" <<'JSON'
@@ -55,13 +61,21 @@ done
 docker exec backup-it-sftp cat /etc/ssh/ssh_host_ed25519_key.pub |
 	awk '{print "backup-it-sftp " $1 " " $2}' >"$WORK/ssh/known_hosts"
 chmod 0644 "$WORK/ssh/known_hosts"
-cp "$WORK/agent.test" "$WORK/ssh/"
+cp "$WORK/agent.test" "$WORK/retention.test" "$WORK/ssh/"
+
+# The retention rules against restic's own forget, with the image's restic
+# (once: it does not depend on PostgreSQL).
+if [ "$PG_MAJOR" = 16 ]; then
+	docker run --rm --user 65532:65532 -v "$WORK/ssh:/it:ro" -w /tmp --entrypoint /it/retention.test "$IMAGE" \
+		-test.v -test.count=1 -test.run TestSameAsRestic
+fi
 
 # The tests run as an unprivileged user, as the Jobs do.
 docker run --rm --network "$NET" --user 65532:65532 -v "$WORK/ssh:/it:ro" -v "$PWD/cover:/cover" \
 	-e TEST_BACKUP_PG_HOST=backup-it-pg -e TEST_BACKUP_PG_PASSWORD=postgres \
 	-e TEST_SFTP_HOST=backup-it-sftp -e TEST_SFTP_USER=backup -e TEST_SFTP_PATH=upload \
 	-e TEST_SFTP_KEY_FILE=/it/id_ed25519 -e TEST_SFTP_KNOWN_HOSTS=/it/known_hosts \
+	-e TEST_SFTP_RSA_KEY_FILE=/it/id_rsa -e TEST_SFTP_ECDSA_KEY_FILE=/it/id_ecdsa \
 	-e TEST_S3_ENDPOINT=http://backup-it-s3:8333 -e TEST_S3_BUCKET=odoo-it \
 	-e TEST_S3_ACCESS_KEY_ID=backupkey -e TEST_S3_SECRET_ACCESS_KEY=backupsecret123 \
 	-w /tmp --entrypoint /it/agent.test "$IMAGE" \
