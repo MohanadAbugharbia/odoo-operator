@@ -16,7 +16,8 @@ limitations under the License.
 
 // Command docs writes the generated pages of the documentation site:
 // docs/reference/metrics.md, from the metrics the operator registers. The
-// API reference (docs/reference/api.md) comes from crd-ref-docs; see
+// API reference (docs/reference/api.md) comes from crd-ref-docs; this
+// command only escapes it in place (see escapeTags). See
 // `make docs-reference`.
 package main
 
@@ -30,8 +31,8 @@ import (
 )
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: docs <metrics.md>")
+	if len(os.Args) != 3 {
+		fmt.Fprintln(os.Stderr, "usage: docs <metrics.md> <api.md>")
 		os.Exit(2)
 	}
 	docs, err := metrics.Reference()
@@ -73,4 +74,39 @@ them.
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+
+	api, err := os.ReadFile(os.Args[2])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := os.WriteFile(os.Args[2], []byte(escapeTags(string(api))), 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+// escapeTags escapes every "<" outside code spans, except the <br /> line
+// breaks crd-ref-docs writes into table cells. The API comments name
+// placeholders such as <name> or <title>, which crd-ref-docs copies as they
+// are; a browser takes them for HTML tags, and an unclosed <title> swallows
+// the rest of the page.
+func escapeTags(md string) string {
+	var b strings.Builder
+	inCode := false
+	for i := 0; i < len(md); i++ {
+		c := md[i]
+		switch {
+		case c == '`':
+			inCode = !inCode
+		case c == '\n':
+			// A code span never crosses a line in the generated page.
+			inCode = false
+		case c == '<' && !inCode && !strings.HasPrefix(md[i:], "<br />"):
+			b.WriteString("&lt;")
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
 }

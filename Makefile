@@ -162,7 +162,7 @@ DOCS_VENV ?= $(LOCALBIN)/docs-venv
 .PHONY: docs-reference
 docs-reference: crd-ref-docs ## Generate docs/reference (API from api/v1, metrics from internal/metrics).
 	$(CRD_REF_DOCS) --source-path=./api --config=hack/docs/crd-ref-docs.yaml --renderer=markdown --output-path=docs/reference/api.md
-	go run ./hack/docs docs/reference/metrics.md
+	go run ./hack/docs docs/reference/metrics.md docs/reference/api.md
 
 .PHONY: docs-venv
 docs-venv: $(DOCS_VENV) ## Create the Python environment the docs are built with (bin/docs-venv).

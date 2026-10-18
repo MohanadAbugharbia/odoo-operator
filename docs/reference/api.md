@@ -150,8 +150,8 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `enabled` _boolean_ | Enabled runs a small <name>-maintenance Deployment from the operator's<br />own image and points the http Service at it whenever Odoo has no<br />available replica (and spec.replicas is not 0). The poll Service always<br />stays on Odoo. | false |  |
-| `title` _[MaintenancePageText](#maintenancepagetext)_ | Title is the product name the page shows ("Updating <title>"). | Odoo | MaxLength: 64 <br />MinLength: 1 <br />Pattern: `^[^\n\r<>]*$` <br /> |
+| `enabled` _boolean_ | Enabled runs a small &lt;name>-maintenance Deployment from the operator's<br />own image and points the http Service at it whenever Odoo has no<br />available replica (and spec.replicas is not 0). The poll Service always<br />stays on Odoo. | false |  |
+| `title` _[MaintenancePageText](#maintenancepagetext)_ | Title is the product name the page shows ("Updating &lt;title>"). | Odoo | MaxLength: 64 <br />MinLength: 1 <br />Pattern: `^[^\n\r<>]*$` <br /> |
 | `titleTranslations` _object (keys:string, values:[MaintenancePageText](#maintenancepagetext))_ | TitleTranslations replaces the title for a page language. The page is<br />shown in English or Arabic, picked from the browser's Accept-Language,<br />so the only key it reads today is "ar". |  | MaxProperties: 8 <br /> |
 | `accentColor` _string_ | AccentColor is the page's accent, as #rrggbb. | #714b67 | Pattern: `^#[0-9A-Fa-f]\{6\}$` <br /> |
 | `logo` _string_ | Logo is shown instead of the title's initial. It must be a base64 data<br />URI: Odoo is not answering while the page is up, so the page cannot<br />load images from it. |  | MaxLength: 65536 <br />Pattern: `^data:image/(png\|jpeg\|gif\|webp\|svg\+xml);base64,[A-Za-z0-9+/]+=*$` <br /> |
@@ -188,7 +188,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `server` _string_ | Server is the NFS server's host name or address. |  | MinLength: 1 <br /> |
-| `path` _string_ | Path is the exported folder. Repositories go under <path>/<namespace>/<deployment>/. |  | Pattern: `^/` <br /> |
+| `path` _string_ | Path is the exported folder. Repositories go under &lt;path>/&lt;namespace>/&lt;deployment>/. |  | Pattern: `^/` <br /> |
 
 
 #### OdooBackup
@@ -225,7 +225,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `stores` _string array_ | Stores are OdooBackupStores in this namespace. Backups are written to<br />the first; the instance's repository is <path>/<namespace>/<name>/<br />inside it. Each backup is then copied to the other stores. |  | MaxItems: 4 <br />items:MinLength: 1 <br /> |
+| `stores` _string array_ | Stores are OdooBackupStores in this namespace. Backups are written to<br />the first; the instance's repository is &lt;path>/&lt;namespace>/&lt;name>/<br />inside it. Each backup is then copied to the other stores. |  | MaxItems: 4 <br />items:MinLength: 1 <br /> |
 | `schedule` _string_ | Schedule takes a backup on a cron schedule ("0 3 * * *" or @daily), in<br />TimeZone. Empty (the default) takes no scheduled backups. A schedule<br />missed while the operator was down runs once when it is back. |  | MaxLength: 100 <br /> |
 | `timeZone` _string_ | TimeZone of Schedule, the drill schedule and the retention rules, as an<br />IANA name such as Europe/Berlin. | UTC | MaxLength: 100 <br /> |
 | `retention` _[OdooBackupRetention](#odoobackupretention)_ | Retention says which backups are kept after each backup. | \{  \} |  |
@@ -341,7 +341,7 @@ _Appears in:_
 | `phase` _string_ | Phase: Pending, WaitingForFilestoreCleanup, Running, Completed,<br />CompletedWithWarnings, PartiallyCompleted (taken, but a copy to another<br />store failed) or Failed. |  | Enum: [Pending WaitingForFilestoreCleanup Running Completed CompletedWithWarnings PartiallyCompleted Failed] <br /> |
 | `message` _string_ | Message explains the phase in a sentence. |  |  |
 | `store` _string_ | Store is the OdooBackupStore the backup was written to. |  |  |
-| `repository` _string_ | Repository is the restic repository inside the store, <namespace>/<deployment>. |  |  |
+| `repository` _string_ | Repository is the restic repository inside the store, &lt;namespace>/&lt;deployment>. |  |  |
 | `snapshotID` _string_ | SnapshotID is the restic snapshot holding this backup. |  |  |
 | `consistency` _string_ | Consistency the backup was taken with: Online or Offline. |  |  |
 | `job` _string_ | Job is the Job taking the backup. Attempts counts the Jobs started for it. |  |  |
@@ -398,7 +398,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `format` _[BackupStoreFormat](#backupstoreformat)_ | Format is how backups are kept. restic: one encrypted, deduplicated<br />repository per OdooDeployment at <path>/<namespace>/<deployment>/. | restic | Enum: [restic] <br /> |
+| `format` _[BackupStoreFormat](#backupstoreformat)_ | Format is how backups are kept. restic: one encrypted, deduplicated<br />repository per OdooDeployment at &lt;path>/&lt;namespace>/&lt;deployment>/. | restic | Enum: [restic] <br /> |
 | `s3` _[S3Store](#s3store)_ | S3 stores backups in an S3 bucket. |  |  |
 | `sftp` _[SFTPStore](#sftpstore)_ | SFTP stores backups on an SSH server. |  |  |
 | `nfs` _[NFSStore](#nfsstore)_ | NFS stores backups on an NFS export. |  |  |
@@ -469,8 +469,8 @@ _Appears in:_
 | `limitMemoryHard` _integer_ | The maximum memory in bytes that the process can take | 2684354560 |  |
 | `maxCronThreads` _integer_ | The maximum number of cron threads to use for Odoo | 1 | Minimum: 0 <br /> |
 | `extraAddonsPaths` _string array_ | Extra addons paths for Odoo. Each entry must be an absolute path with no commas, spaces, newlines, or # characters. |  | Optional: \{\} <br />items:Pattern: `^/[^,\n\r# ]+$` <br /> |
-| `listDb` _boolean_ | ListDb controls the database manager. When false (the default) the<br />rendered odoo.conf carries list_db = False and dbfilter = ^<db_name>$ so<br />the instance can only ever see its own database. | false |  |
-| `dbFilter` _string_ | DbFilter is written verbatim as dbfilter and replaces the derived<br />^<db_name>$ filter. Single line. |  | Pattern: `^[^\n\r]*$` <br /> |
+| `listDb` _boolean_ | ListDb controls the database manager. When false (the default) the<br />rendered odoo.conf carries list_db = False and dbfilter = ^&lt;db_name>$ so<br />the instance can only ever see its own database. | false |  |
+| `dbFilter` _string_ | DbFilter is written verbatim as dbfilter and replaces the derived<br />^&lt;db_name>$ filter. Single line. |  | Pattern: `^[^\n\r]*$` <br /> |
 | `serverWideModules` _string array_ | ServerWideModules is rendered as server_wide_modules (Odoo's default is base,web). |  | items:Pattern: `^[A-Za-z0-9_]+$` <br /> |
 | `loadLanguages` _string array_ | LoadLanguages is passed as --load-language to maintenance Jobs that<br />install modules (-i), so translations are loaded at first boot. |  | items:Pattern: `^[a-z]\{2,3\}(_[A-Za-z0-9]\{2,4\})?$` <br /> |
 | `extraOptions` _object (keys:string, values:[OdooOptionValue](#odoooptionvalue))_ | ExtraOptions are appended verbatim to the [options] section, sorted by<br />key. Keys must be odoo.conf option names (^[a-z_][a-z0-9_]*$, checked by<br />the operator, which reports Degraded/InvalidSpec otherwise); values must<br />be single line (enforced by the schema). |  | MaxProperties: 64 <br /> |
@@ -756,7 +756,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `phase` _string_ | Phase: Pending, Stopping (Odoo is being stopped), Restoring,<br />Completed or Failed. |  | Enum: [Pending Stopping Restoring Completed Failed] <br /> |
 | `message` _string_ | Message explains the phase in a sentence. |  |  |
-| `suffix` _string_ | Suffix names the database and filestore folders of this restore:<br /><db>_restore_<suffix> while restoring, <db>_prev_<suffix> for the<br />data it replaced. |  |  |
+| `suffix` _string_ | Suffix names the database and filestore folders of this restore:<br />&lt;db>_restore_&lt;suffix> while restoring, &lt;db>_prev_&lt;suffix> for the<br />data it replaced. |  |  |
 | `store` _string_ | Store and SnapshotID are the backup that was restored. |  |  |
 | `snapshotID` _string_ |  |  |  |
 | `image` _string_ | Image is the Odoo image recorded in the backup; the instance is<br />started on it. |  |  |
@@ -829,7 +829,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `claimName` _string_ | ClaimName of the PersistentVolumeClaim. |  | MinLength: 1 <br /> |
-| `subPath` _[StorePath](#storepath)_ | SubPath is a folder inside the claim. Repositories go under <subPath>/<namespace>/<deployment>/. |  | MaxLength: 512 <br />Pattern: `^/?([A-Za-z0-9._~+@=-]+(/[A-Za-z0-9._~+@=-]+)*/?)?$` <br /> |
+| `subPath` _[StorePath](#storepath)_ | SubPath is a folder inside the claim. Repositories go under &lt;subPath>/&lt;namespace>/&lt;deployment>/. |  | MaxLength: 512 <br />Pattern: `^/?([A-Za-z0-9._~+@=-]+(/[A-Za-z0-9._~+@=-]+)*/?)?$` <br /> |
 
 
 #### PersistentVolumeClaimSpec
@@ -866,7 +866,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `state` _string_ | State: Kept, Removed, Undone or None. |  |  |
 | `database` _string_ | Database is the replaced database's name while it is kept. |  |  |
-| `filestore` _string_ | Filestore is the replaced filestore folder, under <dataDir>/filestore/. |  |  |
+| `filestore` _string_ | Filestore is the replaced filestore folder, under &lt;dataDir>/filestore/. |  |  |
 | `keptUntil` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta)_ | KeptUntil is when the replaced data is deleted. |  |  |
 | `undoneBy` _string_ | UndoneBy is the OdooRestore that put the data back. |  |  |
 | `image` _string_ | Image and UpgradeToken are what the instance ran on the replaced<br />data; an undo starts Odoo on them again. |  |  |
@@ -891,8 +891,8 @@ _Appears in:_
 | `endpoint` _string_ | Endpoint of an S3-compatible service, such as https://s3.example.com.<br />Leave it out for AWS. |  | Pattern: `^https?://[^/\s]+/?$` <br /> |
 | `region` _string_ | Region of the bucket. Optional for most S3-compatible services. |  |  |
 | `bucket` _string_ | Bucket holding the backups. |  | MaxLength: 63 <br />MinLength: 3 <br />Pattern: `^[a-z0-9][a-z0-9.-]*[a-z0-9]$` <br /> |
-| `path` _[StorePath](#storepath)_ | Path inside the bucket. Repositories go under <path>/<namespace>/<deployment>/. |  | MaxLength: 512 <br />Pattern: `^/?([A-Za-z0-9._~+@=-]+(/[A-Za-z0-9._~+@=-]+)*/?)?$` <br /> |
-| `forcePathStyle` _boolean_ | ForcePathStyle addresses the bucket as <endpoint>/<bucket> instead of<br /><bucket>.<endpoint>. Most S3-compatible services need it; AWS does not. |  |  |
+| `path` _[StorePath](#storepath)_ | Path inside the bucket. Repositories go under &lt;path>/&lt;namespace>/&lt;deployment>/. |  | MaxLength: 512 <br />Pattern: `^/?([A-Za-z0-9._~+@=-]+(/[A-Za-z0-9._~+@=-]+)*/?)?$` <br /> |
+| `forcePathStyle` _boolean_ | ForcePathStyle addresses the bucket as &lt;endpoint>/&lt;bucket> instead of<br />&lt;bucket>.&lt;endpoint>. Most S3-compatible services need it; AWS does not. |  |  |
 | `credentialsSecret` _[LocalObjectReference](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#localobjectreference-v1-core)_ | CredentialsSecret holds AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY. |  |  |
 
 
@@ -912,7 +912,7 @@ _Appears in:_
 | `host` _string_ | Host of the SSH server. |  | MinLength: 1 <br />Pattern: `^[A-Za-z0-9.:\[\]-]+$` <br /> |
 | `port` _integer_ | Port of the SSH server. | 22 | Maximum: 65535 <br />Minimum: 1 <br /> |
 | `user` _string_ | User to log in as. |  | MinLength: 1 <br />Pattern: `^[A-Za-z0-9._-]+$` <br /> |
-| `path` _[StorePath](#storepath)_ | Path on the server, relative to the user's home folder unless it<br />starts with "/". Repositories go under <path>/<namespace>/<deployment>/. |  | MaxLength: 512 <br />Pattern: `^/?([A-Za-z0-9._~+@=-]+(/[A-Za-z0-9._~+@=-]+)*/?)?$` <br /> |
+| `path` _[StorePath](#storepath)_ | Path on the server, relative to the user's home folder unless it<br />starts with "/". Repositories go under &lt;path>/&lt;namespace>/&lt;deployment>/. |  | MaxLength: 512 <br />Pattern: `^/?([A-Za-z0-9._~+@=-]+(/[A-Za-z0-9._~+@=-]+)*/?)?$` <br /> |
 | `sshSecret` _[LocalObjectReference](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#localobjectreference-v1-core)_ | SSHSecret holds the private key and the server's host key<br />(known_hosts). The private key is under id_ed25519 or, as in Secrets of<br />type kubernetes.io/ssh-auth, ssh-privatekey (id_ed25519 wins when both<br />are set). Any unencrypted Ed25519, ECDSA or RSA key works, in OpenSSH or<br />PEM format; keys with a passphrase do not. The host key is always<br />checked. |  |  |
 
 

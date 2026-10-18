@@ -1,9 +1,8 @@
 # Maintenance page
 
-![The maintenance page during an upgrade, with the default title and colour](../assets/maintenance-page-light.png#only-light)
-![The maintenance page during an upgrade, with the default title and colour](../assets/maintenance-page-dark.png#only-dark)
+![The maintenance page during an upgrade, with the default title and colour](../assets/maintenance-page.png)
 
-*An upgrade in progress, with the default branding (title "Odoo", colour `#714b67`). The page follows the browser's light or dark mode.*
+*An upgrade in progress, with the default branding (title "Odoo", colour `#714b67`).*
 
 With `spec.maintenancePage.enabled: true`, a browser opening the instance
 while Odoo cannot answer gets a status page instead of a blank screen:
