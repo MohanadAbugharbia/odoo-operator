@@ -4,7 +4,7 @@ site_url: https://odoo-operator.abugharbia.com/
 repo_url: https://github.com/MohanadAbugharbia/odoo-operator
 repo_name: MohanadAbugharbia/odoo-operator
 edit_uri: edit/main/docs/
-copyright: Licensed under the Apache License 2.0
+copyright: MIT License, © Mohanad Abugharbia
 
 theme:
   name: material
@@ -48,8 +48,27 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - Getting started: getting-started.md
+  - Concepts:
+      - Lifecycle: concepts/lifecycle.md
+      - Databases: concepts/databases.md
+      - How backups work: concepts/backups.md
+  - Guides:
+      - Upgrade Odoo: guides/upgrades.md
+      - Maintenance page: guides/maintenance-page.md
+      - Set up a backup store: guides/backup-stores.md
+      - Take and schedule backups: guides/backups.md
+      - Restore and undo: guides/restore.md
+      - Restore drills: guides/drills.md
+      - Check and prune a store: guides/store-check-prune.md
+      - Monitoring and alerts: guides/monitoring.md
+  - Operations:
+      - Upgrading the operator: operations/upgrading-the-operator.md
   - Reference:
       - API: reference/api.md
       - Metrics: reference/metrics.md
+      - Configuration: reference/configuration.md
   - Contributing:
+      - Development: contributing/development.md
+      - Continuous integration: contributing/ci.md
       - Writing the docs: contributing/docs.md

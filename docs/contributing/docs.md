@@ -2,8 +2,13 @@
 
 The site is built with [MkDocs](https://www.mkdocs.org/) and
 [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/) from the
-`docs/` folder, and published to GitHub Pages. A change in behaviour and the
-change to its page go in the same pull request.
+`docs/` folder, and published to GitHub Pages at
+<https://odoo-operator.abugharbia.com/>. A change in behaviour and the change
+to its page go in the same pull request.
+
+The README stays short: what the operator is, the install command and links
+here. Usage, operations and internals belong on this site, so a feature pull
+request edits its page under `docs/`, not the README.
 
 ## Build and preview locally
 

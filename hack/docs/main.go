@@ -44,9 +44,16 @@ func main() {
 # Metrics
 
 The manager serves these on ` + "`/metrics`" + ` beside the controller-runtime
-defaults. Series marked *scrape time* are read from each OdooDeployment's
-status when Prometheus scrapes, and only the elected leader reports them; the
-others are counted as events happen.
+defaults; [Monitoring and alerts](../guides/monitoring.md) shows how to scrape
+them.
+
+- Series marked *scrape time* are read from the status of every
+  OdooDeployment and OdooBackupStore when Prometheus scrapes. Only the elected
+  leader reports them, and a deleted object disappears on the next scrape.
+- The others count events, each once, on the reconcile that causes it: a Job
+  that stays failed, an image that keeps failing to pull or a drop that keeps
+  failing is not counted again on every requeue. The per-OdooDeployment
+  counters start at 0 and are removed once the OdooDeployment is gone.
 
 | Metric | Type | Labels | Description |
 |---|---|---|---|

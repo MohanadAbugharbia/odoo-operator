@@ -2,18 +2,30 @@
 # Metrics
 
 The manager serves these on `/metrics` beside the controller-runtime
-defaults. Series marked *scrape time* are read from each OdooDeployment's
-status when Prometheus scrapes, and only the elected leader reports them; the
-others are counted as events happen.
+defaults; [Monitoring and alerts](../guides/monitoring.md) shows how to scrape
+them.
+
+- Series marked *scrape time* are read from the status of every
+  OdooDeployment and OdooBackupStore when Prometheus scrapes. Only the elected
+  leader reports them, and a deleted object disappears on the next scrape.
+- The others count events, each once, on the reconcile that causes it: a Job
+  that stays failed, an image that keeps failing to pull or a drop that keeps
+  failing is not counted again on every requeue. The per-OdooDeployment
+  counters start at 0 and are removed once the OdooDeployment is gone.
 
 | Metric | Type | Labels | Description |
 |---|---|---|---|
 | `odoo_operator_backup_duration_seconds` | histogram | `kind` | How long backups that succeeded took, from the start of their first Job to completion. |
+| `odoo_operator_backup_enabled` | gauge | `namespace`, `name` | 1 when the OdooDeployment takes scheduled backups (spec.backup.schedule is set). *(scrape time)* |
+| `odoo_operator_backup_last_copy_failed` | gauge | `namespace`, `name`, `store` | Per copy store, 1 when the instance's most recently finished backup could not be copied there. *(scrape time)* |
 | `odoo_operator_backup_last_failed` | gauge | `namespace`, `name` | 1 when the instance's most recently finished backup failed. *(scrape time)* |
 | `odoo_operator_backup_last_size_bytes` | gauge | `namespace`, `name`, `part` | Sizes of the instance's newest successful backup: part is database, filestore or added (new data uploaded). *(scrape time)* |
 | `odoo_operator_backup_last_success_timestamp_seconds` | gauge | `namespace`, `name` | When the instance's newest successful backup (Completed or CompletedWithWarnings) completed, as a Unix timestamp. *(scrape time)* |
 | `odoo_operator_backup_missing_files` | gauge | `namespace`, `name` | Attachments the database refers to that the instance's newest successful backup could not include. *(scrape time)* |
 | `odoo_operator_backup_store_ready` | gauge | `namespace`, `store` | 1 when the OdooBackupStore's last probe could write, read and delete a file. *(scrape time)* |
+| `odoo_operator_backup_store_stored_bytes` | gauge | `namespace`, `store` | What the instance repositories in the store hold together, as of its latest check or prune. *(scrape time)* |
+| `odoo_operator_backup_store_task_last_failed` | gauge | `namespace`, `store`, `task` | 1 when the store's latest check or prune (task) failed. *(scrape time)* |
+| `odoo_operator_backup_store_task_last_timestamp_seconds` | gauge | `namespace`, `store`, `task` | When the store's latest check or prune (task) finished, as a Unix timestamp. *(scrape time)* |
 | `odoo_operator_backups_total` | counter | `kind`, `result` | Backups (OdooBackup) that finished, by kind (manual, scheduled, pre-upgrade) and result (succeeded, failed). |
 | `odoo_operator_build_info` | gauge | `version` | Always 1; the version label is the running operator release. |
 | `odoo_operator_database_operations_total` | counter | `operation`, `result` | Database create, adopt and drop operations, by result (succeeded, failed, refused). A failure is counted once until it clears. |
@@ -30,4 +42,8 @@ others are counted as events happen.
 | `odoo_operator_job_duration_seconds` | histogram | `kind`, `result` | How long init and upgrade Jobs that succeeded or failed took, from creation to completion or failure. |
 | `odoo_operator_jobs_total` | counter | `namespace`, `name`, `kind`, `result` | Init and upgrade Jobs that finished, by result (succeeded, failed, superseded). Each Job is counted once. |
 | `odoo_operator_maintenance_page_publish_errors_total` | counter | `namespace`, `name` | Failed attempts to publish an OdooDeployment's status to its maintenance page. |
+| `odoo_operator_restore_drill_enabled` | gauge | `namespace`, `name` | 1 when the OdooDeployment runs restore drills (spec.backup.drill.schedule is set). *(scrape time)* |
+| `odoo_operator_restore_drill_last_failed` | gauge | `namespace`, `name` | 1 when the instance's latest restore drill failed. *(scrape time)* |
+| `odoo_operator_restore_drill_last_success_timestamp_seconds` | gauge | `namespace`, `name` | When a restore drill of the instance last passed, as a Unix timestamp. Absent until one passes. *(scrape time)* |
+| `odoo_operator_restore_last_failed` | gauge | `namespace`, `name` | 1 when the instance's most recently finished OdooRestore failed. *(scrape time)* |
 | `odoo_operator_restores_total` | counter | `mode`, `result` | In-place restores (OdooRestore) that finished, by mode (restore, undo) and result (succeeded, failed). |

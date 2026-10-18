@@ -57,8 +57,7 @@ BACKUP_IMG ?= ghcr.io/mohanadabugharbia/odoo-operator-backup:$(VERSION)
 ENVTEST_K8S_VERSION = 1.34.0
 
 # Extra flags for `go test` in the test target. CI passes -json and renders the
-# event stream with hack/test-summary.py; see "Continuous integration" in the
-# README.
+# event stream with hack/test-summary.py; see docs/contributing/ci.md.
 GO_TEST_FLAGS ?=
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)

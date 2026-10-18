@@ -35,6 +35,24 @@ _Appears in:_
 | `Offline` | BackupConsistencyOffline stops Odoo for the backup.<br /> |
 
 
+#### BackupCopy
+
+
+
+BackupCopy is one copy of a backup in another store.
+
+
+
+_Appears in:_
+- [OdooBackupStatus](#odoobackupstatus)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `store` _string_ | Store is the OdooBackupStore holding the copy. |  |  |
+| `snapshotID` _string_ | SnapshotID of the copy in that store's repository; empty when the<br />copy failed. |  |  |
+| `error` _string_ | Error says why the copy failed. |  |  |
+
+
 #### BackupStoreFormat
 
 _Underlying type:_ _string_
@@ -207,11 +225,87 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `stores` _string array_ | Stores are OdooBackupStores in this namespace. Backups are written to<br />the first; the instance's repository is <path>/<namespace>/<name>/<br />inside it. |  | MaxItems: 1 <br />items:MinLength: 1 <br /> |
+| `stores` _string array_ | Stores are OdooBackupStores in this namespace. Backups are written to<br />the first; the instance's repository is <path>/<namespace>/<name>/<br />inside it. Each backup is then copied to the other stores. |  | MaxItems: 4 <br />items:MinLength: 1 <br /> |
+| `schedule` _string_ | Schedule takes a backup on a cron schedule ("0 3 * * *" or @daily), in<br />TimeZone. Empty (the default) takes no scheduled backups. A schedule<br />missed while the operator was down runs once when it is back. |  | MaxLength: 100 <br /> |
+| `timeZone` _string_ | TimeZone of Schedule, the drill schedule and the retention rules, as an<br />IANA name such as Europe/Berlin. | UTC | MaxLength: 100 <br /> |
+| `retention` _[OdooBackupRetention](#odoobackupretention)_ | Retention says which backups are kept after each backup. | \{  \} |  |
+| `drill` _[OdooBackupDrill](#odoobackupdrill)_ | Drill restores the newest backup on a schedule to prove it works. |  | Optional: \{\} <br /> |
 | `consistency` _[BackupConsistency](#backupconsistency)_ | Consistency: Online (default) backs up while Odoo keeps serving;<br />Offline stops Odoo for the backup. | Online | Enum: [Online Offline] <br /> |
 | `restore` _[OdooRestoreConfig](#odoorestoreconfig)_ | Restore holds the defaults of in-place restores (OdooRestore). | \{  \} |  |
 | `resources` _[ResourceRequirements](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#resourcerequirements-v1-core)_ | Resources of the backup and restore Jobs. |  | Optional: \{\} <br /> |
 | `activeDeadlineSeconds` _integer_ | ActiveDeadlineSeconds bounds one backup or restore Job. | 21600 | Minimum: 60 <br /> |
+
+
+#### OdooBackupDrill
+
+
+
+OdooBackupDrill restores the newest backup on a schedule to prove it can
+be restored, without touching the running instance.
+
+
+
+_Appears in:_
+- [OdooBackupConfig](#odoobackupconfig)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `schedule` _string_ | Schedule in cron format, in spec.backup.timeZone; empty turns drills off. |  | MaxLength: 100 <br /> |
+| `scratchSizeLimit` _[Quantity](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#quantity-resource-api)_ | ScratchSizeLimit caps the node disk the drill's scratch filestore<br />(an emptyDir) may use; unset leaves it uncapped. A drill that needs<br />more is evicted and reported failed. |  | Optional: \{\} <br /> |
+
+
+#### OdooBackupRetention
+
+
+
+OdooBackupRetention says which backups are kept. Scheduled backups are
+thinned with restic's keep rules (daily: 7 keeps the newest backup of each
+of the last 7 days that have one; a backup kept by any rule stays); manual
+and pre-upgrade backups each keep their newest Manual. A backup with
+spec.keep, and the newest backup, are never deleted. Unset fields take the
+defaults below.
+
+
+
+_Appears in:_
+- [OdooBackupConfig](#odoobackupconfig)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `last` _integer_ | Last keeps the newest N backups. |  | Minimum: 0 <br /> |
+| `hourly` _integer_ | Hourly keeps the newest backup of each of the last N hours that have one. |  | Minimum: 0 <br /> |
+| `daily` _integer_ | Daily keeps the newest backup of each of the last N days that have one. | 7 | Minimum: 0 <br /> |
+| `weekly` _integer_ | Weekly keeps the newest backup of each of the last N weeks that have one. | 4 | Minimum: 0 <br /> |
+| `monthly` _integer_ | Monthly keeps the newest backup of each of the last N months that have one. | 12 | Minimum: 0 <br /> |
+| `yearly` _integer_ | Yearly keeps the newest backup of each of the last N years that have one. |  | Minimum: 0 <br /> |
+| `within` _string_ | Within keeps every backup newer than this, counted from the newest<br />backup, such as 30d, 12h or 1y6m (restic's duration format). |  | Pattern: `^([0-9]+[ymdh])*$` <br /> |
+| `manual` _integer_ | Manual keeps the newest N manual backups; 0 keeps them all. |  | Minimum: 0 <br /> |
+| `keepAll` _boolean_ | KeepAll turns retention off: no backup is ever deleted. |  |  |
+
+
+#### OdooBackupScheduleStatus
+
+
+
+OdooBackupScheduleStatus reports the backup schedule and the last drill.
+
+
+
+_Appears in:_
+- [OdooDeploymentStatus](#odoodeploymentstatus)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `lastScheduleTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta)_ | LastScheduleTime is the latest scheduled time the operator has handled,<br />whether it took a backup then or skipped it. |  |  |
+| `nextScheduleTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta)_ | NextScheduleTime is when the next scheduled backup is due. |  |  |
+| `schedule` _string_ | Schedule and TimeZone the times above were computed for. |  |  |
+| `timeZone` _string_ |  |  |  |
+| `lastDrillScheduleTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta)_ | LastDrillScheduleTime is the latest drill time the operator has handled. |  |  |
+| `nextDrillTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta)_ | NextDrillTime is when the next drill is due. |  |  |
+| `drillSchedule` _string_ | DrillSchedule the drill times above were computed for. |  |  |
+| `drillDue` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta)_ | DrillDue is the scheduled time of a drill waiting in the instance's<br />queue. |  |  |
+| `lastDrill` _[OdooDrillResult](#odoodrillresult)_ | LastDrill is the result of the latest restore drill. |  |  |
+| `lastSuccessfulDrillTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta)_ | LastSuccessfulDrillTime is when a restore drill last passed. |  |  |
 
 
 #### OdooBackupSpec
@@ -244,7 +338,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `phase` _string_ | Phase: Pending, WaitingForFilestoreCleanup, Running, Completed,<br />CompletedWithWarnings or Failed. |  | Enum: [Pending WaitingForFilestoreCleanup Running Completed CompletedWithWarnings Failed] <br /> |
+| `phase` _string_ | Phase: Pending, WaitingForFilestoreCleanup, Running, Completed,<br />CompletedWithWarnings, PartiallyCompleted (taken, but a copy to another<br />store failed) or Failed. |  | Enum: [Pending WaitingForFilestoreCleanup Running Completed CompletedWithWarnings PartiallyCompleted Failed] <br /> |
 | `message` _string_ | Message explains the phase in a sentence. |  |  |
 | `store` _string_ | Store is the OdooBackupStore the backup was written to. |  |  |
 | `repository` _string_ | Repository is the restic repository inside the store, <namespace>/<deployment>. |  |  |
@@ -266,6 +360,8 @@ _Appears in:_
 | `repairedFiles` _integer_ | RepairedFiles counts attachments that were gone from the filestore<br />when the backup ran and were taken from the previous backup instead. |  |  |
 | `missingFiles` _integer_ | MissingFiles counts attachments the database refers to that are in<br />neither the filestore nor the previous backup. |  |  |
 | `missingFileNames` _string array_ | MissingFileNames lists the first missing files. |  |  |
+| `copies` _[BackupCopy](#backupcopy) array_ | Copies are the copies of this backup in the instance's other stores. |  |  |
+| `warnings` _string array_ | Warnings name what went wrong around a backup that was still taken,<br />such as retention that could not run. |  |  |
 
 
 #### OdooBackupStore
@@ -308,7 +404,10 @@ _Appears in:_
 | `nfs` _[NFSStore](#nfsstore)_ | NFS stores backups on an NFS export. |  |  |
 | `pvc` _[PVCStore](#pvcstore)_ | PVC stores backups on a PersistentVolumeClaim. |  |  |
 | `encryptionKeySecret` _[SecretKeySelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#secretkeyselector-v1-core)_ | EncryptionKeySecret is the restic password that encrypts every<br />backup in the store. Without it no backup can be read: keep a copy<br />outside the cluster. |  |  |
-| `resources` _[ResourceRequirements](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#resourcerequirements-v1-core)_ | Resources of the Jobs that probe the store. |  | Optional: \{\} <br /> |
+| `check` _[StoreCheck](#storecheck)_ | Check reads the store's repositories back on a schedule (restic check)<br />to find damage before a restore needs them. |  | Optional: \{\} <br /> |
+| `prune` _[StoreSchedule](#storeschedule)_ | Prune frees the space of the backups retention has removed, on a<br />schedule (restic prune). |  | Optional: \{\} <br /> |
+| `timeZone` _string_ | TimeZone of the check and prune schedules, as an IANA name. | UTC | MaxLength: 100 <br /> |
+| `resources` _[ResourceRequirements](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#resourcerequirements-v1-core)_ | Resources of the Jobs that probe, check and prune the store. |  | Optional: \{\} <br /> |
 
 
 #### OdooBackupStoreStatus
@@ -329,6 +428,18 @@ _Appears in:_
 | `lastProbeTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta)_ | LastProbeTime is when the store was last probed. |  |  |
 | `probeJob` _string_ | ProbeJob is the Job probing the store right now. |  |  |
 | `probedHash` _string_ | ProbedHash identifies the spec and Secrets the last probe ran with. |  |  |
+| `taskJob` _string_ | TaskJob is the check or prune Job running right now; TaskKind says which. |  |  |
+| `taskKind` _string_ |  |  |  |
+| `lastCheck` _[StoreTaskStatus](#storetaskstatus)_ | LastCheck and LastPrune are the outcomes of the latest check and prune. |  |  |
+| `lastPrune` _[StoreTaskStatus](#storetaskstatus)_ |  |  |  |
+| `lastCheckScheduleTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta)_ | LastCheckScheduleTime and LastPruneScheduleTime are the latest<br />scheduled times handled; NextCheckTime and NextPruneTime the next ones. |  |  |
+| `lastPruneScheduleTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta)_ |  |  |  |
+| `nextCheckTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta)_ |  |  |  |
+| `nextPruneTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta)_ |  |  |  |
+| `checkRuns` _integer_ | CheckRuns counts checks, to pick the part of the data the next reads. |  |  |
+| `scheduleKey` _string_ | Schedules the times above were computed for: check, prune and time zone. |  |  |
+| `repositories` _integer_ | Repositories is how many instance repositories the latest task saw,<br />StoredBytes how much they hold together. |  |  |
+| `storedBytes` _integer_ |  |  |  |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#condition-v1-meta) array_ | Conditions: Ready. |  |  |
 
 
@@ -493,9 +604,32 @@ _Appears in:_
 | `initModulesInstalled` _string array_ |  | \{  \} | Optional: \{\} <br /> |
 | `currentInitJob` _[MaintenanceJobStatus](#maintenancejobstatus)_ | The maintenance Job (init or upgrade) currently running |  | Optional: \{\} <br /> |
 | `currentOperation` _[OperationStatus](#operationstatus)_ | CurrentOperation is the backup, restore or cleanup in progress. |  | Optional: \{\} <br /> |
+| `backup` _[OdooBackupScheduleStatus](#odoobackupschedulestatus)_ | Backup reports the backup schedule and the last restore drill. |  | Optional: \{\} <br /> |
 | `lastMaintenanceDuration` _[Duration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#duration-v1-meta)_ | LastMaintenanceDuration is how long the last successful upgrade Job<br />took, from its creation to its completion. The maintenance page uses it<br />to estimate the next one. Init Jobs are not counted: they run once and<br />take far longer than an upgrade. |  | Optional: \{\} <br /> |
 | `odooAdminSecretName` _string_ | The secret name for the Odoo admin password |  | Optional: \{\} <br /> |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#condition-v1-meta) array_ |  |  | Optional: \{\} <br /> |
+
+
+#### OdooDrillResult
+
+
+
+OdooDrillResult is the outcome of one restore drill.
+
+
+
+_Appears in:_
+- [OdooBackupScheduleStatus](#odoobackupschedulestatus)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `backup` _string_ | Backup is the OdooBackup the drill restored. |  |  |
+| `snapshotID` _string_ | SnapshotID is the snapshot the drill restored. |  |  |
+| `succeeded` _boolean_ | Succeeded is true when the backup restored, passed every check and<br />Odoo read it. |  |  |
+| `message` _string_ | Message explains a failure, or sums up a success. |  |  |
+| `startedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta)_ | StartedAt and CompletedAt bound the drill. |  |  |
+| `completedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta)_ |  |  |  |
+| `job` _string_ | Job ran the drill; a failed drill's Job is kept for its log. |  |  |
 
 
 #### OdooJobConfig
@@ -672,7 +806,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `kind` _string_ | Kind: backup, restore or cleanup. |  | Enum: [backup restore cleanup] <br /> |
+| `kind` _string_ | Kind: backup, restore, cleanup or drill. |  | Enum: [backup restore cleanup drill] <br /> |
 | `name` _string_ | Name of the OdooBackup or OdooRestore. |  |  |
 | `job` _string_ | Job running it; empty while the operator is still stopping Odoo for it. |  |  |
 | `stoppedOdoo` _boolean_ | StoppedOdoo is true when the operation scaled Odoo to zero and must<br />bring it back. |  |  |
@@ -739,6 +873,8 @@ _Appears in:_
 | `upgradeToken` _string_ |  |  |  |
 
 
+
+
 #### S3Store
 
 
@@ -777,7 +913,24 @@ _Appears in:_
 | `port` _integer_ | Port of the SSH server. | 22 | Maximum: 65535 <br />Minimum: 1 <br /> |
 | `user` _string_ | User to log in as. |  | MinLength: 1 <br />Pattern: `^[A-Za-z0-9._-]+$` <br /> |
 | `path` _[StorePath](#storepath)_ | Path on the server, relative to the user's home folder unless it<br />starts with "/". Repositories go under <path>/<namespace>/<deployment>/. |  | MaxLength: 512 <br />Pattern: `^/?([A-Za-z0-9._~+@=-]+(/[A-Za-z0-9._~+@=-]+)*/?)?$` <br /> |
-| `sshSecret` _[LocalObjectReference](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#localobjectreference-v1-core)_ | SSHSecret holds the private key (id_ed25519) and the server's host key<br />(known_hosts). The host key is always checked. |  |  |
+| `sshSecret` _[LocalObjectReference](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#localobjectreference-v1-core)_ | SSHSecret holds the private key and the server's host key<br />(known_hosts). The private key is under id_ed25519 or, as in Secrets of<br />type kubernetes.io/ssh-auth, ssh-privatekey (id_ed25519 wins when both<br />are set). Any unencrypted Ed25519, ECDSA or RSA key works, in OpenSSH or<br />PEM format; keys with a passphrase do not. The host key is always<br />checked. |  |  |
+
+
+#### StoreCheck
+
+
+
+StoreCheck checks the store's repositories on a schedule.
+
+
+
+_Appears in:_
+- [OdooBackupStoreSpec](#odoobackupstorespec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `schedule` _string_ | Schedule in cron format ("0 5 * * 0" or @weekly); empty turns checks off. |  | MaxLength: 100 <br /> |
+| `readDataParts` _integer_ | ReadDataParts: each check reads one of this many parts of the stored<br />data, the next part on the next run, so all data is read every<br />ReadDataParts checks. 1 reads everything every time; 0 reads only the<br />repository structure. | 7 | Maximum: 100 <br />Minimum: 0 <br /> |
 
 
 #### StorePath
@@ -797,5 +950,42 @@ _Appears in:_
 - [S3Store](#s3store)
 - [SFTPStore](#sftpstore)
 
+
+
+#### StoreSchedule
+
+
+
+StoreSchedule runs a store-wide task on a schedule.
+
+
+
+_Appears in:_
+- [OdooBackupStoreSpec](#odoobackupstorespec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `schedule` _string_ | Schedule in cron format ("0 4 * * 0" or @weekly); empty turns it off. |  | MaxLength: 100 <br /> |
+
+
+#### StoreTaskStatus
+
+
+
+StoreTaskStatus is the outcome of the latest check or prune of a store.
+
+
+
+_Appears in:_
+- [OdooBackupStoreStatus](#odoobackupstorestatus)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `time` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta)_ | Time the task finished. |  |  |
+| `result` _string_ | Result: Passed or Failed. |  | Enum: [Passed Failed] <br /> |
+| `message` _string_ | Message sums up the outcome, or names what failed. |  |  |
+| `job` _string_ | Job that ran it; a failed task's Job is kept for its log. |  |  |
+| `repositories` _string array_ | Repositories the task went through. |  |  |
+| `part` _string_ | Part is the part of the data a check read, such as 3/7. |  |  |
 
 
