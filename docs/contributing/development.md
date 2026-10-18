@@ -44,7 +44,13 @@ PG_MAJOR=17 hack/backup-it.sh
 ```
 
 `hack/backup-e2e.sh` backs up, restores and undoes a real Odoo in a kind
-cluster through an S3 store and a PVC store. CI runs both.
+cluster through an S3 store and a PVC store, then starts a second instance
+from an Odoo backup file and restores the first one's repository into it.
+CI runs both.
+
+The restores of Odoo's own backup files are tested against real backups made
+by Odoo 17, 18 and 19, in `internal/backup/agent/testdata/odoo`; its README
+says how they were made, to make them again for a new Odoo series.
 
 `make test-e2e` additionally needs Docker and kind, and is not part of CI.
 

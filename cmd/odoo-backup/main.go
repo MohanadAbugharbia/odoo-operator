@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -72,6 +73,7 @@ type common struct {
 	resticBin      string
 	resticOptions  stringList
 	retryLock      time.Duration
+	noLock         bool
 	terminationLog string
 }
 
@@ -85,6 +87,7 @@ func (c *common) register(fs *flag.FlagSet) {
 	fs.StringVar(&c.resticBin, "restic", "restic", "restic executable")
 	fs.Var(&c.resticOptions, "restic-option", "restic -o option (repeatable)")
 	fs.DurationVar(&c.retryLock, "retry-lock", 31*time.Minute, "how long restic waits for a repository lock")
+	fs.BoolVar(&c.noLock, "no-lock", false, "read the repository without locking it (a read-only store)")
 	fs.StringVar(&c.terminationLog, "termination-log", layout.TerminationLog, "where the result is written")
 }
 
@@ -112,6 +115,7 @@ func (c *common) env() (*agent.Env, error) {
 			Bin:       c.resticBin,
 			Options:   c.resticOptions,
 			RetryLock: c.retryLock,
+			NoLock:    c.noLock,
 			Log:       os.Stderr,
 		},
 		Clients: pg.Clients{BinDirTemplate: c.pgBinTemplate, Majors: majors},
@@ -176,11 +180,12 @@ func run(ctx context.Context, command string, args []string) int {
 		return runStoreTask(ctx, fs, command, args)
 	case "probe":
 		target := fs.String("target", "", "the store root, as rclone names it")
+		readOnly := fs.Bool("read-only", false, "only list the store (a read-only store)")
 		terminationLog := fs.String("termination-log", layout.TerminationLog, "where the result is written")
 		if err := fs.Parse(args); err != nil {
 			return 2
 		}
-		return finish(*terminationLog, agent.Probe(ctx, agent.ProbeOptions{Target: *target}))
+		return finish(*terminationLog, agent.Probe(ctx, agent.ProbeOptions{Target: *target, ReadOnly: *readOnly}))
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		return 2
@@ -259,8 +264,18 @@ func runRestore(ctx context.Context, fs *flag.FlagSet, c *common, command string
 		o.Mode = agent.ModeUndo
 	}
 	var modules string
+	var tags stringList
 	fs.StringVar(&o.Suffix, "suffix", "", "this restore's suffix")
-	fs.StringVar(&o.Snapshot, "snapshot", "", "snapshot to restore (restore)")
+	fs.StringVar(&o.Snapshot, "snapshot", "", "snapshot to restore (restore): an ID, or latest")
+	fs.StringVar(&o.Host, "host", "", "with --snapshot latest: the snapshots' host")
+	fs.Var(&tags, "tag", "with --snapshot latest: a tag the snapshot carries (repeatable)")
+	fs.StringVar(&o.File, "file", "", "Odoo backup file (.zip or .dump) to restore instead of a snapshot, "+
+		"below --store-target; its last segment may be a pattern")
+	fs.StringVar(&o.StoreTarget, "store-target", "", "the store's root, as rclone names it")
+	fs.StringVar(&o.WorkDir, "work-dir", "", "folder the steps of a restore Job with an Odoo step share")
+	fs.BoolVar(&o.LoadOnly, "load-only", false, "load and check the backup, then stop (the first step); "+
+		"the result goes to <work-dir>/"+agent.WorkLoadResult)
+	fs.BoolVar(&o.Neutralize, "neutralize", false, "require the Odoo step to have neutralized the backup")
 	fs.StringVar(&o.UndoSuffix, "undo-suffix", "", "suffix of the restore to undo (undo)")
 	fs.StringVar(&o.DataRoot, "data", layout.DataMount, "root of the instance's data volume")
 	fs.StringVar(&modules, "expect-modules", "", "comma-separated modules the instance should have")
@@ -273,11 +288,33 @@ func runRestore(ctx context.Context, fs *flag.FlagSet, c *common, command string
 			o.ExpectModules = append(o.ExpectModules, m)
 		}
 	}
-	e, err := c.env()
-	if err != nil {
-		return finish(c.terminationLog, result.Failed(result.StepConnect, err))
+	o.Tags = tags
+	if o.File != "" && (!agent.IsBackupFile(o.File) || o.StoreTarget == "") {
+		fmt.Fprintln(os.Stderr, "restore: --file must end in .zip or .dump, and needs --store-target")
+		return 2
 	}
-	return finish(c.terminationLog, agent.Restore(ctx, e, o))
+	if o.LoadOnly && o.WorkDir == "" {
+		fmt.Fprintln(os.Stderr, "restore: --load-only needs --work-dir")
+		return 2
+	}
+	var res result.Result
+	if e, err := c.env(); err != nil {
+		res = result.Failed(result.StepConnect, err)
+	} else {
+		res = agent.Restore(ctx, e, o)
+	}
+	if o.LoadOnly {
+		// The last step reports; this one always lets the next steps run.
+		if err := result.Write(filepath.Join(o.WorkDir, agent.WorkLoadResult), res); err != nil {
+			fmt.Fprintln(os.Stderr, "could not write the load result:", err)
+			return 1
+		}
+		if !res.OK {
+			fmt.Fprintf(os.Stderr, "load failed at step %s: %s\n", res.Step, res.Error)
+		}
+		return 0
+	}
+	return finish(c.terminationLog, res)
 }
 
 func runDrill(ctx context.Context, fs *flag.FlagSet, c *common, command string, args []string) int {

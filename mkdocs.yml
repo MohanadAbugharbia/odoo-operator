@@ -64,6 +64,7 @@ nav:
       - Set up a backup store: guides/backup-stores.md
       - Take and schedule backups: guides/backups.md
       - Restore and undo: guides/restore.md
+      - Start an instance from a backup: guides/start-from-a-backup.md
       - Recover onto a new cluster: guides/disaster-recovery.md
       - Restore drills: guides/drills.md
       - Check and prune a store: guides/store-check-prune.md

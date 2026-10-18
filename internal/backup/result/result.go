@@ -64,6 +64,9 @@ type Result struct {
 	Deferred bool `json:"deferred,omitempty"`
 	// Warnings that did not fail the Job.
 	Warnings []string `json:"warnings,omitempty"`
+	// File is the Odoo backup file a restore read, when it was not a
+	// snapshot.
+	File string `json:"file,omitempty"`
 
 	// Backup.
 	SnapshotID      string   `json:"snapshotID,omitempty"`

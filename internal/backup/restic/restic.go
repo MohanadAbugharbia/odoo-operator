@@ -77,6 +77,9 @@ type Restic struct {
 	Options []string
 	// RetryLock is how long a command waits for a lock.
 	RetryLock time.Duration
+	// NoLock reads the repository without locking it, which a read-only
+	// store needs (restic --no-lock); only reading commands may run.
+	NoLock bool
 	// Log receives restic's progress output; discarded when nil.
 	Log io.Writer
 }
@@ -93,7 +96,10 @@ func (r *Restic) command(ctx context.Context, args ...string) *exec.Cmd {
 	for _, o := range r.Options {
 		full = append(full, "-o", o)
 	}
-	if r.RetryLock > 0 {
+	switch {
+	case r.NoLock:
+		full = append(full, "--no-lock")
+	case r.RetryLock > 0:
 		full = append(full, "--retry-lock", r.RetryLock.String())
 	}
 	full = append(full, args...)
@@ -303,6 +309,35 @@ func (r *Restic) Snapshots(ctx context.Context, host string, tags ...string) ([]
 		return nil, fmt.Errorf("restic snapshots: %w", err)
 	}
 	return snaps, nil
+}
+
+// Latest returns the newest snapshot of host carrying every tag in tags.
+func (r *Restic) Latest(ctx context.Context, host string, tags ...string) (Snapshot, error) {
+	snaps, err := r.Snapshots(ctx, host, tags...)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if len(snaps) == 0 {
+		what := "the repository has no snapshots"
+		var with []string
+		if host != "" {
+			with = append(with, "host "+host)
+		}
+		if len(tags) > 0 {
+			with = append(with, "tags "+strings.Join(tags, ","))
+		}
+		if len(with) > 0 {
+			what += " with " + strings.Join(with, " and ")
+		}
+		return Snapshot{}, errors.New(what)
+	}
+	latest := snaps[0]
+	for _, s := range snaps[1:] {
+		if s.Time.After(latest.Time) {
+			latest = s
+		}
+	}
+	return latest, nil
 }
 
 // Snapshot returns one snapshot by (short) id.

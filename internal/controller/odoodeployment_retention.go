@@ -102,7 +102,7 @@ func (r *OdooDeploymentReconciler) copyStores(ctx context.Context, od *odoov1.Od
 	var stores []*odoov1.OdooBackupStore
 	var skipped []odoov1.BackupCopy
 	for _, name := range od.Spec.Backup.Stores[1:] {
-		store, err := r.getStore(ctx, od.Namespace, name)
+		store, err := r.getWritableStore(ctx, od.Namespace, name)
 		if err != nil {
 			skipped = append(skipped, odoov1.BackupCopy{Store: name, Error: err.Error()})
 			continue

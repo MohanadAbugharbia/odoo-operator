@@ -123,6 +123,8 @@ type PVCStore struct {
 
 // OdooBackupStoreSpec is where backups are written to and read from.
 // +kubebuilder:validation:XValidation:rule="(has(self.s3) ? 1 : 0) + (has(self.sftp) ? 1 : 0) + (has(self.nfs) ? 1 : 0) + (has(self.pvc) ? 1 : 0) == 1",message="set exactly one of s3, sftp, nfs, pvc"
+// +kubebuilder:validation:XValidation:rule="has(self.encryptionKeySecret) || (has(self.readOnly) && self.readOnly)",message="encryptionKeySecret is required unless the store is readOnly"
+// +kubebuilder:validation:XValidation:rule="!has(self.readOnly) || !self.readOnly || ((!has(self.check) || !has(self.check.schedule) || size(self.check.schedule) == 0) && (!has(self.prune) || !has(self.prune.schedule) || size(self.prune.schedule) == 0))",message="a readOnly store is never checked or pruned"
 type OdooBackupStoreSpec struct {
 	// Format is how backups are kept. restic: one encrypted, deduplicated
 	// repository per OdooDeployment at <path>/<namespace>/<deployment>/.
@@ -140,8 +142,17 @@ type OdooBackupStoreSpec struct {
 
 	// EncryptionKeySecret is the restic password that encrypts every
 	// backup in the store. Without it no backup can be read: keep a copy
-	// outside the cluster.
-	EncryptionKeySecret corev1.SecretKeySelector `json:"encryptionKeySecret"`
+	// outside the cluster. A readOnly store that only holds Odoo zip or
+	// .dump files does not need one.
+	// +kubebuilder:validation:Optional
+	EncryptionKeySecret *corev1.SecretKeySelector `json:"encryptionKeySecret,omitempty"`
+
+	// ReadOnly stores are only read from: OdooRestores and
+	// spec.bootstrap.fromBackup take backups from them, but no backup or
+	// copy is ever written there, they are never checked or pruned, and
+	// their probe only lists the store. Read-only credentials are enough,
+	// and restic reads the repositories without locking them.
+	ReadOnly bool `json:"readOnly,omitempty"`
 
 	// Check reads the store's repositories back on a schedule (restic check)
 	// to find damage before a restore needs them.
@@ -213,7 +224,7 @@ type OdooBackupStoreStatus struct {
 	// ObservedGeneration is the generation the status describes.
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// Ready is true when the last probe could write to, read from and
-	// delete a file in the store.
+	// delete a file in the store (list it, for a readOnly store).
 	// +optional
 	Ready bool `json:"ready"`
 	// LastProbeTime is when the store was last probed.
@@ -253,6 +264,7 @@ type OdooBackupStoreStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Ready",type=boolean,JSONPath=`.status.ready`
 // +kubebuilder:printcolumn:name="Format",type=string,JSONPath=`.spec.format`
+// +kubebuilder:printcolumn:name="ReadOnly",type=boolean,JSONPath=`.spec.readOnly`,priority=1
 // +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].reason`
 // +kubebuilder:printcolumn:name="Check",type=string,JSONPath=`.status.lastCheck.result`
 // +kubebuilder:printcolumn:name="Stored",type=integer,JSONPath=`.status.storedBytes`,priority=1

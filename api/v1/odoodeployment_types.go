@@ -167,6 +167,11 @@ const (
 	// ReasonPreUpgradeBackupFailed: beforeUpgrade is Required and the backup
 	// before the upgrade failed, so the running image keeps serving.
 	ReasonPreUpgradeBackupFailed = "PreUpgradeBackupFailed"
+	// ReasonBootstrapFailed: the OdooRestore of spec.bootstrap.fromBackup
+	// failed; Odoo does not start until it is deleted (which tries again).
+	ReasonBootstrapFailed = "BootstrapFailed"
+	// ReasonStoreReadOnly: a store in spec.backup.stores is readOnly.
+	ReasonStoreReadOnly = "StoreReadOnly"
 	// ReasonJobSuperseded: a Job stuck pulling an image was replaced because
 	// spec.image moved on.
 	ReasonJobSuperseded = "JobSuperseded"
@@ -727,6 +732,38 @@ type OdooDeploymentSpec struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default={}
 	Backup OdooBackupConfig `json:"backup,omitempty"`
+
+	// Bootstrap says how the database is made on first boot. Without it a
+	// new database is initialized with spec.modules.
+	// +kubebuilder:validation:Optional
+	Bootstrap *Bootstrap `json:"bootstrap,omitempty"`
+}
+
+// Bootstrap says how an instance's database is made on first boot.
+type Bootstrap struct {
+	// FromBackup restores a backup instead of initializing a new database:
+	// the way an existing Odoo moves onto the operator, or an instance is
+	// recreated from its backups. It is used once, before Odoo first
+	// starts; later changes are ignored.
+	// +kubebuilder:validation:Optional
+	FromBackup *BootstrapFromBackup `json:"fromBackup,omitempty"`
+}
+
+// BootstrapFromBackup is the backup an instance starts from.
+type BootstrapFromBackup struct {
+	BackupSource `json:",inline"`
+	// Neutralize runs Odoo's neutralize on the restored database before
+	// Odoo first starts on it, and gives it a new database.uuid (see
+	// OdooRestore spec.neutralize). Set it for a copy of production.
+	Neutralize bool `json:"neutralize,omitempty"`
+}
+
+// BootstrapStatus records the restore spec.bootstrap.fromBackup started.
+type BootstrapStatus struct {
+	// Restore is the OdooRestore that restores the backup.
+	Restore string `json:"restore,omitempty"`
+	// Completed is set once it has restored the backup.
+	Completed bool `json:"completed,omitempty"`
 }
 
 // MaintenanceJobStatus records the maintenance Job (init or upgrade) the
@@ -892,6 +929,10 @@ type OdooDeploymentStatus struct {
 	// the pending upgrade. It is cleared once no upgrade is pending.
 	// +kubebuilder:validation:Optional
 	PreUpgradeBackup PreUpgradeBackupStatus `json:"preUpgradeBackup,omitempty"`
+
+	// Bootstrap is the restore spec.bootstrap.fromBackup started.
+	// +kubebuilder:validation:Optional
+	Bootstrap BootstrapStatus `json:"bootstrap,omitempty"`
 
 	// LastMaintenanceDuration is how long the last successful upgrade Job
 	// took, from its creation to its completion. The maintenance page uses it

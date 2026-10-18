@@ -200,7 +200,7 @@ func TestCopies(t *testing.T) {
 }
 
 func storeObject(spec odoov1.OdooBackupStoreSpec) *odoov1.OdooBackupStore {
-	spec.EncryptionKeySecret = corev1.SecretKeySelector{
+	spec.EncryptionKeySecret = &corev1.SecretKeySelector{
 		LocalObjectReference: corev1.LocalObjectReference{Name: "restic-key"}, Key: "password",
 	}
 	return &odoov1.OdooBackupStore{
@@ -426,5 +426,42 @@ func TestProbeReadOnlyFolder(t *testing.T) {
 	}
 	if pr := Probe(context.Background(), ProbeOptions{Target: filepath.Join(t.TempDir(), "absent", "deeper")}); !pr.OK {
 		t.Fatalf("rclone creates missing folders in a writable one: %+v", pr)
+	}
+}
+
+// TestRestoreOdooFileFromEveryStore restores an Odoo backup file from every
+// kind of store, configured as a readOnly store without a key, as the restore
+// Job's load step sees it.
+func TestRestoreOdooFileFromEveryStore(t *testing.T) {
+	if _, err := exec.LookPath("rclone"); err != nil && os.Getenv("TEST_BACKUP_PG_HOST") != "" {
+		t.Fatal("rclone is not on PATH")
+	}
+	x := odooFixtures[1]
+	for _, tc := range storeCases(t) {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			store := tc.store.DeepCopy()
+			store.Spec.ReadOnly, store.Spec.EncryptionKeySecret = true, nil
+			job := emulateJob(t, store, tc.secrets, "")
+			setEnv(t, job.env)
+			if tc.name == "pvc" || tc.name == "nfs" {
+				if err := os.MkdirAll(job.probeTarget, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			dir := "it-" + randomHex(t, 4)
+			src := filepath.Join(fixturesDir(), x.series, "fixture.zip")
+			if _, err := rcloneRun(context.Background(), "", "copyto", src, joinTarget(job.probeTarget, dir+"/shop_2026-10-01.zip")); err != nil {
+				t.Fatal(err)
+			}
+			if pr := Probe(context.Background(), ProbeOptions{Target: job.probeTarget, ReadOnly: true}); !pr.OK {
+				t.Fatalf("read-only probe: %+v", pr)
+			}
+			rr := f.restoreFile(job.probeTarget, dir+"/shop_*.zip", f.nextSuffix())
+			if !rr.OK || rr.File != dir+"/shop_2026-10-01.zip" {
+				t.Fatalf("restore through %s: %+v", tc.name, rr)
+			}
+			f.assertOdooFixture(x, true)
+		})
 	}
 }

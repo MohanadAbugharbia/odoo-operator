@@ -3,7 +3,9 @@
 An `OdooBackupStore` says where backups go. Every store holds encrypted
 [restic](https://restic.net/) repositories, one per instance under
 `<path>/<namespace>/<deployment>/`, encrypted with the key in
-`encryptionKeySecret`.
+`encryptionKeySecret`. A [read-only store](#read-only-stores) is where
+backups are only read from, such as Odoo backup files to start an instance
+from.
 
 !!! warning "Keep the encryption key"
     Keep a copy of the key in `encryptionKeySecret` outside the cluster:
@@ -49,6 +51,36 @@ kubectl -n shop create secret generic my-odoo-sftp \
 
 Check the scanned key against the one the server's provider shows before you
 trust it.
+
+## Read-only stores
+
+`readOnly: true` makes a store the operator only reads: restores and
+[bootstraps](start-from-a-backup.md) take backups from it with `from`, and
+nothing is ever written to it. Use it for the backups of another instance or
+cluster, or for a folder or bucket of Odoo backup files:
+
+```yaml
+apiVersion: odoo.abugharbia.com/v1
+kind: OdooBackupStore
+metadata:
+  name: imports
+  namespace: shop
+spec:
+  s3:
+    endpoint: https://s3.example.com
+    bucket: odoo-exports
+    credentialsSecret: { name: s3-readonly-credentials }
+  readOnly: true
+```
+
+- Its probe only lists the store, so read-only credentials are enough.
+- Restic reads it without locks (`--no-lock`), which works on read-only
+  credentials and never blocks the instance that writes the repository.
+- `encryptionKeySecret` is optional: a store without one holds only backup
+  files (`.zip` and `.dump`), and a restore of a restic repository from it is
+  refused.
+- It cannot be in `spec.backup.stores` (backups to it fail), and it is never
+  [checked or pruned](store-check-prune.md).
 
 ## Probes
 

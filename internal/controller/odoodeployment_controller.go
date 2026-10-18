@@ -398,6 +398,14 @@ func (r *OdooDeploymentReconciler) reconcileNormal(ctx context.Context, s *recon
 		}
 	}
 
+	// spec.bootstrap.fromBackup: the first database comes from a backup.
+	if needsBootstrap(od) {
+		result, proceed, err := r.bootstrap(ctx, s, work, configHash)
+		if err != nil || !proceed {
+			return result, err
+		}
+	}
+
 	// A restore goes before everything else: it is how a failed upgrade is
 	// undone. It waits for a running init or upgrade Job but replaces a
 	// failed one.

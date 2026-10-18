@@ -29,6 +29,7 @@ for a in "$@"; do
   if [ -z "$sub" ]; then
     if [ "$skip" = 1 ]; then skip=0
     elif [ "$a" = "-o" ] || [ "$a" = "--retry-lock" ]; then skip=1
+    elif [ "$a" = "--no-lock" ]; then :
     else sub="$a"; fi
   fi
   prev="$a"

@@ -288,6 +288,80 @@ spec:
                 - message: spec.backup.beforeUpgrade needs spec.backup.stores
                   rule: '!has(self.beforeUpgrade) || self.beforeUpgrade == ''Off''
                     || (has(self.stores) && size(self.stores) > 0)'
+              bootstrap:
+                description: |-
+                  Bootstrap says how the database is made on first boot. Without it a
+                  new database is initialized with spec.modules.
+                properties:
+                  fromBackup:
+                    description: |-
+                      FromBackup restores a backup instead of initializing a new database:
+                      the way an existing Odoo moves onto the operator, or an instance is
+                      recreated from its backups. It is used once, before Odoo first
+                      starts; later changes are ignored.
+                    properties:
+                      host:
+                        description: |-
+                          Host picks latest among the snapshots of one restic --host, such as
+                          <namespace>/<name> for the operator's own snapshots.
+                        maxLength: 253
+                        type: string
+                      neutralize:
+                        description: |-
+                          Neutralize runs Odoo's neutralize on the restored database before
+                          Odoo first starts on it, and gives it a new database.uuid (see
+                          OdooRestore spec.neutralize). Set it for a copy of production.
+                        type: boolean
+                      path:
+                        description: |-
+                          Path inside the store, below its path (or subPath). A path ending in
+                          .zip or .dump is an Odoo backup file; its last segment may be a
+                          pattern (*, ?, [a-z]), and the match whose name sorts last, the
+                          newest for dated names, is restored. Any other path is a restic
+                          repository folder; empty is this instance's own repository
+                          (<namespace>/<name>).
+                        maxLength: 512
+                        pattern: ^([A-Za-z0-9._~+@=-]+/)*[A-Za-z0-9._~+@=*?\[\]-]+$
+                        type: string
+                        x-kubernetes-validations:
+                        - message: path segments cannot be . or ..
+                          rule: '!self.split(''/'').exists(s, s == ''..'' || s ==
+                            ''.'')'
+                      snapshot:
+                        description: |-
+                          Snapshot in a restic repository: its ID, or latest (default) for the
+                          newest snapshot with Host and Tags.
+                        pattern: ^(latest|[0-9a-f]{8,64})$
+                        type: string
+                      store:
+                        description: Store is the OdooBackupStore that holds the backup.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                      tags:
+                        description: |-
+                          Tags picks latest among the snapshots that have all these restic
+                          tags, such as deployment=<namespace>/<name>.
+                        items:
+                          maxLength: 253
+                          type: string
+                        maxItems: 10
+                        type: array
+                        x-kubernetes-list-type: atomic
+                    required:
+                    - store
+                    type: object
+                    x-kubernetes-validations:
+                    - message: snapshot, host and tags are for restic repositories,
+                        not for .zip or .dump files
+                      rule: '!has(self.path) || !(self.path.endsWith(''.zip'') ||
+                        self.path.endsWith(''.dump'')) || (!has(self.snapshot) &&
+                        !has(self.host) && !has(self.tags))'
+                    - message: only a .zip or .dump path may be a pattern
+                      rule: '!has(self.path) || self.path.endsWith(''.zip'') || self.path.endsWith(''.dump'')
+                        || !(self.path.contains(''*'') || self.path.contains(''?'')
+                        || self.path.contains(''[''))'
+                type: object
               config:
                 default: {}
                 description: The configuration for the Odoo
@@ -1907,6 +1981,16 @@ spec:
                       for.
                     type: string
                   timeZone:
+                    type: string
+                type: object
+              bootstrap:
+                description: Bootstrap is the restore spec.bootstrap.fromBackup started.
+                properties:
+                  completed:
+                    description: Completed is set once it has restored the backup.
+                    type: boolean
+                  restore:
+                    description: Restore is the OdooRestore that restores the backup.
                     type: string
                 type: object
               conditions:

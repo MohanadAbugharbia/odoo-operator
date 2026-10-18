@@ -10,20 +10,14 @@ cluster. You need:
 - the instance's old **namespace** and **name**;
 - [restic](https://restic.net/) on a workstation, to list the backups.
 
-!!! warning "Rehearse it"
-    This procedure follows how the operator finds and restores backups, but
-    the restore onto a never-initialised instance it relies on is not covered
-    by the operator's end-to-end tests yet. Try it on a scratch cluster
-    before you depend on it.
-
-## Why the name matters
+## Where the backups are
 
 An instance's repository in a store is at `<path>/<namespace>/<name>/`: the
 store's path, then the OdooDeployment's namespace and `metadata.name`. The
-operator finds the backups only if the new instance has the **same namespace
-and name** and uses a store with the same location (bucket and path, server
-and path, export, or volume and `subPath`) and the same key. The store's own
-name may differ. Restoring into another namespace or name is not supported.
+new instance names that repository in `spec.bootstrap.fromBackup`, so it can
+have another namespace or name than the old one. Keep them the same anyway
+if you can: the new instance then also writes its own backups to that
+repository, beside the old ones.
 
 ## 1. List the backups
 
@@ -72,59 +66,61 @@ Then the `OdooBackupStore`, with the same bucket and `path` as before (the
 manifest from [Set up production backups](production-backups.md#2-create-the-stores)),
 and wait until it is `Ready`.
 
-## 3. Create the restore first
+## 3. Create the instance
 
-Create the OdooRestore **before** the instance. It waits, `Pending`, until
-the instance exists, and then runs before the instance's init Job would
-install anything:
+Create the `OdooDeployment` as it was, starting from the backup:
 
 ```yaml
-apiVersion: odoo.abugharbia.com/v1
-kind: OdooRestore
-metadata:
-  name: recover
-  namespace: shop
 spec:
-  odooDeployment: my-odoo
-  snapshotID: <snapshot-id>      # a unique prefix is enough
+  image: odoo:18.0-20261015        # the backup's operator.image
+  upgrade:
+    token: ""                      # the backup's operator.upgradeToken
+  bootstrap:
+    fromBackup:
+      store: offsite               # the recreated store
+      path: shop/my-odoo           # the old instance's repository
+      snapshot: <snapshot-id>      # or leave it out for the newest
+  backup:
+    stores: [offsite]
+    retention: { keepAll: true }   # for now, see step 5
+  # …the rest as before
 ```
 
-## 4. Create the instance
+Check these points:
 
-Create the `OdooDeployment` as it was, with these points checked:
-
-- `metadata.name: my-odoo` and namespace `shop`, as before;
 - `spec.database.createPolicy: IfNotExists` (the default): the operator
   creates an empty database for the restore to replace. With `Never` and no
-  database the instance stops at `DatabaseMissing` and the restore never
+  database the instance stops at `DatabaseMissing` and the bootstrap never
   runs;
-- `spec.backup.stores` lists the recreated store **first**: a restore by
-  snapshot ID reads only the first store;
 - `spec.image` and `spec.upgrade.token` set to the backup's
   `operator.image` and `operator.upgradeToken`, so no upgrade follows the
   restore;
 - `spec.modules` limited to modules the backup has; any others are installed
   after the restore;
-- for now, no `spec.backup.schedule`, and `spec.backup.retention.keepAll: true`
-  (see step 6).
+- for now, no `spec.backup.schedule`.
 
-The operator creates the filestore volume and an empty database, runs the
-restore, and starts Odoo on the backup's image:
+The operator creates the filestore volume and an empty database, then the
+OdooRestore `<name>-bootstrap` instead of the init Job, and starts Odoo on
+the backup's image once it completed:
 
 ```sh
-kubectl -n shop get odoorestore recover -w
+kubectl -n shop get odoorestore my-odoo-bootstrap -w
 kubectl -n shop get odoodeployment my-odoo
 ```
 
-The restore ends `Completed`; any warnings are in `status.warnings`. The empty database it replaced is kept as
-`<db>_prev_<suffix>` for `keepPrevious`, then deleted.
+The restore ends `Completed`; any warnings are in `status.warnings`. If it
+fails, the instance is `Degraded` (`BootstrapFailed`) and Odoo does not
+start; fix the cause and delete the OdooRestore to retry (see
+[Start an instance from a backup](start-from-a-backup.md#when-the-bootstrap-fails)).
+The empty database it replaced is kept as `<db>_prev_<suffix>` for
+`keepPrevious`, then deleted.
 
-## 5. Check Odoo
+## 4. Check Odoo
 
 Log in, check recent records and attachments, and only then point users and
 the Ingress at the new instance.
 
-## 6. Turn backups back on
+## 5. Turn backups back on
 
 Set the schedule again. Before you remove `keepAll`, know that retention on
 the new instance applies to the old snapshots too: they carry the same host
@@ -134,6 +130,7 @@ no longer need them.
 
 ## Restoring from a copy
 
-If the first store is lost too, restore from a copy: list the copy's store
-first in `spec.backup.stores` and use the snapshot ID **in that store**
-(`restic snapshots` against the copy's repository; a copy has its own ID).
+If the first store is lost too, start from a copy: name the copy's store in
+`fromBackup.store`, and the snapshot ID **in that store** (`restic snapshots`
+against the copy's repository; a copy has its own ID), or no snapshot for
+the newest.

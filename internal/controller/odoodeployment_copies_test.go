@@ -24,7 +24,7 @@ func (h *backupHarness) secondStore() string {
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: odoov1.OdooBackupStoreSpec{
 			PVC: &odoov1.PVCStore{ClaimName: "offsite"},
-			EncryptionKeySecret: corev1.SecretKeySelector{
+			EncryptionKeySecret: &corev1.SecretKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: key.Name}, Key: "password",
 			},
 		},

@@ -338,6 +338,22 @@ func (r *OdooDeploymentReconciler) getStore(ctx context.Context, namespace, name
 	return store, nil
 }
 
+// errStoreReadOnly: a backup was to be written to a readOnly store.
+var errStoreReadOnly = errors.New("is readOnly")
+
+// getWritableStore is getStore for a store backups are written to.
+func (r *OdooDeploymentReconciler) getWritableStore(ctx context.Context, namespace, name string) (*odoov1.OdooBackupStore, error) {
+	store, err := r.getStore(ctx, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	if store.Spec.ReadOnly {
+		return nil, fmt.Errorf("OdooBackupStore %s %w: backups are only read from it; "+
+			"remove it from spec.backup.stores", name, errStoreReadOnly)
+	}
+	return store, nil
+}
+
 // checkStoreSecrets checks the Secrets a store names.
 func checkStoreSecrets(ctx context.Context, c client.Reader, store *odoov1.OdooBackupStore) error {
 	for name, keys := range jobspec.StoreSecrets(store) {
@@ -636,7 +652,10 @@ func (r *OdooDeploymentReconciler) abandonOperation(ctx context.Context, s *reco
 // stopOdoo scales the Deployment to zero and reports whether its pods are gone.
 func (r *OdooDeploymentReconciler) stopOdoo(ctx context.Context, s *reconcileState, configHash string) (bool, error) {
 	od := s.od
-	if _, err := reconcileloops.EnsureDeployment(ctx, r.Client, r.Scheme, od, od.Status.AppliedImage, 0, configHash); err != nil {
+	// Before the first boot (a bootstrap restore) no image was applied yet;
+	// at zero replicas the image is only a placeholder.
+	image := orDefault(od.Status.AppliedImage, od.Spec.Image)
+	if _, err := reconcileloops.EnsureDeployment(ctx, r.Client, r.Scheme, od, image, 0, configHash); err != nil {
 		return false, err
 	}
 	running, err := r.countPods(ctx, od.Namespace, od.GetServiceSelectorLabels())
@@ -665,7 +684,10 @@ func (r *OdooDeploymentReconciler) startBackup(ctx context.Context, s *reconcile
 	if len(od.Spec.Backup.Stores) == 0 {
 		return fail(fmt.Sprintf("OdooDeployment %s has no spec.backup.stores", od.Name))
 	}
-	if _, err := r.getStore(ctx, od.Namespace, od.Spec.Backup.Stores[0]); err != nil {
+	if _, err := r.getWritableStore(ctx, od.Namespace, od.Spec.Backup.Stores[0]); err != nil {
+		if errors.Is(err, errStoreReadOnly) {
+			r.event(od, corev1.EventTypeWarning, odoov1.ReasonStoreReadOnly, err.Error())
+		}
 		return fail(err.Error())
 	}
 	// A backup before an upgrade always stops Odoo: the upgrade stops it
@@ -716,7 +738,7 @@ func (r *OdooDeploymentReconciler) driveBackup(ctx context.Context, s *reconcile
 				return ctrl.Result{RequeueAfter: 10 * time.Second}, false, nil
 			}
 		}
-		store, err := r.getStore(ctx, od.Namespace, od.Spec.Backup.Stores[0])
+		store, err := r.getWritableStore(ctx, od.Namespace, od.Spec.Backup.Stores[0])
 		if err != nil {
 			return r.finishBackupFailed(ctx, s, b, err.Error())
 		}
@@ -928,6 +950,14 @@ func (r *OdooDeploymentReconciler) finishBackupFailed(ctx context.Context, s *re
 type restoreSource struct {
 	store    *odoov1.OdooBackupStore
 	snapshot string
+	// host and tags pick the newest snapshot when snapshot is "latest".
+	host string
+	tags []string
+	// repository is the restic repository folder in store; empty is the
+	// instance's own.
+	repository string
+	// file is an Odoo backup file in store, restored instead of a snapshot.
+	file string
 	// undo is the restore being undone.
 	undo *odoov1.OdooRestore
 }
@@ -967,6 +997,8 @@ func (r *OdooDeploymentReconciler) resolveRestore(ctx context.Context, od *odoov
 			return src, err.Error(), nil
 		}
 		return restoreSource{store: store, snapshot: spec.SnapshotID}, "", nil
+	case spec.From != nil:
+		return r.fromSource(ctx, od, spec.From)
 	case spec.Undo != "":
 		target := w.restore(spec.Undo)
 		switch {
@@ -991,7 +1023,26 @@ func (r *OdooDeploymentReconciler) resolveRestore(ctx context.Context, od *odoov
 		}
 		return restoreSource{undo: target}, "", nil
 	}
-	return src, "set one of backup, snapshotID, undo", nil
+	return src, "set one of backup, snapshotID, from, undo", nil
+}
+
+// fromSource finds the source of a restore from spec.from: a file or a
+// restic repository in any store, written by anyone.
+func (r *OdooDeploymentReconciler) fromSource(ctx context.Context, od *odoov1.OdooDeployment,
+	from *odoov1.BackupSource) (src restoreSource, refusal string, err error) {
+	store, err := r.getStore(ctx, od.Namespace, from.Store)
+	if err != nil {
+		return src, err.Error(), nil
+	}
+	if from.IsFile() {
+		return restoreSource{store: store, file: from.Path}, "", nil
+	}
+	if store.Spec.EncryptionKeySecret == nil {
+		return src, fmt.Sprintf("OdooBackupStore %s has no encryptionKeySecret, so it can only hold backup files "+
+			"(a path ending in .zip or .dump), not the restic repository %s", store.Name, from.Path), nil
+	}
+	return restoreSource{store: store, repository: from.Path, snapshot: from.SnapshotValue(),
+		host: from.Host, tags: from.Tags}, "", nil
 }
 
 // backupSource finds where a finished backup can be read from: the store it
@@ -1157,12 +1208,21 @@ func (r *OdooDeploymentReconciler) driveRestore(ctx context.Context, s *reconcil
 			s.degraded(ReasonBackupImageUnknown, err.Error())
 			return ctrl.Result{RequeueAfter: time.Minute}, false, nil
 		}
-		undoSuffix := ""
+		jobSrc := jobspec.RestoreSource{
+			Snapshot: src.snapshot, Host: src.host, Tags: src.tags,
+			Repository: src.repository, File: src.file, Neutralize: rs.Spec.Neutralize,
+		}
 		if src.undo != nil {
-			undoSuffix = src.undo.Status.Suffix
+			jobSrc.UndoSuffix = src.undo.Status.Suffix
+		}
+		if rs.Spec.From != nil || rs.Spec.Neutralize {
+			// A backup from elsewhere records no image to compare with, so
+			// the instance's own Odoo reports the version it will run;
+			// it is also the Odoo that neutralizes.
+			jobSrc.OdooImage = orDefault(od.Status.AppliedImage, od.Spec.Image)
 		}
 		attempt := rs.Status.Attempts + 1
-		job, err := jobspec.RestoreJob(params, rs, rs.Status.Suffix, src.snapshot, undoSuffix, od.Spec.Modules, attempt)
+		job, err := jobspec.RestoreJob(params, rs, rs.Status.Suffix, jobSrc, od.Spec.Modules, attempt)
 		if err != nil {
 			return r.finishRestoreFailed(ctx, s, rs, err.Error())
 		}
@@ -1185,6 +1245,7 @@ func (r *OdooDeploymentReconciler) driveRestore(ctx context.Context, s *reconcil
 				st.Store = src.store.Name
 			}
 			st.SnapshotID = src.snapshot
+			st.File = src.file
 		})
 		if err != nil {
 			return ctrl.Result{}, false, err
@@ -1280,6 +1341,12 @@ func (r *OdooDeploymentReconciler) finishRestore(ctx context.Context, s *reconci
 		st.LiveChanged = true
 		st.RetryAfter = nil
 		st.Warnings = res.Warnings
+		if res.SnapshotID != "" {
+			st.SnapshotID = res.SnapshotID
+		}
+		if res.File != "" {
+			st.File = res.File
+		}
 		if res.PreviousKept {
 			until := metav1.NewTime(now.Add(keep))
 			st.Previous.State = odoov1.PreviousKept
@@ -1296,8 +1363,22 @@ func (r *OdooDeploymentReconciler) finishRestore(ctx context.Context, s *reconci
 	if image != "" {
 		od.Status.AppliedImage = image
 	}
+	if image == "" && rs.Spec.From != nil {
+		// A backup from elsewhere records neither: the data now runs on
+		// this instance's image and counts as upgraded for its token.
+		token = od.Spec.Upgrade.Token
+	}
 	od.Status.AppliedUpgradeToken = token
-	od.Status.InitModulesInstalled = utils.Difference(od.Spec.Modules, res.MissingModules)
+	installed := utils.Difference(od.Spec.Modules, res.MissingModules)
+	if len(installed) == 0 {
+		// The data is an initialized Odoo database whatever spec.modules
+		// lists, so the next reconcile must not take it for a first boot.
+		installed = []string{"base"}
+	}
+	od.Status.InitModulesInstalled = installed
+	if rs.Name == od.Status.Bootstrap.Restore {
+		od.Status.Bootstrap.Completed = true
+	}
 	od.Status.CurrentOperation = odoov1.OperationStatus{}
 	r.objectEvent(rs, corev1.EventTypeNormal, ReasonRestoreCompleted, msg)
 	r.event(od, corev1.EventTypeNormal, ReasonRestoreCompleted, "OdooRestore "+rs.Name+": "+msg)
