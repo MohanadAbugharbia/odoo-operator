@@ -62,6 +62,9 @@ const (
 	ConditionInitialized   = "Initialized"
 	// ConditionDegraded is True only when something is wrong.
 	ConditionDegraded = "Degraded"
+	// ConditionBackupSchedule is True while spec.backup.schedule or the
+	// drill schedule is set and valid, False when one cannot be read.
+	ConditionBackupSchedule = "BackupSchedule"
 )
 
 // Phases.
@@ -486,15 +489,84 @@ type OdooRestoreConfig struct {
 	KeepPrevious *metav1.Duration `json:"keepPrevious,omitempty"`
 }
 
+// OdooBackupRetention says which backups are kept. Each kind of backup
+// (scheduled, manual) is thinned on its own, with restic's keep rules: daily: 7
+// keeps the newest backup of each of the last 7 days that have one. A backup
+// kept by any rule stays. Unset fields take the defaults below.
+type OdooBackupRetention struct {
+	// Last keeps the newest N backups.
+	// +kubebuilder:validation:Minimum=0
+	Last *int32 `json:"last,omitempty"`
+	// Hourly keeps the newest backup of each of the last N hours that have one.
+	// +kubebuilder:validation:Minimum=0
+	Hourly *int32 `json:"hourly,omitempty"`
+	// Daily keeps the newest backup of each of the last N days that have one.
+	// +kubebuilder:default=7
+	// +kubebuilder:validation:Minimum=0
+	Daily *int32 `json:"daily,omitempty"`
+	// Weekly keeps the newest backup of each of the last N weeks that have one.
+	// +kubebuilder:default=4
+	// +kubebuilder:validation:Minimum=0
+	Weekly *int32 `json:"weekly,omitempty"`
+	// Monthly keeps the newest backup of each of the last N months that have one.
+	// +kubebuilder:default=12
+	// +kubebuilder:validation:Minimum=0
+	Monthly *int32 `json:"monthly,omitempty"`
+	// Yearly keeps the newest backup of each of the last N years that have one.
+	// +kubebuilder:validation:Minimum=0
+	Yearly *int32 `json:"yearly,omitempty"`
+	// Within keeps every backup newer than this, counted from the newest
+	// backup, such as 30d, 2w or 1y6m (restic's duration format).
+	// +kubebuilder:validation:Pattern=`^([0-9]+[ymwdh])*$`
+	Within string `json:"within,omitempty"`
+	// Manual keeps the newest N manual backups; 0 keeps them all.
+	// +kubebuilder:validation:Minimum=0
+	Manual *int32 `json:"manual,omitempty"`
+	// KeepAll turns retention off: no backup is ever deleted.
+	KeepAll bool `json:"keepAll,omitempty"`
+}
+
+// OdooBackupDrill restores the newest backup on a schedule to prove it can
+// be restored, without touching the running instance.
+type OdooBackupDrill struct {
+	// Schedule in cron format, in spec.backup.timeZone; empty turns drills off.
+	// +kubebuilder:validation:MaxLength=100
+	Schedule string `json:"schedule,omitempty"`
+}
+
 // OdooBackupConfig turns on backups of this instance.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.schedule) || self.schedule == '' || (has(self.stores) && size(self.stores) > 0)",message="spec.backup.schedule needs spec.backup.stores"
+// +kubebuilder:validation:XValidation:rule="!has(self.drill) || !has(self.drill.schedule) || self.drill.schedule == '' || (has(self.stores) && size(self.stores) > 0)",message="spec.backup.drill.schedule needs spec.backup.stores"
 type OdooBackupConfig struct {
 	// Stores are OdooBackupStores in this namespace. Backups are written to
 	// the first; the instance's repository is <path>/<namespace>/<name>/
-	// inside it.
-	// +kubebuilder:validation:MaxItems=1
+	// inside it. Each backup is then copied to the other stores.
+	// +kubebuilder:validation:MaxItems=4
 	// +kubebuilder:validation:items:MinLength=1
+	// +kubebuilder:validation:XValidation:rule="self.all(x, self.exists_one(y, y == x))",message="spec.backup.stores must not repeat a store"
 	// +listType=atomic
 	Stores []string `json:"stores,omitempty"`
+
+	// Schedule takes a backup on a cron schedule ("0 3 * * *" or @daily), in
+	// TimeZone. Empty (the default) takes no scheduled backups. A schedule
+	// missed while the operator was down runs once when it is back.
+	// +kubebuilder:validation:MaxLength=100
+	Schedule string `json:"schedule,omitempty"`
+
+	// TimeZone of Schedule, the drill schedule and the retention rules, as an
+	// IANA name such as Europe/Berlin.
+	// +kubebuilder:default=UTC
+	// +kubebuilder:validation:MaxLength=100
+	TimeZone string `json:"timeZone,omitempty"`
+
+	// Retention says which backups are kept after each backup.
+	// +kubebuilder:default={}
+	Retention OdooBackupRetention `json:"retention,omitempty"`
+
+	// Drill restores the newest backup on a schedule to prove it works.
+	// +kubebuilder:validation:Optional
+	Drill OdooBackupDrill `json:"drill,omitempty"`
 
 	// Consistency: Online (default) backs up while Odoo keeps serving;
 	// Offline stops Odoo for the backup.
@@ -639,14 +711,16 @@ const (
 	OperationRestore = "restore"
 	// OperationCleanup deletes the data an OdooRestore replaced.
 	OperationCleanup = "cleanup"
+	// OperationDrill restores the newest backup into scratch space and checks it.
+	OperationDrill = "drill"
 )
 
 // OperationStatus records the backup, restore or cleanup Job an instance is
 // running. Only one Job (init, upgrade, backup, restore or cleanup) runs per
 // instance at a time.
 type OperationStatus struct {
-	// Kind: backup, restore or cleanup.
-	// +kubebuilder:validation:Enum=backup;restore;cleanup
+	// Kind: backup, restore, cleanup or drill.
+	// +kubebuilder:validation:Enum=backup;restore;cleanup;drill
 	Kind string `json:"kind,omitempty"`
 	// Name of the OdooBackup or OdooRestore.
 	Name string `json:"name,omitempty"`
@@ -657,6 +731,45 @@ type OperationStatus struct {
 	StoppedOdoo bool `json:"stoppedOdoo,omitempty"`
 	// StartedAt is when the operation started.
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`
+}
+
+// OdooBackupScheduleStatus reports the backup schedule and the last drill.
+type OdooBackupScheduleStatus struct {
+	// LastScheduleTime is the latest scheduled time the operator has handled,
+	// whether it took a backup then or skipped it.
+	LastScheduleTime *metav1.Time `json:"lastScheduleTime,omitempty"`
+	// NextScheduleTime is when the next scheduled backup is due.
+	NextScheduleTime *metav1.Time `json:"nextScheduleTime,omitempty"`
+	// Schedule and TimeZone the times above were computed for.
+	Schedule string `json:"schedule,omitempty"`
+	TimeZone string `json:"timeZone,omitempty"`
+
+	// LastDrillScheduleTime is the latest drill time the operator has handled.
+	LastDrillScheduleTime *metav1.Time `json:"lastDrillScheduleTime,omitempty"`
+	// NextDrillTime is when the next drill is due.
+	NextDrillTime *metav1.Time `json:"nextDrillTime,omitempty"`
+	// DrillSchedule the drill times above were computed for.
+	DrillSchedule string `json:"drillSchedule,omitempty"`
+	// LastDrill is the result of the latest restore drill.
+	LastDrill *OdooDrillResult `json:"lastDrill,omitempty"`
+}
+
+// OdooDrillResult is the outcome of one restore drill.
+type OdooDrillResult struct {
+	// Backup is the OdooBackup the drill restored.
+	Backup string `json:"backup,omitempty"`
+	// SnapshotID is the snapshot the drill restored.
+	SnapshotID string `json:"snapshotID,omitempty"`
+	// Succeeded is true when the backup restored, passed every check and
+	// Odoo loaded it.
+	Succeeded bool `json:"succeeded"`
+	// Message explains a failure, or sums up a success.
+	Message string `json:"message,omitempty"`
+	// StartedAt and CompletedAt bound the drill.
+	StartedAt   *metav1.Time `json:"startedAt,omitempty"`
+	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
+	// Job ran the drill; a failed drill's Job is kept for its log.
+	Job string `json:"job,omitempty"`
 }
 
 // OdooDatabaseStatus records the database the operator resolved for this OdooDeployment.
@@ -720,6 +833,10 @@ type OdooDeploymentStatus struct {
 	// CurrentOperation is the backup, restore or cleanup in progress.
 	// +kubebuilder:validation:Optional
 	CurrentOperation OperationStatus `json:"currentOperation,omitempty"`
+
+	// Backup reports the backup schedule and the last restore drill.
+	// +kubebuilder:validation:Optional
+	Backup OdooBackupScheduleStatus `json:"backup,omitempty"`
 
 	// LastMaintenanceDuration is how long the last successful upgrade Job
 	// took, from its creation to its completion. The maintenance page uses it

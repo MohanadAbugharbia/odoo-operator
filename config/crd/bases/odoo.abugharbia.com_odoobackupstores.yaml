@@ -24,6 +24,13 @@ spec:
     - jsonPath: .status.conditions[?(@.type=="Ready")].reason
       name: Reason
       type: string
+    - jsonPath: .status.lastCheck.result
+      name: Check
+      type: string
+    - jsonPath: .status.storedBytes
+      name: Stored
+      priority: 1
+      type: integer
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -56,6 +63,28 @@ spec:
             description: OdooBackupStoreSpec is where backups are written to and read
               from.
             properties:
+              check:
+                description: |-
+                  Check reads the store's repositories back on a schedule (restic check)
+                  to find damage before a restore needs them.
+                properties:
+                  readDataParts:
+                    default: 7
+                    description: |-
+                      ReadDataParts: each check reads one of this many parts of the stored
+                      data, the next part on the next run, so all data is read every
+                      ReadDataParts checks. 1 reads everything every time; 0 reads only the
+                      repository structure.
+                    format: int32
+                    maximum: 100
+                    minimum: 0
+                    type: integer
+                  schedule:
+                    description: Schedule in cron format ("0 5 * * 0" or @weekly);
+                      empty turns checks off.
+                    maxLength: 100
+                    type: string
+                type: object
               encryptionKeySecret:
                 description: |-
                   EncryptionKeySecret is the restic password that encrypts every
@@ -106,6 +135,17 @@ spec:
                 - path
                 - server
                 type: object
+              prune:
+                description: |-
+                  Prune frees the space of the backups retention has removed, on a
+                  schedule (restic prune).
+                properties:
+                  schedule:
+                    description: Schedule in cron format ("0 4 * * 0" or @weekly);
+                      empty turns it off.
+                    maxLength: 100
+                    type: string
+                type: object
               pvc:
                 description: PVC stores backups on a PersistentVolumeClaim.
                 properties:
@@ -126,7 +166,8 @@ spec:
                 - claimName
                 type: object
               resources:
-                description: Resources of the Jobs that probe the store.
+                description: Resources of the Jobs that probe, check and prune the
+                  store.
                 properties:
                   claims:
                     description: |-
@@ -285,6 +326,12 @@ spec:
                 - sshSecret
                 - user
                 type: object
+              timeZone:
+                default: UTC
+                description: TimeZone of the check and prune schedules, as an IANA
+                  name.
+                maxLength: 100
+                type: string
             required:
             - encryptionKeySecret
             type: object
@@ -295,6 +342,11 @@ spec:
           status:
             description: OdooBackupStoreStatus reports whether the store can be reached.
             properties:
+              checkRuns:
+                description: CheckRuns counts checks, to pick the part of the data
+                  the next reads.
+                format: int32
+                type: integer
               conditions:
                 description: 'Conditions: Ready.'
                 items:
@@ -355,8 +407,85 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              lastCheck:
+                description: LastCheck and LastPrune are the outcomes of the latest
+                  check and prune.
+                properties:
+                  job:
+                    description: Job that ran it; a failed task's Job is kept for
+                      its log.
+                    type: string
+                  message:
+                    description: Message sums up the outcome, or names what failed.
+                    type: string
+                  part:
+                    description: Part is the part of the data a check read, such as
+                      3/7.
+                    type: string
+                  repositories:
+                    description: Repositories the task went through.
+                    items:
+                      type: string
+                    type: array
+                  result:
+                    description: 'Result: Passed or Failed.'
+                    enum:
+                    - Passed
+                    - Failed
+                    type: string
+                  time:
+                    description: Time the task finished.
+                    format: date-time
+                    type: string
+                type: object
+              lastCheckScheduleTime:
+                description: |-
+                  LastCheckScheduleTime and LastPruneScheduleTime are the latest
+                  scheduled times handled; NextCheckTime and NextPruneTime the next ones.
+                format: date-time
+                type: string
               lastProbeTime:
                 description: LastProbeTime is when the store was last probed.
+                format: date-time
+                type: string
+              lastPrune:
+                description: StoreTaskStatus is the outcome of the latest check or
+                  prune of a store.
+                properties:
+                  job:
+                    description: Job that ran it; a failed task's Job is kept for
+                      its log.
+                    type: string
+                  message:
+                    description: Message sums up the outcome, or names what failed.
+                    type: string
+                  part:
+                    description: Part is the part of the data a check read, such as
+                      3/7.
+                    type: string
+                  repositories:
+                    description: Repositories the task went through.
+                    items:
+                      type: string
+                    type: array
+                  result:
+                    description: 'Result: Passed or Failed.'
+                    enum:
+                    - Passed
+                    - Failed
+                    type: string
+                  time:
+                    description: Time the task finished.
+                    format: date-time
+                    type: string
+                type: object
+              lastPruneScheduleTime:
+                format: date-time
+                type: string
+              nextCheckTime:
+                format: date-time
+                type: string
+              nextPruneTime:
                 format: date-time
                 type: string
               observedGeneration:
@@ -375,6 +504,25 @@ spec:
                   Ready is true when the last probe could write to, read from and
                   delete a file in the store.
                 type: boolean
+              repositories:
+                description: |-
+                  Repositories is how many instance repositories the latest task saw,
+                  StoredBytes how much they hold together.
+                format: int32
+                type: integer
+              scheduleKey:
+                description: 'Schedules the times above were computed for: check,
+                  prune and time zone.'
+                type: string
+              storedBytes:
+                format: int64
+                type: integer
+              taskJob:
+                description: TaskJob is the check or prune Job running right now;
+                  TaskKind says which.
+                type: string
+              taskKind:
+                type: string
             type: object
         type: object
     served: true

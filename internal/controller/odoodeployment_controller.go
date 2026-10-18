@@ -74,6 +74,8 @@ type OdooDeploymentReconciler struct {
 	BackupImage string
 	// Version is the operator's version, recorded in every backup.
 	Version string
+	// Now is the clock of backup schedules; time.Now when nil.
+	Now func() time.Time
 
 	imageMu sync.Mutex
 }
@@ -121,6 +123,9 @@ type reconcileState struct {
 	od    *odoov1.OdooDeployment
 	base  *odoov1.OdooDeployment
 	start odoov1.OdooDeploymentStatus
+	// wake is when the reconcile must run again at the latest whatever it
+	// returns, such as for the next scheduled backup; zero for no limit.
+	wake time.Duration
 }
 
 // patchStatus writes status changes made so far as a merge patch on the
@@ -285,6 +290,9 @@ func (r *OdooDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			err = utilerrors.NewAggregate([]error{err, pubErr})
 		}
 		s.countDegradedTransitions()
+		if err == nil && s.wake > 0 && (result.RequeueAfter == 0 || s.wake < result.RequeueAfter) {
+			result.RequeueAfter = s.wake
+		}
 	}()
 
 	if !od.DeletionTimestamp.IsZero() {
@@ -362,6 +370,21 @@ func (r *OdooDeploymentReconciler) reconcileNormal(ctx context.Context, s *recon
 	}
 	if err := r.releaseFinishedRestores(ctx, work); err != nil {
 		return s.fail(odoov1.ReasonReconcileFailed, err)
+	}
+
+	// Scheduled backups start once the instance is initialized, and are
+	// created even while another operation runs: they wait in the queue.
+	if len(od.Status.InitModulesInstalled) > 0 {
+		wait, created, err := r.scheduleBackups(ctx, s, work, r.now())
+		if err != nil {
+			return s.fail(odoov1.ReasonReconcileFailed, err)
+		}
+		s.wake = wait
+		if created {
+			if work, err = r.listWork(ctx, od); err != nil {
+				return s.fail(odoov1.ReasonReconcileFailed, err)
+			}
+		}
 	}
 
 	// A backup, restore or cleanup in flight owns the instance until it ends.
@@ -457,6 +480,13 @@ func (r *OdooDeploymentReconciler) reconcileNormal(ctx context.Context, s *recon
 		result.RequeueAfter = retryOperations
 	}
 	return result, err
+}
+
+func (r *OdooDeploymentReconciler) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
+	}
+	return time.Now()
 }
 
 // minPositive is the smaller of two durations, ignoring zeros.

@@ -136,9 +136,69 @@ type OdooBackupStoreSpec struct {
 	// outside the cluster.
 	EncryptionKeySecret corev1.SecretKeySelector `json:"encryptionKeySecret"`
 
-	// Resources of the Jobs that probe the store.
+	// Check reads the store's repositories back on a schedule (restic check)
+	// to find damage before a restore needs them.
+	// +kubebuilder:validation:Optional
+	Check StoreCheck `json:"check,omitempty"`
+
+	// Prune frees the space of the backups retention has removed, on a
+	// schedule (restic prune).
+	// +kubebuilder:validation:Optional
+	Prune StoreSchedule `json:"prune,omitempty"`
+
+	// TimeZone of the check and prune schedules, as an IANA name.
+	// +kubebuilder:default=UTC
+	// +kubebuilder:validation:MaxLength=100
+	TimeZone string `json:"timeZone,omitempty"`
+
+	// Resources of the Jobs that probe, check and prune the store.
 	// +kubebuilder:validation:Optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+}
+
+// StoreSchedule runs a store-wide task on a schedule.
+type StoreSchedule struct {
+	// Schedule in cron format ("0 4 * * 0" or @weekly); empty turns it off.
+	// +kubebuilder:validation:MaxLength=100
+	Schedule string `json:"schedule,omitempty"`
+}
+
+// StoreCheck checks the store's repositories on a schedule.
+type StoreCheck struct {
+	// Schedule in cron format ("0 5 * * 0" or @weekly); empty turns checks off.
+	// +kubebuilder:validation:MaxLength=100
+	Schedule string `json:"schedule,omitempty"`
+	// ReadDataParts: each check reads one of this many parts of the stored
+	// data, the next part on the next run, so all data is read every
+	// ReadDataParts checks. 1 reads everything every time; 0 reads only the
+	// repository structure.
+	// +kubebuilder:default=7
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	ReadDataParts *int32 `json:"readDataParts,omitempty"`
+}
+
+// Results of store tasks.
+const (
+	StoreTaskPassed = "Passed"
+	StoreTaskFailed = "Failed"
+)
+
+// StoreTaskStatus is the outcome of the latest check or prune of a store.
+type StoreTaskStatus struct {
+	// Time the task finished.
+	Time *metav1.Time `json:"time,omitempty"`
+	// Result: Passed or Failed.
+	// +kubebuilder:validation:Enum=Passed;Failed
+	Result string `json:"result,omitempty"`
+	// Message sums up the outcome, or names what failed.
+	Message string `json:"message,omitempty"`
+	// Job that ran it; a failed task's Job is kept for its log.
+	Job string `json:"job,omitempty"`
+	// Repositories the task went through.
+	Repositories []string `json:"repositories,omitempty"`
+	// Part is the part of the data a check read, such as 3/7.
+	Part string `json:"part,omitempty"`
 }
 
 // OdooBackupStoreStatus reports whether the store can be reached.
@@ -155,6 +215,27 @@ type OdooBackupStoreStatus struct {
 	ProbeJob string `json:"probeJob,omitempty"`
 	// ProbedHash identifies the spec and Secrets the last probe ran with.
 	ProbedHash string `json:"probedHash,omitempty"`
+
+	// TaskJob is the check or prune Job running right now; TaskKind says which.
+	TaskJob  string `json:"taskJob,omitempty"`
+	TaskKind string `json:"taskKind,omitempty"`
+	// LastCheck and LastPrune are the outcomes of the latest check and prune.
+	LastCheck *StoreTaskStatus `json:"lastCheck,omitempty"`
+	LastPrune *StoreTaskStatus `json:"lastPrune,omitempty"`
+	// LastCheckScheduleTime and LastPruneScheduleTime are the latest
+	// scheduled times handled; NextCheckTime and NextPruneTime the next ones.
+	LastCheckScheduleTime *metav1.Time `json:"lastCheckScheduleTime,omitempty"`
+	LastPruneScheduleTime *metav1.Time `json:"lastPruneScheduleTime,omitempty"`
+	NextCheckTime         *metav1.Time `json:"nextCheckTime,omitempty"`
+	NextPruneTime         *metav1.Time `json:"nextPruneTime,omitempty"`
+	// CheckRuns counts checks, to pick the part of the data the next reads.
+	CheckRuns int32 `json:"checkRuns,omitempty"`
+	// Schedules the times above were computed for: check, prune and time zone.
+	ScheduleKey string `json:"scheduleKey,omitempty"`
+	// Repositories is how many instance repositories the latest task saw,
+	// StoredBytes how much they hold together.
+	Repositories int32 `json:"repositories,omitempty"`
+	StoredBytes  int64 `json:"storedBytes,omitempty"`
 	// Conditions: Ready.
 	// +listType=map
 	// +listMapKey=type
@@ -166,6 +247,8 @@ type OdooBackupStoreStatus struct {
 // +kubebuilder:printcolumn:name="Ready",type=boolean,JSONPath=`.status.ready`
 // +kubebuilder:printcolumn:name="Format",type=string,JSONPath=`.spec.format`
 // +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].reason`
+// +kubebuilder:printcolumn:name="Check",type=string,JSONPath=`.status.lastCheck.result`
+// +kubebuilder:printcolumn:name="Stored",type=integer,JSONPath=`.status.storedBytes`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // OdooBackupStore is a place backups are kept: an S3 bucket, an SFTP server,

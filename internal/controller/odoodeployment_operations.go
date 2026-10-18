@@ -43,7 +43,7 @@ import (
 	"github.com/MohanadAbugharbia/odoo-operator/pkg/utils"
 )
 
-// +kubebuilder:rbac:groups=odoo.abugharbia.com,resources=odoobackups,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=odoo.abugharbia.com,resources=odoobackups,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=odoo.abugharbia.com,resources=odoobackups/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=odoo.abugharbia.com,resources=odoorestores,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=odoo.abugharbia.com,resources=odoorestores/status,verbs=get;update;patch
