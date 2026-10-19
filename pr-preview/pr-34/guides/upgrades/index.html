@@ -1444,7 +1444,9 @@
   <code>&lt;name&gt;-pre-upgrade-&lt;yyyymmdd-hhmmss&gt;</code> (label
   <code>odoo.abugharbia.com/backup-kind: pre-upgrade</code>), taken once the new image
   has pulled, before the upgrade Job or the roll. Odoo is stopped for it
-  whatever <code>consistency</code> says, and stays stopped until the upgrade Job starts;
+  whatever <code>consistency</code> says, once a short check shows the store can be
+  reached (a store that cannot be reached fails the backup with the old image
+  still serving), and stays stopped until the upgrade Job starts;
   the <a href="../maintenance-page/">maintenance page</a> shows the backup as the first
   step of the update. <code>status.preUpgradeBackup</code> names it. If it fails:<ul>
 <li><code>BestEffort</code> upgrades anyway, with a <code>PreUpgradeBackupFailed</code> warning

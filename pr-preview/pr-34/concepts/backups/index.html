@@ -1619,7 +1619,13 @@ neither are listed in <code>status.missingFileNames</code> and the backup ends
 <code>CompletedWithWarnings</code>. An online backup waits up to two hours for Odoo's
 filestore cleanup cron to finish when it is running or due within ten minutes
 (phase <code>WaitingForFilestoreCleanup</code>). With a <code>ReadWriteOncePod</code> data volume,
-or <code>consistency: Offline</code>, Odoo is stopped while the backup runs.</p>
+or <code>consistency: Offline</code>, Odoo is stopped while the backup runs. Before it
+stops Odoo, a short Job (label <code>odoo.abugharbia.com/job-kind: store-reach</code>)
+writes, reads and deletes a small file in the store while Odoo still serves.
+A store that cannot be reached fails the backup within minutes, with Odoo
+never stopped; restic alone would retry it for about a quarter of an hour.
+The backup Job of an offline backup is not retried either: a failure ends it
+and Odoo starts again.</p>
 <h2 id="phases-of-an-odoobackup">Phases of an OdooBackup<a class="headerlink" href="#phases-of-an-odoobackup" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
