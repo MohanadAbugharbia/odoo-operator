@@ -255,7 +255,12 @@ func (r *OdooBackupStoreReconciler) reconcileProbe(ctx context.Context, store *o
 		return ctrl.Result{}, err
 	}
 	if obs.State == reconcileloops.JobStateSucceeded && out.decoded && out.result.OK {
-		r.setReady(store, true, ReasonStoreReachable, "the store can be written to, read from and deleted from")
+		msg := "the store can be written to, read from and deleted from"
+		if store.Spec.ReadOnly {
+			// The probe of a read-only store only lists it.
+			msg = "the store can be listed; it is readOnly, so it is never written to"
+		}
+		r.setReady(store, true, ReasonStoreReachable, msg)
 		if err := reconcileloops.DeleteMaintenanceJob(ctx, r.Client, obs.Job); err != nil {
 			return ctrl.Result{}, err
 		}

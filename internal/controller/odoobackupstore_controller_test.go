@@ -280,6 +280,23 @@ var _ = Describe("OdooBackupStore reconciler", func() {
 		Expect(s.events()).To(BeEmpty())
 	})
 
+	It("says a readOnly store was only listed when its probe succeeds", func() {
+		ro := s.pvcStore()
+		ro.Spec.ReadOnly, ro.Spec.EncryptionKeySecret = true, nil
+		s.t.create(ro)
+		s.reconcile()
+		jobName := s.get().Status.ProbeJob
+		s.finishJob(jobName, true)
+		s.podReporting(jobName, `{"ok":true}`, 0)
+		s.reconcile()
+
+		store := s.get()
+		Expect(store.Status.Ready).To(BeTrue())
+		cond := meta.FindStatusCondition(store.Status.Conditions, odoov1.ConditionReady)
+		Expect(cond.Reason).To(Equal(ReasonStoreReachable))
+		Expect(cond.Message).To(Equal("the store can be listed; it is readOnly, so it is never written to"))
+	})
+
 	It("marks the store reachable when the probe succeeds and deletes the Job", func() {
 		s.createPVCStore()
 		s.reconcile()
@@ -299,6 +316,7 @@ var _ = Describe("OdooBackupStore reconciler", func() {
 		cond := meta.FindStatusCondition(store.Status.Conditions, odoov1.ConditionReady)
 		Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 		Expect(cond.Reason).To(Equal(ReasonStoreReachable))
+		Expect(cond.Message).To(Equal("the store can be written to, read from and deleted from"))
 		Eventually(func() *batchv1.Job { return s.job(jobName) }).Should(BeNil())
 		Expect(s.events()).To(BeEmpty())
 
