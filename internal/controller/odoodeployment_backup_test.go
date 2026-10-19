@@ -9,6 +9,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -665,6 +666,44 @@ var _ = Describe("Backups and restores", func() {
 				Expect(controllerutil.ContainsFinalizer(rs, odoov1.RestoreFinalizer)).To(BeFalse())
 			}
 			Expect(h.replicas()).To(Equal(int32(1)), "Odoo was never stopped")
+		})
+
+		It("restores onto a new instance before its init Job, with no Deployment to stop", func() {
+			// Recovery onto a new cluster: the OdooRestore exists before the
+			// instance, whose database is new and empty and which never ran.
+			bh := &backupHarness{harness: newHarness()}
+			bh.r.BackupImage = "ghcr.io/example/odoo-operator-backup:test"
+			bh.r.Version = "test"
+			bh.store = bh.name + "-store"
+			key := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: bh.name + "-restic", Namespace: ns},
+				Data:       map[string][]byte{"password": []byte("s3cret")},
+			}
+			store := &odoov1.OdooBackupStore{
+				ObjectMeta: metav1.ObjectMeta{Name: bh.store, Namespace: ns},
+				Spec: odoov1.OdooBackupStoreSpec{
+					PVC: &odoov1.PVCStore{ClaimName: "backups"},
+					EncryptionKeySecret: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: key.Name}, Key: "password",
+					},
+				},
+			}
+			bh.track(key, store)
+			bh.newRestore("r", func(s *odoov1.OdooRestoreSpec) { s.SnapshotID = "deadbeef" })
+			bh.create(func(od *odoov1.OdooDeployment) { od.Spec.Backup.Stores = []string{bh.store} })
+
+			_, od := bh.reconcile()
+			Expect(od.Status.AppliedImage).To(BeEmpty(), "Odoo never ran")
+			Expect(od.Status.CurrentOperation.Kind).To(Equal(odoov1.OperationRestore))
+			Expect(od.Status.CurrentOperation.Job).NotTo(BeEmpty(), "nothing to stop: the restore Job starts at once")
+			Expect(jobArgs(bh.job(od.Status.CurrentOperation.Job))).To(ContainSubstring("--snapshot deadbeef"))
+			Expect(bh.job(bh.name+"-init")).To(BeNil(), "the restore goes before the init Job")
+			if c := condition(od, odoov1.ConditionDegraded); c != nil {
+				Expect(c.Reason).NotTo(Equal(odoov1.ReasonDeploymentFailed))
+			}
+			dep := &appsv1.Deployment{}
+			Expect(apierrors.IsNotFound(k8sClient.Get(ctx, types.NamespacedName{Namespace: ns, Name: bh.name}, dep))).To(BeTrue(),
+				"no Deployment is written without an image")
 		})
 
 		It("restores a snapshot by ID from the instance's store", func() {

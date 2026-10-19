@@ -25,11 +25,13 @@ import (
 	"strings"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -652,11 +654,25 @@ func (r *OdooDeploymentReconciler) abandonOperation(ctx context.Context, s *reco
 // stopOdoo scales the Deployment to zero and reports whether its pods are gone.
 func (r *OdooDeploymentReconciler) stopOdoo(ctx context.Context, s *reconcileState, configHash string) (bool, error) {
 	od := s.od
-	// Before the first boot (a bootstrap restore) no image was applied yet;
-	// at zero replicas the image is only a placeholder.
-	image := orDefault(od.Status.AppliedImage, od.Spec.Image)
-	if _, err := reconcileloops.EnsureDeployment(ctx, r.Client, r.Scheme, od, image, 0, configHash); err != nil {
-		return false, err
+	image := od.Status.AppliedImage
+	if image == "" {
+		// Odoo never ran (a restore onto a new instance, before its init Job):
+		// there is no image to write a Deployment with, and nothing to stop
+		// unless a Deployment exists anyway, which keeps its own image.
+		dep := &appsv1.Deployment{}
+		err := r.Get(ctx, types.NamespacedName{Namespace: od.Namespace, Name: od.Name}, dep)
+		switch {
+		case apierrors.IsNotFound(err):
+		case err != nil:
+			return false, err
+		case len(dep.Spec.Template.Spec.Containers) > 0:
+			image = dep.Spec.Template.Spec.Containers[0].Image
+		}
+	}
+	if image != "" {
+		if _, err := reconcileloops.EnsureDeployment(ctx, r.Client, r.Scheme, od, image, 0, configHash); err != nil {
+			return false, err
+		}
 	}
 	running, err := r.countPods(ctx, od.Namespace, od.GetServiceSelectorLabels())
 	if err != nil {
