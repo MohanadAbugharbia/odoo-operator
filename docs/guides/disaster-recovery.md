@@ -10,6 +10,12 @@ cluster. You need:
 - the instance's old **namespace** and **name**;
 - [restic](https://restic.net/) on a workstation, to list the backups.
 
+!!! tip "Practise it"
+    This procedure was rehearsed end to end on a fresh cluster: the instance
+    came back with its data and attachments, before its init Job ran.
+    Practise it once yourself on a scratch cluster, so the steps are known
+    before you need them.
+
 ## Where the backups are
 
 An instance's repository in a store is at `<path>/<namespace>/<name>/`: the
