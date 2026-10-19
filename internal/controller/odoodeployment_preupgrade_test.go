@@ -72,6 +72,9 @@ var _ = Describe("Backups before upgrades", func() {
 		Expect(op.Kind).To(Equal(odoov1.OperationBackup))
 		Expect(op.Name).To(Equal(b.Name))
 		Expect(op.StoppedOdoo).To(BeTrue(), "a pre-upgrade backup always stops Odoo")
+		Expect(h.replicas()).To(Equal(int32(1)), "the old image serves while the store is checked")
+		od = h.passStoreReach(b.Name)
+		op = od.Status.CurrentOperation
 		Expect(od.Status.Phase).To(Equal(odoov1.PhaseBackingUp))
 		Expect(h.replicas()).To(Equal(int32(0)))
 		job := h.job(op.Job)
@@ -157,6 +160,29 @@ var _ = Describe("Backups before upgrades", func() {
 		Expect(backups).To(HaveLen(1))
 		Expect(backups[0].Name).NotTo(Equal(b.Name))
 		Expect(od.Status.PreUpgradeBackup.Name).To(Equal(backups[0].Name))
+	})
+
+	It("keeps the old image serving throughout when Required and the store cannot be reached", func() {
+		h = newBackupHarness(beforeUpgrade(odoov1.BeforeUpgradeRequired))
+		h.setImage("odoo:b")
+		h.reconcile()
+		h.passImageCheck()
+		backups := h.preUpgradeBackups()
+		Expect(backups).To(HaveLen(1))
+		b := backups[0]
+		h.reconcile()
+		Expect(h.replicas()).To(Equal(int32(1)))
+		h.finishJob(h.reachJob(b.Name).Name, &result.Result{OK: false, Step: result.StepProbe, Error: "dial tcp: i/o timeout"})
+		_, od := h.reconcile()
+
+		Expect(h.replicas()).To(Equal(int32(1)), "Odoo was never stopped")
+		Expect(h.deployment().Spec.Template.Spec.Containers[0].Image).To(Equal("odoo:a"))
+		Expect(od.Status.CurrentInitJob.Name).To(BeEmpty(), "no upgrade without the backup")
+		deg := condition(od, odoov1.ConditionDegraded)
+		Expect(deg).NotTo(BeNil())
+		Expect(deg.Reason).To(Equal(odoov1.ReasonPreUpgradeBackupFailed))
+		Expect(deg.Message).To(ContainSubstring("cannot be reached, so Odoo was not stopped"))
+		Expect(deg.Message).To(ContainSubstring("i/o timeout"))
 	})
 
 	It("upgrades anyway when BestEffort and the backup fails", func() {

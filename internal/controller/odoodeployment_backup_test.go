@@ -168,6 +168,29 @@ func (h *backupHarness) finishJob(name string, res *result.Result) {
 	Expect(k8sClient.Status().Update(ctx, job)).To(Succeed())
 }
 
+// reachJob is the Job checking the store before backup name (the full
+// OdooBackup name) stops Odoo.
+func (h *backupHarness) reachJob(name string) *batchv1.Job {
+	b := &odoov1.OdooBackup{}
+	ExpectWithOffset(1, k8sClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, b)).To(Succeed())
+	return h.job(jobspec.ReachJobName(h.get(), b))
+}
+
+// passStoreReach ends the store check of an offline backup, which runs with
+// Odoo still serving, and reconciles on to the stopped Odoo and the backup Job.
+func (h *backupHarness) passStoreReach(name string) *odoov1.OdooDeployment {
+	_, od := h.reconcile()
+	ExpectWithOffset(1, od.Status.CurrentOperation.Job).To(BeEmpty(), "no backup Job before the store check")
+	ExpectWithOffset(1, h.replicas()).To(BeNumerically(">", 0), "Odoo serves during the store check")
+	job := h.reachJob(name)
+	ExpectWithOffset(1, job).NotTo(BeNil())
+	h.finishJob(job.Name, &result.Result{OK: true})
+	h.reconcile()
+	_, od = h.reconcile()
+	ExpectWithOffset(1, od.Status.CurrentOperation.StoreReached).To(BeTrue())
+	return od
+}
+
 func (h *backupHarness) replicas() int32 {
 	d := h.deployment()
 	Expect(d).NotTo(BeNil())
@@ -333,9 +356,19 @@ var _ = Describe("Backups and restores", func() {
 			h.newBackup("one")
 			_, od := h.reconcile()
 			Expect(od.Status.CurrentOperation.StoppedOdoo).To(BeTrue())
+			Expect(od.Status.Phase).NotTo(Equal(odoov1.PhaseBackingUp), "Odoo serves until the store is reached")
+			reach := h.reachJob(h.name + "-one")
+			Expect(reach).NotTo(BeNil())
+			Expect(jobArgs(reach)).To(ContainSubstring("probe --target"))
+			Expect(reach.Labels[odoov1.LabelJobKind]).To(Equal(jobspec.KindReach))
+			Expect(h.backup("one").Status.Message).To(ContainSubstring("can be reached before stopping Odoo"))
+
+			od = h.passStoreReach(h.name + "-one")
 			Expect(od.Status.Phase).To(Equal(odoov1.PhaseBackingUp))
 			Expect(h.replicas()).To(Equal(int32(0)))
+			Eventually(func() *batchv1.Job { return h.reachJob(h.name + "-one") }).Should(BeNil(), "a passed check leaves no Job")
 			job := h.job(od.Status.CurrentOperation.Job)
+			Expect(*job.Spec.BackoffLimit).To(BeZero(), "a failed offline backup brings Odoo back at once")
 			Expect(jobArgs(job)).NotTo(ContainSubstring("--wait-for-cleanup"))
 			Expect(jobArgs(job)).To(ContainSubstring("--consistency Offline"))
 			Expect(h.backup("one").Status.Consistency).To(Equal("Offline"))
@@ -344,6 +377,27 @@ var _ = Describe("Backups and restores", func() {
 			_, od = h.reconcile()
 			Expect(od.Status.Phase).To(Equal(odoov1.PhaseRunning))
 			Expect(h.replicas()).To(Equal(int32(1)))
+		})
+
+		It("fails an offline backup without stopping Odoo when its store cannot be reached", func() {
+			h = newBackupHarness(func(od *odoov1.OdooDeployment) {
+				od.Spec.Backup.Consistency = odoov1.BackupConsistencyOffline
+			})
+			h.newBackup("one")
+			h.reconcile()
+			reach := h.reachJob(h.name + "-one")
+			Expect(reach).NotTo(BeNil())
+			h.finishJob(reach.Name, &result.Result{OK: false, Step: result.StepProbe, Error: "cannot write to the store: connection refused"})
+			_, od := h.reconcile()
+
+			b := h.backup("one")
+			Expect(b.Status.Phase).To(Equal(odoov1.BackupPhaseFailed))
+			Expect(b.Status.Message).To(ContainSubstring("cannot be reached, so Odoo was not stopped"))
+			Expect(b.Status.Message).To(ContainSubstring("connection refused"))
+			Expect(b.Status.Job).To(BeEmpty(), "no backup Job ran")
+			Expect(od.Status.CurrentOperation.Kind).To(BeEmpty())
+			Expect(h.replicas()).To(Equal(int32(1)), "Odoo was never stopped")
+			Expect(h.reachJob(h.name+"-one")).NotTo(BeNil(), "the failed check's Job is kept for its log")
 		})
 
 		It("fails when the instance has no store or the store is broken", func() {
