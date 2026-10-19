@@ -57,7 +57,9 @@ flowchart TD
   `<name>-pre-upgrade-<yyyymmdd-hhmmss>` (label
   `odoo.abugharbia.com/backup-kind: pre-upgrade`), taken once the new image
   has pulled, before the upgrade Job or the roll. Odoo is stopped for it
-  whatever `consistency` says, and stays stopped until the upgrade Job starts;
+  whatever `consistency` says, once a short check shows the store can be
+  reached (a store that cannot be reached fails the backup with the old image
+  still serving), and stays stopped until the upgrade Job starts;
   the [maintenance page](maintenance-page.md) shows the backup as the first
   step of the update. `status.preUpgradeBackup` names it. If it fails:
     - `BestEffort` upgrades anyway, with a `PreUpgradeBackupFailed` warning

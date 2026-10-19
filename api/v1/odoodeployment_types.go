@@ -811,6 +811,9 @@ type OperationStatus struct {
 	// StoppedOdoo is true when the operation scaled Odoo to zero and must
 	// bring it back.
 	StoppedOdoo bool `json:"stoppedOdoo,omitempty"`
+	// StoreReached is true once an offline backup has checked, with Odoo
+	// still serving, that its store can be reached.
+	StoreReached bool `json:"storeReached,omitempty"`
 	// StartedAt is when the operation started.
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`
 }

@@ -2115,6 +2115,11 @@ spec:
                       StoppedOdoo is true when the operation scaled Odoo to zero and must
                       bring it back.
                     type: boolean
+                  storeReached:
+                    description: |-
+                      StoreReached is true once an offline backup has checked, with Odoo
+                      still serving, that its store can be reached.
+                    type: boolean
                 type: object
               database:
                 description: Database records the resolved database and who provisioned
