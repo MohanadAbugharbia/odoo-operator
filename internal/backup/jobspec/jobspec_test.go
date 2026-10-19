@@ -782,6 +782,17 @@ func TestBackupJobOptions(t *testing.T) {
 	if *job.Spec.TTLSecondsAfterFinished != 60 || *job.Spec.ActiveDeadlineSeconds != 120 {
 		t.Errorf("ttl %d deadline %d", *job.Spec.TTLSecondsAfterFinished, *job.Spec.ActiveDeadlineSeconds)
 	}
+	if *job.Spec.BackoffLimit != 1 {
+		t.Errorf("backoff %d, want 1 for a backup Odoo serves through", *job.Spec.BackoffLimit)
+	}
+	p.Offline = true
+	offline, err := BackupJob(p, &odoov1.OdooBackup{ObjectMeta: metav1.ObjectMeta{Name: "b"}}, "manual", 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *offline.Spec.BackoffLimit != 0 {
+		t.Errorf("backoff %d, want 0 while Odoo is stopped", *offline.Spec.BackoffLimit)
+	}
 	cmd := command(job)
 	if slices.Contains(cmd, "--wait-for-cleanup") || flagValue(t, cmd, "--consistency") != "Offline" ||
 		flagValue(t, cmd, "--maintenance-db") != "postgres" {
@@ -1080,6 +1091,43 @@ func TestProbeJob(t *testing.T) {
 	job, _ := ProbeJob(image, store, "abc")
 	if !reflect.DeepEqual(job.Spec.Template.Spec.Containers[0].Resources, custom) {
 		t.Error("store resources ignored")
+	}
+}
+
+func TestReachJob(t *testing.T) {
+	inst := params(nil).Instance
+	for name, store := range allStores() {
+		t.Run(name, func(t *testing.T) {
+			b := &odoov1.OdooBackup{ObjectMeta: metav1.ObjectMeta{Name: "nightly", Namespace: ns, UID: "u1"}}
+			job, err := ReachJob(image, store, inst, b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			probe, _ := ProbeJob(image, store, "")
+			if !slices.Equal(command(job), command(probe)) {
+				t.Errorf("command = %q, want the probe's %q", command(job), command(probe))
+			}
+			if !reflect.DeepEqual(job.Spec.Template.Spec, probe.Spec.Template.Spec) {
+				t.Error("pod differs from the store probe's")
+			}
+			if job.Name != ReachJobName(inst, b) || job.Namespace != ns {
+				t.Errorf("job %s/%s", job.Namespace, job.Name)
+			}
+			checkJobName(t, job.Name)
+			want := map[string]string{odoov1.LabelJobKind: KindReach, LabelStore: store.Name, LabelBackup: "nightly"}
+			if !reflect.DeepEqual(job.Labels, want) || !reflect.DeepEqual(job.Spec.Template.Labels, want) {
+				t.Errorf("labels %v / %v", job.Labels, job.Spec.Template.Labels)
+			}
+			if *job.Spec.BackoffLimit != 0 || *job.Spec.ActiveDeadlineSeconds != 300 || *job.Spec.TTLSecondsAfterFinished != 3600 {
+				t.Errorf("job spec %+v", job.Spec)
+			}
+		})
+	}
+	// A backup taken again under the same name gets a fresh check.
+	a := &odoov1.OdooBackup{ObjectMeta: metav1.ObjectMeta{Name: "b", UID: "1"}}
+	b := &odoov1.OdooBackup{ObjectMeta: metav1.ObjectMeta{Name: "b", UID: "2"}}
+	if ReachJobName(inst, a) == ReachJobName(inst, b) {
+		t.Error("the reach Job name ignores the backup's uid")
 	}
 }
 

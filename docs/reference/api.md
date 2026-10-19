@@ -919,6 +919,7 @@ _Appears in:_
 | `name` _string_ | Name of the OdooBackup or OdooRestore. |  |  |
 | `job` _string_ | Job running it; empty while the operator is still stopping Odoo for it. |  |  |
 | `stoppedOdoo` _boolean_ | StoppedOdoo is true when the operation scaled Odoo to zero and must<br />bring it back. |  |  |
+| `storeReached` _boolean_ | StoreReached is true once an offline backup has checked, with Odoo<br />still serving, that its store can be reached. |  |  |
 | `startedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta)_ | StartedAt is when the operation started. |  |  |
 
 

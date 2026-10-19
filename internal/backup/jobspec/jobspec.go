@@ -43,6 +43,7 @@ const (
 	KindRestore = "restore"
 	KindCleanup = "cleanup"
 	KindProbe   = "store-probe"
+	KindReach   = "store-reach"
 	KindCheck   = "store-check"
 	KindPrune   = "store-prune"
 	KindDrill   = "drill"
@@ -81,6 +82,7 @@ const (
 	cleanupBackoff  = int32(2)
 	drillBackoff    = int32(0)
 	probeDeadline   = int64(300)
+	reachTTL        = int32(3600)
 	cleanupDeadline = int64(3600)
 	// storeTaskDeadline bounds a check or prune of a whole store.
 	storeTaskDeadline = int64(6 * 3600)
@@ -607,8 +609,14 @@ func BackupJob(p Params, backup *odoov1.OdooBackup, kind string, attempt int32, 
 			Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("64Mi")},
 		},
 	}}
+	// Odoo is down for an offline backup: a failure ends it at once, so the
+	// operator brings Odoo back instead of waiting for a second attempt.
+	backoff := backupBackoff
+	if p.Offline {
+		backoff = 0
+	}
 	return p.job(BackupJobName(od, backup.Name, attempt), KindBackup, map[string]string{LabelBackup: backup.Name},
-		spec, backupBackoff, od.Spec.Backup.ActiveDeadlineSecondsValue()), nil
+		spec, backoff, od.Spec.Backup.ActiveDeadlineSecondsValue()), nil
 }
 
 // RestoreJobName is the name of attempt of a restore's Job. The restore's
@@ -910,6 +918,31 @@ func ProbeJob(image string, store *odoov1.OdooBackupStore, hash string) (batchv1
 		command = append(command, "--read-only")
 	}
 	return storeJob(image, store, ProbeJobName(store, hash), KindProbe, loc, command, resources, probeDeadline, 3600), nil
+}
+
+// ReachJobName is the Job that checks the store before an offline backup
+// stops Odoo. The backup's uid tells a backup taken again under the same
+// name from the earlier one.
+func ReachJobName(instance *odoov1.OdooDeployment, backup *odoov1.OdooBackup) string {
+	return jobName(instance.Name, "reach", 0, instance.Namespace, backup.Name, string(backup.UID))
+}
+
+// ReachJob renders the Job that checks, while Odoo still serves, that the
+// store an offline backup writes to can be written, read and deleted from.
+// It runs the store probe, which gives up within minutes where restic would
+// retry an unreachable store for a quarter of an hour.
+func ReachJob(image string, store *odoov1.OdooBackupStore, instance *odoov1.OdooDeployment, backup *odoov1.OdooBackup) (batchv1.Job, error) {
+	job, err := ProbeJob(image, store, "")
+	if err != nil {
+		return batchv1.Job{}, err
+	}
+	job.Name = ReachJobName(instance, backup)
+	job.Spec.TTLSecondsAfterFinished = ptr(reachTTL)
+	for _, labels := range []map[string]string{job.Labels, job.Spec.Template.Labels} {
+		labels[odoov1.LabelJobKind] = KindReach
+		labels[LabelBackup] = backup.Name
+	}
+	return job, nil
 }
 
 // StoreTaskJobName is the Job of a store's check or prune for one

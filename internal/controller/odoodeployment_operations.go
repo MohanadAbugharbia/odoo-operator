@@ -753,6 +753,9 @@ func backupKind(b *odoov1.OdooBackup) string {
 func (r *OdooDeploymentReconciler) driveBackup(ctx context.Context, s *reconcileState, w instanceWork, b *odoov1.OdooBackup, configHash string) (ctrl.Result, bool, error) {
 	od := s.od
 	op := &od.Status.CurrentOperation
+	if op.StoppedOdoo && op.Job == "" && !op.StoreReached {
+		return r.reachStore(ctx, s, b)
+	}
 	if op.StoppedOdoo {
 		od.Status.Phase = odoov1.PhaseBackingUp
 	}
@@ -950,6 +953,63 @@ func (r *OdooDeploymentReconciler) driveBackup(ctx context.Context, s *reconcile
 	}
 	msg := fmt.Sprintf("job %s %s; inspect with: kubectl -n %s logs job/%s", op.Job, failureText(out), od.Namespace, op.Job)
 	return r.finishBackupFailed(ctx, s, b, msg)
+}
+
+// reachStore checks, before an offline backup stops Odoo, that the backup's
+// store can be reached. An unreachable store fails the backup within
+// minutes, with Odoo still serving, where restic would retry it for a
+// quarter of an hour with Odoo stopped.
+func (r *OdooDeploymentReconciler) reachStore(ctx context.Context, s *reconcileState, b *odoov1.OdooBackup) (ctrl.Result, bool, error) {
+	od := s.od
+	store, err := r.getStore(ctx, od.Namespace, od.Spec.Backup.Stores[0])
+	if err != nil {
+		return r.finishBackupFailed(ctx, s, b, err.Error())
+	}
+	name := jobspec.ReachJobName(od, b)
+	out, err := r.observeJob(ctx, od.Namespace, name)
+	if err != nil {
+		return ctrl.Result{}, false, err
+	}
+	waiting := fmt.Sprintf("checking that store %s can be reached before stopping Odoo for backup %s", store.Name, b.Name)
+	switch out.state {
+	case reconcileloops.JobStateMissing:
+		image, err := r.backupImage(ctx)
+		if err != nil {
+			s.degraded(ReasonBackupImageUnknown, err.Error())
+			return ctrl.Result{RequeueAfter: time.Minute}, false, nil
+		}
+		job, err := jobspec.ReachJob(image, store, od, b)
+		if err != nil {
+			return r.finishBackupFailed(ctx, s, b, err.Error())
+		}
+		if err := controllerutil.SetControllerReference(od, &job, r.Scheme); err != nil {
+			return ctrl.Result{}, false, err
+		}
+		if err := r.Create(ctx, &job); err != nil && !apierrors.IsAlreadyExists(err) {
+			res, err := s.fail(odoov1.ReasonJobCreationFailed, fmt.Errorf("create job %s: %w", name, err))
+			return res, false, err
+		}
+		_ = r.patchBackupStatus(ctx, b, func(st *odoov1.OdooBackupStatus) { st.Message = waiting })
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, false, nil
+	case reconcileloops.JobStateActive:
+		if out.pullMessage != "" {
+			waiting = "job " + name + " cannot start: " + out.pullMessage
+			_ = r.patchBackupStatus(ctx, b, func(st *odoov1.OdooBackupStatus) { st.Message = waiting })
+		}
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, false, nil
+	case reconcileloops.JobStateSucceeded:
+		if out.decoded && out.result.OK {
+			if err := reconcileloops.DeleteMaintenanceJob(ctx, r.Client, out.job); err != nil {
+				return ctrl.Result{}, false, err
+			}
+			s.od.Status.CurrentOperation.StoreReached = true
+			return ctrl.Result{RequeueAfter: time.Second}, false, nil
+		}
+	}
+	// The Job is kept for its log until its TTL ends.
+	return r.finishBackupFailed(ctx, s, b, fmt.Sprintf(
+		"store %s cannot be reached, so Odoo was not stopped: job %s %s; inspect with: kubectl -n %s logs job/%s",
+		store.Name, name, failureText(out), od.Namespace, name))
 }
 
 // finishBackupFailed marks the backup failed and frees the instance.
