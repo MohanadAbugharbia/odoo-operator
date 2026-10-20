@@ -1395,6 +1395,9 @@
   trigger["spec.image changes (onImageChange: true)&lt;br/&gt;or spec.upgrade.token changes"]
   check["image check Job&lt;br/&gt;pulls the new image, runs odoo --version&lt;br/&gt;(skipped when the image is unchanged)"]
   old["old image keeps serving&lt;br/&gt;Degraded: ImagePullFailed or ImageCheckFailed"]
+  pre{"spec.backup.beforeUpgrade?"}
+  backup["backup of the running version&lt;br/&gt;Odoo stopped"]
+  kept["old image starts again&lt;br/&gt;Degraded: PreUpgradeBackupFailed&lt;br/&gt;delete the OdooBackup to retry"]
   modules{"spec.upgrade.modules&lt;br/&gt;empty?"}
   roll["roll the Deployment&lt;br/&gt;to the new image, no Job"]
   stop["scale Odoo to 0&lt;br/&gt;phase Upgrading"]
@@ -1405,7 +1408,11 @@
   trigger --&gt; check
   check -- "cannot pull or run" --&gt; old
   old -- "a later spec.image replaces the check" --&gt; check
-  check -- "succeeds" --&gt; modules
+  check -- "succeeds" --&gt; pre
+  pre -- Off --&gt; modules
+  pre -- "BestEffort or Required" --&gt; backup
+  backup -- "succeeds, or fails with BestEffort" --&gt; modules
+  backup -- "fails with Required" --&gt; kept
   modules -- yes --&gt; roll --&gt; running
   modules -- no --&gt; stop --&gt; job
   job -- succeeds --&gt; running
@@ -1431,14 +1438,34 @@
   run the upgrade on demand. A <code>spec.image</code> change then does nothing until the
   token changes, with one exception: a new entry in <code>spec.modules</code> is installed
   by a Job on <code>spec.image</code>, and the instance moves to that image without <code>-u</code>.</li>
-<li>A failed Job stays, with Odoo stopped, until you delete it: deleting it
-  retries the upgrade. Read its log first, or restore a backup instead.</li>
-<li><code>spec.jobs</code> bounds the Jobs (<code>activeDeadlineSeconds</code>, <code>backoffLimit</code>). Its
+<li><strong>A backup before each upgrade.</strong> With <code>spec.backup.beforeUpgrade</code> set to
+  <code>BestEffort</code> or <code>Required</code> (default <code>Off</code>; it needs <code>spec.backup.stores</code>),
+  a new image or upgrade token first gets an OdooBackup named
+  <code>&lt;name&gt;-pre-upgrade-&lt;yyyymmdd-hhmmss&gt;</code> (label
+  <code>odoo.abugharbia.com/backup-kind: pre-upgrade</code>), taken once the new image
+  has pulled, before the upgrade Job or the roll. Odoo is stopped for it
+  whatever <code>consistency</code> says, once a short check shows the store can be
+  reached (a store that cannot be reached fails the backup with the old image
+  still serving), and stays stopped until the upgrade Job starts;
+  the <a href="../maintenance-page/">maintenance page</a> shows the backup as the first
+  step of the update. <code>status.preUpgradeBackup</code> names it. If it fails:<ul>
+<li><code>BestEffort</code> upgrades anyway, with a <code>PreUpgradeBackupFailed</code> warning
+  event;</li>
+<li><code>Required</code> starts the old image again and sets <code>Degraded</code>
+  (<code>PreUpgradeBackupFailed</code>) with the backup's message. Deleting that
+  OdooBackup tries again, and so does a new <code>spec.image</code> or token.</li>
+</ul>
+</li>
+</ul>
+<p>Retention keeps the newest <code>retention.preUpgrade</code> of these (default 5).
+  Restoring one is the way back from an upgrade that went wrong.
+- A failed Job stays, with Odoo stopped, until you delete it: deleting it
+  retries the upgrade. Read its log first, or restore a backup instead.
+- <code>spec.jobs</code> bounds the Jobs (<code>activeDeadlineSeconds</code>, <code>backoffLimit</code>). Its
   <code>ttlSecondsAfterFinished</code> applies to the backup, restore and drill Jobs; the
   init and upgrade Jobs have none, as the operator deletes them when they
-  succeed and keeps a failed one until you delete it.</li>
-</ul>
-<p>A failed upgrade can be rolled back by <a href="../restore/">restoring a backup</a>: a restore replaces a failed init or upgrade Job.</p>
+  succeed and keeps a failed one until you delete it.</p>
+<p>A failed upgrade can be rolled back by <a href="../restore/">restoring a backup</a>, such as the one <code>beforeUpgrade</code> took: a restore replaces a failed init or upgrade Job.</p>
 
 
 

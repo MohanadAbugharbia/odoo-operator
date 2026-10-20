@@ -1426,7 +1426,7 @@ while Odoo cannot answer gets a status page instead of a blank screen:</p>
   page with status 503, and every other request (RPC, assets, <code>/web/health</code>,
   service worker fetches) gets an empty 503. Nothing is cacheable.</li>
 <li>The page shows the phase as steps (preparing the database, installing,
-  updating, starting), the elapsed time and, for upgrades, an estimate from
+  backing up, updating, restoring, starting), the elapsed time and, for upgrades, an estimate from
   <code>status.lastMaintenanceDuration</code>. It polls <code>/__maintenance/status.json</code> and
   <code>/web/health</code> every 3 seconds, and reopens the URL that was asked for as soon
   as Odoo answers. A failed Job shows only "Please contact your

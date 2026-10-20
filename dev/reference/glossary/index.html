@@ -1413,11 +1413,14 @@ instance that uses it.</dd>
 links the two. Deleting an OdooBackup leaves its snapshot in the store;
 <a href="../../guides/backups/">retention</a> forgets snapshots and deletes their
 OdooBackups.</dd>
-<dt><strong>Scheduled backup / manual backup</strong></dt>
+<dt><strong>Scheduled, manual and pre-upgrade backups</strong></dt>
 <dd>A scheduled backup is one the operator creates from
 <code>spec.backup.schedule</code>, named <code>&lt;name&gt;-&lt;yyyymmdd-hhmm&gt;</code>; a manual backup is
-one you create. Retention thins scheduled backups by its rules; manual
-backups are kept unless you set <code>retention.manual</code>.</dd>
+one you create; a pre-upgrade backup is one the operator takes before an
+upgrade when <code>spec.backup.beforeUpgrade</code> asks for it, named
+<code>&lt;name&gt;-pre-upgrade-&lt;yyyymmdd-hhmmss&gt;</code>. Retention thins scheduled backups
+by its rules, keeps the newest <code>retention.preUpgrade</code> pre-upgrade backups
+(default 5), and keeps manual backups unless you set <code>retention.manual</code>.</dd>
 <dt><strong>Copy</strong></dt>
 <dd>The same snapshot copied (<code>restic copy</code>) to every store after the first in
 <code>spec.backup.stores</code>.</dd>

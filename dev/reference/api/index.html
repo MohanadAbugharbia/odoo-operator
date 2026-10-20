@@ -1181,6 +1181,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#beforeupgrade" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BeforeUpgrade
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#databasecreatepolicy" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1548,6 +1559,17 @@
     <span class="md-ellipsis">
       
         PersistentVolumeClaimSpec
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#preupgradebackupstatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PreUpgradeBackupStatus
       
     </span>
   </a>
@@ -2007,6 +2029,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#beforeupgrade" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BeforeUpgrade
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#databasecreatepolicy" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2381,6 +2414,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#preupgradebackupstatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PreUpgradeBackupStatus
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#restoreprevious" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2584,6 +2628,35 @@ in step.</p>
 <tr>
 <td><code>restic</code></td>
 <td>BackupStoreFormatRestic keeps one encrypted, deduplicated restic<br />repository per OdooDeployment.<br /></td>
+</tr>
+</tbody>
+</table>
+<h4 id="beforeupgrade">BeforeUpgrade<a class="headerlink" href="#beforeupgrade" title="Permanent link">&para;</a></h4>
+<p><em>Underlying type:</em> <em>string</em></p>
+<p>BeforeUpgrade says whether a backup is taken before an upgrade.</p>
+<p><em>Validation:</em>
+- Enum: [Off BestEffort Required]</p>
+<p><em>Appears in:</em>
+- <a href="#odoobackupconfig">OdooBackupConfig</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Off</code></td>
+<td>BeforeUpgradeOff upgrades without a backup first.<br /></td>
+</tr>
+<tr>
+<td><code>BestEffort</code></td>
+<td>BeforeUpgradeBestEffort takes a backup first and upgrades even when<br />it fails.<br /></td>
+</tr>
+<tr>
+<td><code>Required</code></td>
+<td>BeforeUpgradeRequired upgrades only after the backup succeeded; a<br />failed backup keeps the running image.<br /></td>
 </tr>
 </tbody>
 </table>
@@ -2882,6 +2955,12 @@ by the OdooDeployment, so deleting an instance never deletes its backups.</p>
 <td>Optional: {} <br /></td>
 </tr>
 <tr>
+<td><code>beforeUpgrade</code> <em><a href="#beforeupgrade">BeforeUpgrade</a></em></td>
+<td>BeforeUpgrade takes a backup before each upgrade (a new spec.image or<br />spec.upgrade.token), with Odoo stopped so the backup holds the data<br />exactly as the upgrade found it. Off (default) upgrades without one;<br />BestEffort upgrades even when the backup fails; Required keeps the<br />running image when it fails, until the failed OdooBackup is deleted<br />(which tries again) or the upgrade target changes.</td>
+<td>Off</td>
+<td>Enum: [Off BestEffort Required] <br /></td>
+</tr>
+<tr>
 <td><code>consistency</code> <em><a href="#backupconsistency">BackupConsistency</a></em></td>
 <td>Consistency: Online (default) backs up while Odoo keeps serving;<br />Offline stops Odoo for the backup.</td>
 <td>Online</td>
@@ -2940,7 +3019,8 @@ be restored, without touching the running instance.</p>
 <p>OdooBackupRetention says which backups are kept. Scheduled backups are
 thinned with restic's keep rules (daily: 7 keeps the newest backup of each
 of the last 7 days that have one; a backup kept by any rule stays); manual
-and pre-upgrade backups each keep their newest Manual. A backup with
+backups keep their newest Manual and pre-upgrade backups their newest
+PreUpgrade. A backup with
 spec.keep, and the newest backup, are never deleted. Unset fields take the
 defaults below.</p>
 <p><em>Appears in:</em>
@@ -3001,6 +3081,12 @@ defaults below.</p>
 <td><code>manual</code> <em>integer</em></td>
 <td>Manual keeps the newest N manual backups; 0 keeps them all.</td>
 <td></td>
+<td>Minimum: 0 <br /></td>
+</tr>
+<tr>
+<td><code>preUpgrade</code> <em>integer</em></td>
+<td>PreUpgrade keeps the newest N backups taken before upgrades; 0 keeps<br />them all.</td>
+<td>5</td>
 <td>Minimum: 0 <br /></td>
 </tr>
 <tr>
@@ -4063,6 +4149,12 @@ namespace name it in spec.backup.stores.</p>
 <td>Optional: {} <br /></td>
 </tr>
 <tr>
+<td><code>preUpgradeBackup</code> <em><a href="#preupgradebackupstatus">PreUpgradeBackupStatus</a></em></td>
+<td>PreUpgradeBackup is the backup spec.backup.beforeUpgrade takes before<br />the pending upgrade. It is cleared once no upgrade is pending.</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
 <td><code>lastMaintenanceDuration</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#duration-v1-meta">Duration</a></em></td>
 <td>LastMaintenanceDuration is how long the last successful upgrade Job<br />took, from its creation to its completion. The maintenance page uses it<br />to estimate the next one. Init Jobs are not counted: they run once and<br />take far longer than an upgrade.</td>
 <td></td>
@@ -4529,6 +4621,12 @@ instance at a time.</p>
 <td></td>
 </tr>
 <tr>
+<td><code>storeReached</code> <em>boolean</em></td>
+<td>StoreReached is true once an offline backup has checked, with Odoo<br />still serving, that its store can be reached.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
 <td><code>startedAt</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
 <td>StartedAt is when the operation started.</td>
 <td></td>
@@ -4602,6 +4700,34 @@ the node that has it attached.</p>
 <td>DeletionPolicy controls whether the filestore PVC is garbage collected<br />with the OdooDeployment (Delete) or left behind (Retain, the default).</td>
 <td>Retain</td>
 <td>Enum: [Retain Delete] <br /></td>
+</tr>
+</tbody>
+</table>
+<h4 id="preupgradebackupstatus">PreUpgradeBackupStatus<a class="headerlink" href="#preupgradebackupstatus" title="Permanent link">&para;</a></h4>
+<p>PreUpgradeBackupStatus names the backup taken before an upgrade.</p>
+<p><em>Appears in:</em>
+- <a href="#odoodeploymentstatus">OdooDeploymentStatus</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>name</code> <em>string</em></td>
+<td>Name of the OdooBackup.</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>target</code> <em>string</em></td>
+<td>Target is the image and upgrade token it was taken for.</td>
+<td></td>
+<td>Optional: {} <br /></td>
 </tr>
 </tbody>
 </table>

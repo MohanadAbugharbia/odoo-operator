@@ -1879,6 +1879,18 @@ fails.</p>
 <td>The image pulled but <code>&lt;odooCommand&gt; --version</code> failed. Read <code>kubectl logs job/&lt;name&gt;-image-&lt;hash&gt;</code>, fix the image, then delete that Job to check again.</td>
 </tr>
 <tr>
+<td><code>Degraded</code> <code>PreUpgradeBackupFailed</code>, the old image still serving</td>
+<td><code>spec.backup.beforeUpgrade</code> is <code>Required</code> and the backup before the upgrade failed; the message names it. Read the OdooBackup's <code>status.message</code>, fix the cause, then delete that OdooBackup to take it again.</td>
+</tr>
+<tr>
+<td>OdooBackup <code>Failed</code>: "store … cannot be reached, so Odoo was not stopped"</td>
+<td>The check before an offline or pre-upgrade backup could not write to the store, so Odoo kept serving. Read <code>kubectl -n &lt;ns&gt; logs job/&lt;job&gt;</code> (the message names it), fix the network, credentials or store, then take the backup again (for a pre-upgrade backup, delete the failed OdooBackup).</td>
+</tr>
+<tr>
+<td>Phase <code>BackingUp</code>, Odoo stopped, before an upgrade</td>
+<td>The backup <code>spec.backup.beforeUpgrade</code> takes before the upgrade runs with Odoo stopped; the upgrade starts when it ends. <code>status.preUpgradeBackup</code> names it.</td>
+</tr>
+<tr>
 <td>Nothing happens</td>
 <td><code>spec.upgrade.onImageChange</code> is <code>false</code>: a new image is applied only when <code>spec.upgrade.token</code> changes. See <a href="../../guides/upgrades/">Upgrade Odoo</a>.</td>
 </tr>

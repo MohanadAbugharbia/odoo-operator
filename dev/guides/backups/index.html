@@ -1525,6 +1525,7 @@ which old ones are deleted after each backup:</p>
 <span class="w">      </span><span class="nt">monthly</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">12</span>
 <span class="w">      </span><span class="nt">within</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2d</span><span class="w">                      </span><span class="c1"># also keep everything from the last 2 days (y, m, d, h)</span>
 <span class="w">      </span><span class="nt">manual</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span><span class="w">                      </span><span class="c1"># newest manual backups kept; 0 (default) keeps all</span>
+<span class="w">      </span><span class="nt">preUpgrade</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span><span class="w">                   </span><span class="c1"># newest backups taken before upgrades kept (default 5); 0 keeps all</span>
 <span class="w">    </span><span class="nt">drill</span><span class="p">:</span>
 <span class="w">      </span><span class="nt">schedule</span><span class="p">:</span><span class="w"> </span><span class="s">"0</span><span class="nv"> </span><span class="s">5</span><span class="nv"> </span><span class="s">*</span><span class="nv"> </span><span class="s">*</span><span class="nv"> </span><span class="s">0"</span><span class="w">           </span><span class="c1"># [restore drill](drills.md)</span>
 </code></pre></div>
@@ -1538,7 +1539,8 @@ with an event. <code>status.backup</code> shows the last and next scheduled time
 rules are restic's (<code>last</code>, <code>hourly</code>, <code>daily</code>, <code>weekly</code>, <code>monthly</code>, <code>yearly</code>,
 <code>within</code>, with restic's meaning: <code>within</code> counts back from the newest backup,
 not from now), but the periods are counted in <code>timeZone</code>, and they apply to
-scheduled backups; manual backups keep their newest <code>manual</code>. Never deleted: the newest backup, a backup with
+scheduled backups; manual backups keep their newest <code>manual</code>, and backups
+taken <a href="../upgrades/">before upgrades</a> their newest <code>preUpgrade</code>. Never deleted: the newest backup, a backup with
 <code>spec.keep: true</code> (it does not use up a slot of the rules either), a snapshot
 an unfinished restore needs, and snapshots the operator did not take. The
 OdooBackups of deleted snapshots are deleted too; a retention that fails leaves
