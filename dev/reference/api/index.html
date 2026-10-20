@@ -709,6 +709,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../guides/start-from-a-backup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Start an instance from a backup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../guides/disaster-recovery/" class="md-nav__link">
         
   
@@ -1170,6 +1198,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#backupsource" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BackupSource
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#backupstoreformat" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1185,6 +1224,39 @@
     <span class="md-ellipsis">
       
         BeforeUpgrade
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bootstrap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bootstrap
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bootstrapfrombackup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BootstrapFromBackup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bootstrapstatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BootstrapStatus
       
     </span>
   </a>
@@ -2018,6 +2090,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#backupsource" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BackupSource
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#backupstoreformat" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2033,6 +2116,39 @@
     <span class="md-ellipsis">
       
         BeforeUpgrade
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bootstrap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bootstrap
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bootstrapfrombackup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BootstrapFromBackup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bootstrapstatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BootstrapStatus
       
     </span>
   </a>
@@ -2610,6 +2726,56 @@ in step.</p>
 </tr>
 </tbody>
 </table>
+<h4 id="backupsource">BackupSource<a class="headerlink" href="#backupsource" title="Permanent link">&para;</a></h4>
+<p>BackupSource is a backup that is not one of the instance's own
+OdooBackups: an Odoo backup file (.zip or .dump, as Odoo's database
+manager makes them) or a snapshot in any restic repository, in an
+OdooBackupStore of the same namespace.</p>
+<p><em>Appears in:</em>
+- <a href="#bootstrapfrombackup">BootstrapFromBackup</a>
+- <a href="#odoorestorespec">OdooRestoreSpec</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>store</code> <em>string</em></td>
+<td>Store is the OdooBackupStore that holds the backup.</td>
+<td></td>
+<td>MaxLength: 253 <br />MinLength: 1 <br /></td>
+</tr>
+<tr>
+<td><code>path</code> <em>string</em></td>
+<td>Path inside the store, below its path (or subPath). A path ending in<br />.zip or .dump is an Odoo backup file; its last segment may be a<br />pattern (*, ?, [a-z]), and the match whose name sorts last, the<br />newest for dated names, is restored. Any other path is a restic<br />repository folder; empty is this instance's own repository<br />(&lt;namespace&gt;/&lt;name&gt;).</td>
+<td></td>
+<td>MaxLength: 512 <br />Pattern: <code>^([A-Za-z0-9._~+@=-]+/)*[A-Za-z0-9._~+@=*?\[\]-]+$</code> <br /></td>
+</tr>
+<tr>
+<td><code>snapshot</code> <em>string</em></td>
+<td>Snapshot in a restic repository: its ID, or latest (default) for the<br />newest snapshot with Host and Tags.</td>
+<td></td>
+<td>Pattern: <code>^(latest\|[0-9a-f]\{8,64\})$</code> <br /></td>
+</tr>
+<tr>
+<td><code>host</code> <em>string</em></td>
+<td>Host picks latest among the snapshots of one restic --host, such as<br />&lt;namespace&gt;/&lt;name&gt; for the operator's own snapshots.</td>
+<td></td>
+<td>MaxLength: 253 <br /></td>
+</tr>
+<tr>
+<td><code>tags</code> <em>string array</em></td>
+<td>Tags picks latest among the snapshots that have all these restic<br />tags, such as deployment=&lt;namespace&gt;/&lt;name&gt;.</td>
+<td></td>
+<td>MaxItems: 10 <br />items:MaxLength: 253 <br /></td>
+</tr>
+</tbody>
+</table>
 <h4 id="backupstoreformat">BackupStoreFormat<a class="headerlink" href="#backupstoreformat" title="Permanent link">&para;</a></h4>
 <p><em>Underlying type:</em> <em>string</em></p>
 <p>BackupStoreFormat is how backups are kept in a store.</p>
@@ -2657,6 +2823,108 @@ in step.</p>
 <tr>
 <td><code>Required</code></td>
 <td>BeforeUpgradeRequired upgrades only after the backup succeeded; a<br />failed backup keeps the running image.<br /></td>
+</tr>
+</tbody>
+</table>
+<h4 id="bootstrap">Bootstrap<a class="headerlink" href="#bootstrap" title="Permanent link">&para;</a></h4>
+<p>Bootstrap says how an instance's database is made on first boot.</p>
+<p><em>Appears in:</em>
+- <a href="#odoodeploymentspec">OdooDeploymentSpec</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fromBackup</code> <em><a href="#bootstrapfrombackup">BootstrapFromBackup</a></em></td>
+<td>FromBackup restores a backup instead of initializing a new database:<br />the way an existing Odoo moves onto the operator, or an instance is<br />recreated from its backups. It is used once, before Odoo first<br />starts; later changes are ignored.</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+</tbody>
+</table>
+<h4 id="bootstrapfrombackup">BootstrapFromBackup<a class="headerlink" href="#bootstrapfrombackup" title="Permanent link">&para;</a></h4>
+<p>BootstrapFromBackup is the backup an instance starts from.</p>
+<p><em>Appears in:</em>
+- <a href="#bootstrap">Bootstrap</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>store</code> <em>string</em></td>
+<td>Store is the OdooBackupStore that holds the backup.</td>
+<td></td>
+<td>MaxLength: 253 <br />MinLength: 1 <br /></td>
+</tr>
+<tr>
+<td><code>path</code> <em>string</em></td>
+<td>Path inside the store, below its path (or subPath). A path ending in<br />.zip or .dump is an Odoo backup file; its last segment may be a<br />pattern (*, ?, [a-z]), and the match whose name sorts last, the<br />newest for dated names, is restored. Any other path is a restic<br />repository folder; empty is this instance's own repository<br />(&lt;namespace&gt;/&lt;name&gt;).</td>
+<td></td>
+<td>MaxLength: 512 <br />Pattern: <code>^([A-Za-z0-9._~+@=-]+/)*[A-Za-z0-9._~+@=*?\[\]-]+$</code> <br /></td>
+</tr>
+<tr>
+<td><code>snapshot</code> <em>string</em></td>
+<td>Snapshot in a restic repository: its ID, or latest (default) for the<br />newest snapshot with Host and Tags.</td>
+<td></td>
+<td>Pattern: <code>^(latest\|[0-9a-f]\{8,64\})$</code> <br /></td>
+</tr>
+<tr>
+<td><code>host</code> <em>string</em></td>
+<td>Host picks latest among the snapshots of one restic --host, such as<br />&lt;namespace&gt;/&lt;name&gt; for the operator's own snapshots.</td>
+<td></td>
+<td>MaxLength: 253 <br /></td>
+</tr>
+<tr>
+<td><code>tags</code> <em>string array</em></td>
+<td>Tags picks latest among the snapshots that have all these restic<br />tags, such as deployment=&lt;namespace&gt;/&lt;name&gt;.</td>
+<td></td>
+<td>MaxItems: 10 <br />items:MaxLength: 253 <br /></td>
+</tr>
+<tr>
+<td><code>neutralize</code> <em>boolean</em></td>
+<td>Neutralize runs Odoo's neutralize on the restored database before<br />Odoo first starts on it, and gives it a new database.uuid (see<br />OdooRestore spec.neutralize). Set it for a copy of production.</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h4 id="bootstrapstatus">BootstrapStatus<a class="headerlink" href="#bootstrapstatus" title="Permanent link">&para;</a></h4>
+<p>BootstrapStatus records the restore spec.bootstrap.fromBackup started.</p>
+<p><em>Appears in:</em>
+- <a href="#odoodeploymentstatus">OdooDeploymentStatus</a></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+<th>Default</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>restore</code> <em>string</em></td>
+<td>Restore is the OdooRestore that restores the backup.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>completed</code> <em>boolean</em></td>
+<td>Completed is set once it has restored the backup.</td>
+<td></td>
+<td></td>
 </tr>
 </tbody>
 </table>
@@ -3453,7 +3721,13 @@ namespace name it in spec.backup.stores.</p>
 </tr>
 <tr>
 <td><code>encryptionKeySecret</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#secretkeyselector-v1-core">SecretKeySelector</a></em></td>
-<td>EncryptionKeySecret is the restic password that encrypts every<br />backup in the store. Without it no backup can be read: keep a copy<br />outside the cluster.</td>
+<td>EncryptionKeySecret is the restic password that encrypts every<br />backup in the store. Without it no backup can be read: keep a copy<br />outside the cluster. A readOnly store that only holds Odoo zip or<br />.dump files does not need one.</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>readOnly</code> <em>boolean</em></td>
+<td>ReadOnly stores are only read from: OdooRestores and<br />spec.bootstrap.fromBackup take backups from them, but no backup or<br />copy is ever written there, they are never checked or pruned, and<br />their probe only lists the store. Read-only credentials are enough,<br />and restic reads the repositories without locking them.</td>
 <td></td>
 <td></td>
 </tr>
@@ -3505,7 +3779,7 @@ namespace name it in spec.backup.stores.</p>
 </tr>
 <tr>
 <td><code>ready</code> <em>boolean</em></td>
-<td>Ready is true when the last probe could write to, read from and<br />delete a file in the store.</td>
+<td>Ready is true when the last probe could write to, read from and<br />delete a file in the store (list it, for a readOnly store).</td>
 <td></td>
 <td>Optional: {} <br /></td>
 </tr>
@@ -4060,6 +4334,12 @@ namespace name it in spec.backup.stores.</p>
 <td>{  }</td>
 <td>Optional: {} <br /></td>
 </tr>
+<tr>
+<td><code>bootstrap</code> <em><a href="#bootstrap">Bootstrap</a></em></td>
+<td>Bootstrap says how the database is made on first boot. Without it a<br />new database is initialized with spec.modules.</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
 </tbody>
 </table>
 <h4 id="odoodeploymentstatus">OdooDeploymentStatus<a class="headerlink" href="#odoodeploymentstatus" title="Permanent link">&para;</a></h4>
@@ -4151,6 +4431,12 @@ namespace name it in spec.backup.stores.</p>
 <tr>
 <td><code>preUpgradeBackup</code> <em><a href="#preupgradebackupstatus">PreUpgradeBackupStatus</a></em></td>
 <td>PreUpgradeBackup is the backup spec.backup.beforeUpgrade takes before<br />the pending upgrade. It is cleared once no upgrade is pending.</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>bootstrap</code> <em><a href="#bootstrapstatus">BootstrapStatus</a></em></td>
+<td>Bootstrap is the restore spec.bootstrap.fromBackup started.</td>
 <td></td>
 <td>Optional: {} <br /></td>
 </tr>
@@ -4421,6 +4707,18 @@ for keepPrevious so the restore can be undone.</p>
 <td>MinLength: 1 <br /></td>
 </tr>
 <tr>
+<td><code>from</code> <em><a href="#backupsource">BackupSource</a></em></td>
+<td>From is a backup in any store: an Odoo .zip or .dump file, or a<br />snapshot in another restic repository, such as another instance's<br />or another cluster's.</td>
+<td></td>
+<td>Optional: {} <br /></td>
+</tr>
+<tr>
+<td><code>neutralize</code> <em>boolean</em></td>
+<td>Neutralize runs Odoo's neutralize on the restored database before it<br />is swapped in, and gives it a new database.uuid: scheduled actions,<br />outgoing mail servers, payment providers and similar integrations<br />are turned off, so a copy of production cannot act as production.<br />It runs with the instance's image.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
 <td><code>keepPrevious</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#duration-v1-meta">Duration</a></em></td>
 <td>KeepPrevious is how long the replaced database and files are kept<br />for an undo. Overrides spec.backup.restore.keepPrevious.</td>
 <td></td>
@@ -4462,12 +4760,18 @@ for keepPrevious so the restore can be undone.</p>
 </tr>
 <tr>
 <td><code>store</code> <em>string</em></td>
-<td>Store and SnapshotID are the backup that was restored.</td>
+<td>Store and SnapshotID are the backup that was restored; File is the<br />Odoo backup file restored from Store instead of a snapshot.</td>
 <td></td>
 <td></td>
 </tr>
 <tr>
 <td><code>snapshotID</code> <em>string</em></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>file</code> <em>string</em></td>
 <td></td>
 <td></td>
 <td></td>

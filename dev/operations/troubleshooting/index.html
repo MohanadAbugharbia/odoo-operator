@@ -709,6 +709,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../guides/start-from-a-backup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Start an instance from a backup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../guides/disaster-recovery/" class="md-nav__link">
         
   
@@ -1855,6 +1883,11 @@ fails.</p>
 <td><code>spec.database.name</code> (or the Secret value behind <code>nameFromSecret</code>) now resolves to another name than the instance uses. Put the old value back; the operator never switches databases.</td>
 </tr>
 <tr>
+<td>The backup to start from was not restored</td>
+<td><code>BootstrapFailed</code></td>
+<td>The OdooRestore <code>&lt;name&gt;-bootstrap</code> of <code>spec.bootstrap.fromBackup</code> failed; the message has its reason, and Odoo does not start. Fix the cause (the file, the store, the image's Odoo series), then delete that OdooRestore: it is created again and retried. See <a href="../../guides/start-from-a-backup/#when-the-bootstrap-fails">Start an instance from a backup</a>.</td>
+</tr>
+<tr>
 <td>A restore was deleted halfway through its swap</td>
 <td><code>RestoreIncomplete</code></td>
 <td>Odoo stays stopped. Check the <code>&lt;db&gt;_restore_*</code> / <code>&lt;db&gt;_prev_*</code> databases and filestore folders named in the restore Job's log, put the data right, then clear <code>status.currentOperation</code> on the OdooDeployment.</td>
@@ -1981,6 +2014,26 @@ example alerts, report failures.</p>
 <td><code>Failed</code>, "the live data was not changed"</td>
 <td>The Job failed before the swap.</td>
 <td><code>kubectl -n &lt;ns&gt; logs job/&lt;job&gt;</code>; nothing to undo.</td>
+</tr>
+<tr>
+<td><code>Failed</code>: "the backup was taken on Odoo … but the instance runs Odoo …"</td>
+<td>A backup of another Odoo series than the instance's image (17.0 on 18.0).</td>
+<td>Restore it on an image of its series, or upgrade it there first.</td>
+</tr>
+<tr>
+<td><code>Failed</code>: "no file in … matches"</td>
+<td><code>from.path</code>'s pattern matched no file in the store.</td>
+<td>Check the folder and pattern; a pattern is only allowed in the last segment.</td>
+</tr>
+<tr>
+<td><code>Failed</code>: "has no encryptionKeySecret"</td>
+<td><code>from</code> names a restic repository in a store without a key.</td>
+<td>Add the repository's key to the store, or point <code>from.path</code> at a <code>.zip</code> or <code>.dump</code> file.</td>
+</tr>
+<tr>
+<td><code>Failed</code>: "neutralize"</td>
+<td>Odoo could not neutralize the loaded database (Odoo before 16 has no <code>neutralize</code>).</td>
+<td>Read the Job's <code>odoo</code> container log; restore without <code>neutralize</code> and neutralize by hand.</td>
 </tr>
 <tr>
 <td><code>Restoring</code> for long, instance <code>Degraded</code> <code>RestoreIncomplete</code></td>

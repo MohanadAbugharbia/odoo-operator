@@ -709,6 +709,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../guides/start-from-a-backup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Start an instance from a backup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../guides/disaster-recovery/" class="md-nav__link">
         
   
@@ -1557,7 +1585,12 @@ data untouched or finish when run again.</p>
 <div class="highlight"><pre><span></span><code><span class="nv">PG_MAJOR</span><span class="o">=</span><span class="m">17</span><span class="w"> </span>hack/backup-it.sh
 </code></pre></div>
 <p><code>hack/backup-e2e.sh</code> backs up, restores and undoes a real Odoo in a kind
-cluster through an S3 store and a PVC store. CI runs both.</p>
+cluster through an S3 store and a PVC store, then starts a second instance
+from an Odoo backup file and restores the first one's repository into it.
+CI runs both.</p>
+<p>The restores of Odoo's own backup files are tested against real backups made
+by Odoo 17, 18 and 19, in <code>internal/backup/agent/testdata/odoo</code>; its README
+says how they were made, to make them again for a new Odoo series.</p>
 <p><code>make test-e2e</code> additionally needs Docker and kind, and is not part of CI.</p>
 <h2 id="deploy-a-build-on-a-cluster">Deploy a build on a cluster<a class="headerlink" href="#deploy-a-build-on-a-cluster" title="Permanent link">&para;</a></h2>
 <p><strong>Build and push your image to the location specified by <code>IMG</code>:</strong></p>

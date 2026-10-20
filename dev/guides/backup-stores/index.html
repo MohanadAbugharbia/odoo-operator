@@ -709,6 +709,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#read-only-stores" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read-only stores
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#probes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -771,6 +782,34 @@
     
   
     Restore and undo
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../start-from-a-backup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Start an instance from a backup
   
 
     
@@ -1465,6 +1504,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#read-only-stores" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read-only stores
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#probes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1504,7 +1554,9 @@
 <p>An <code>OdooBackupStore</code> says where backups go. Every store holds encrypted
 <a href="https://restic.net/">restic</a> repositories, one per instance under
 <code>&lt;path&gt;/&lt;namespace&gt;/&lt;deployment&gt;/</code>, encrypted with the key in
-<code>encryptionKeySecret</code>.</p>
+<code>encryptionKeySecret</code>. A <a href="#read-only-stores">read-only store</a> is where
+backups are only read from, such as Odoo backup files to start an instance
+from.</p>
 <div class="admonition warning">
 <p class="admonition-title">Keep the encryption key</p>
 <p>Keep a copy of the key in <code>encryptionKeySecret</code> outside the cluster:
@@ -1567,6 +1619,33 @@ kubectl<span class="w"> </span>-n<span class="w"> </span>shop<span class="w"> </
 </code></pre></div>
 <p>Check the scanned key against the one the server's provider shows before you
 trust it.</p>
+<h2 id="read-only-stores">Read-only stores<a class="headerlink" href="#read-only-stores" title="Permanent link">&para;</a></h2>
+<p><code>readOnly: true</code> makes a store the operator only reads: restores and
+<a href="../start-from-a-backup/">bootstraps</a> take backups from it with <code>from</code>, and
+nothing is ever written to it. Use it for the backups of another instance or
+cluster, or for a folder or bucket of Odoo backup files:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">odoo.abugharbia.com/v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">OdooBackupStore</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">imports</span>
+<span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">shop</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">s3</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">endpoint</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https://s3.example.com</span>
+<span class="w">    </span><span class="nt">bucket</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">odoo-exports</span>
+<span class="w">    </span><span class="nt">credentialsSecret</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> name</span><span class="p">:</span><span class="w"> </span><span class="nv">s3-readonly-credentials</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<span class="w">  </span><span class="nt">readOnly</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</code></pre></div>
+<ul>
+<li>Its probe only lists the store, so read-only credentials are enough.</li>
+<li>Restic reads it without locks (<code>--no-lock</code>), which works on read-only
+  credentials and never blocks the instance that writes the repository.</li>
+<li><code>encryptionKeySecret</code> is optional: a store without one holds only backup
+  files (<code>.zip</code> and <code>.dump</code>), and a restore of a restic repository from it is
+  refused.</li>
+<li>It cannot be in <code>spec.backup.stores</code> (backups to it fail), and it is never
+  <a href="../store-check-prune/">checked or pruned</a>.</li>
+</ul>
 <h2 id="probes">Probes<a class="headerlink" href="#probes" title="Permanent link">&para;</a></h2>
 <p>The operator probes each store with a short Job that writes, reads and deletes
 a file (<code>.odoo-operator-probe-&lt;random&gt;</code>), on every change to the store or its

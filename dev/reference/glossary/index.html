@@ -709,6 +709,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../guides/start-from-a-backup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Start an instance from a backup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../guides/disaster-recovery/" class="md-nav__link">
         
   
@@ -1421,6 +1449,25 @@ upgrade when <code>spec.backup.beforeUpgrade</code> asks for it, named
 <code>&lt;name&gt;-pre-upgrade-&lt;yyyymmdd-hhmmss&gt;</code>. Retention thins scheduled backups
 by its rules, keeps the newest <code>retention.preUpgrade</code> pre-upgrade backups
 (default 5), and keeps manual backups unless you set <code>retention.manual</code>.</dd>
+<dt><strong>Read-only store</strong></dt>
+<dd>A store with <code>readOnly: true</code>: the operator only reads backups from it
+(restores and bootstraps with <code>from</code>), never writes, locks, checks or
+prunes it. See <a href="../../guides/backup-stores/#read-only-stores">Read-only stores</a>.</dd>
+<dt><strong>Backup file</strong></dt>
+<dd>A backup made by Odoo's database manager rather than by the operator: a
+<code>.zip</code> (<code>dump.sql</code>, <code>manifest.json</code>, <code>filestore/</code>) or a <code>.dump</code>
+(<code>pg_dump</code> custom format, no filestore). A restore or bootstrap reads it
+with <code>from.path</code>.</dd>
+<dt><strong>Bootstrap</strong></dt>
+<dd>Making a new instance's first database from a backup
+(<code>spec.bootstrap.fromBackup</code>) instead of initializing it: the operator
+creates the OdooRestore <code>&lt;name&gt;-bootstrap</code> in place of the init Job. See
+<a href="../../guides/start-from-a-backup/">Start an instance from a backup</a>.</dd>
+<dt><strong>Neutralize</strong></dt>
+<dd>Odoo's <code>odoo neutralize</code>, which a restore runs on the loaded database
+when <code>neutralize</code> is set: outgoing mail, scheduled actions, payment
+providers and other integrations are turned off, and the database gets a
+new <code>database.uuid</code>. For copies of production.</dd>
 <dt><strong>Copy</strong></dt>
 <dd>The same snapshot copied (<code>restic copy</code>) to every store after the first in
 <code>spec.backup.stores</code>.</dd>
