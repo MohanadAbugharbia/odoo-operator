@@ -2719,6 +2719,12 @@ in step.</p>
 <td></td>
 </tr>
 <tr>
+<td><code>file</code> <em>string</em></td>
+<td>File is the copy in a store of format zip: the Odoo zip's path below<br />the store's root.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
 <td><code>error</code> <em>string</em></td>
 <td>Error says why the copy failed.</td>
 <td></td>
@@ -2780,7 +2786,7 @@ OdooBackupStore of the same namespace.</p>
 <p><em>Underlying type:</em> <em>string</em></p>
 <p>BackupStoreFormat is how backups are kept in a store.</p>
 <p><em>Validation:</em>
-- Enum: [restic]</p>
+- Enum: [restic zip]</p>
 <p><em>Appears in:</em>
 - <a href="#odoobackupstorespec">OdooBackupStoreSpec</a></p>
 <table>
@@ -2794,6 +2800,10 @@ OdooBackupStore of the same namespace.</p>
 <tr>
 <td><code>restic</code></td>
 <td>BackupStoreFormatRestic keeps one encrypted, deduplicated restic<br />repository per OdooDeployment.<br /></td>
+</tr>
+<tr>
+<td><code>zip</code></td>
+<td>BackupStoreFormatZip keeps every backup as the zip Odoo's database<br />manager makes, unencrypted and not deduplicated, in one folder per<br />OdooDeployment. A zip store only receives copies.<br /></td>
 </tr>
 </tbody>
 </table>
@@ -3691,9 +3701,9 @@ namespace name it in spec.backup.stores.</p>
 <tbody>
 <tr>
 <td><code>format</code> <em><a href="#backupstoreformat">BackupStoreFormat</a></em></td>
-<td>Format is how backups are kept. restic: one encrypted, deduplicated<br />repository per OdooDeployment at &lt;path&gt;/&lt;namespace&gt;/&lt;deployment&gt;/.</td>
+<td>Format is how backups are kept. restic: one encrypted, deduplicated<br />repository per OdooDeployment at &lt;path&gt;/&lt;namespace&gt;/&lt;deployment&gt;/.<br />zip: every backup as the zip Odoo's database manager makes, at<br />&lt;path&gt;/&lt;namespace&gt;/&lt;deployment&gt;/&lt;db&gt;_&lt;YYYY-MM-DD_HH-MM-SS&gt;.zip (UTC),<br />unencrypted; a zip store can only be a copy store (not the first in<br />spec.backup.stores) and needs no encryptionKeySecret.</td>
 <td>restic</td>
-<td>Enum: [restic] <br /></td>
+<td>Enum: [restic zip] <br /></td>
 </tr>
 <tr>
 <td><code>s3</code> <em><a href="#s3store">S3Store</a></em></td>
@@ -3721,7 +3731,7 @@ namespace name it in spec.backup.stores.</p>
 </tr>
 <tr>
 <td><code>encryptionKeySecret</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#secretkeyselector-v1-core">SecretKeySelector</a></em></td>
-<td>EncryptionKeySecret is the restic password that encrypts every<br />backup in the store. Without it no backup can be read: keep a copy<br />outside the cluster. A readOnly store that only holds Odoo zip or<br />.dump files does not need one.</td>
+<td>EncryptionKeySecret is the restic password that encrypts every<br />backup in the store. Without it no backup can be read: keep a copy<br />outside the cluster. A readOnly store that only holds Odoo zip or<br />.dump files, and a store of format zip, do not need one.</td>
 <td></td>
 <td>Optional: {} <br /></td>
 </tr>

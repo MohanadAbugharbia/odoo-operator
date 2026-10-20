@@ -720,6 +720,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#zip-stores" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Zip stores
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#probes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1515,6 +1526,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#zip-stores" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Zip stores
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#probes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1556,7 +1578,8 @@
 <code>&lt;path&gt;/&lt;namespace&gt;/&lt;deployment&gt;/</code>, encrypted with the key in
 <code>encryptionKeySecret</code>. A <a href="#read-only-stores">read-only store</a> is where
 backups are only read from, such as Odoo backup files to start an instance
-from.</p>
+from. A <a href="#zip-stores">zip store</a> takes copies of backups as Odoo's own zip
+files.</p>
 <div class="admonition warning">
 <p class="admonition-title">Keep the encryption key</p>
 <p>Keep a copy of the key in <code>encryptionKeySecret</code> outside the cluster:
@@ -1645,6 +1668,44 @@ cluster, or for a folder or bucket of Odoo backup files:</p>
   refused.</li>
 <li>It cannot be in <code>spec.backup.stores</code> (backups to it fail), and it is never
   <a href="../store-check-prune/">checked or pruned</a>.</li>
+</ul>
+<h2 id="zip-stores">Zip stores<a class="headerlink" href="#zip-stores" title="Permanent link">&para;</a></h2>
+<p><code>format: zip</code> makes a store that keeps each backup as the zip Odoo's database
+manager makes (<code>dump.sql</code>, <code>filestore/</code>, <code>manifest.json</code>), which any Odoo
+loads with its database manager or <code>odoo db load</code>. Put it after the first
+store in <code>spec.backup.stores</code> and every backup is <a href="../backups/#copies">copied</a>
+into it as a zip:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">odoo.abugharbia.com/v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">OdooBackupStore</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">zips</span>
+<span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">shop</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">sftp</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">host</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">backup.example.com</span>
+<span class="w">    </span><span class="nt">user</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">odoo</span>
+<span class="w">    </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/exports</span>
+<span class="w">    </span><span class="nt">sshSecret</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> name</span><span class="p">:</span><span class="w"> </span><span class="nv">my-odoo-sftp</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<span class="w">  </span><span class="nt">format</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">zip</span>
+</code></pre></div>
+<ul>
+<li>The zips are at <code>&lt;path&gt;/&lt;namespace&gt;/&lt;deployment&gt;/&lt;database&gt;_&lt;YYYY-MM-DD_HH-MM-SS&gt;.zip</code>,
+  named after the backup's time in UTC, and the backup's <code>status.copies</code>
+  names its zip.</li>
+<li>A zip is written under a temporary name (<code>.&lt;name&gt;.partial</code>) and renamed when
+  complete, so the store never shows a zip cut short.</li>
+<li>When retention forgets a backup, its zip is deleted. Only the names the
+  instance's own backups get are ever deleted: other files in the folder stay.</li>
+<li>A zip holds every file again, so each copy costs the full database and
+  filestore; with restic, a backup costs only what changed. Keep the first
+  store a restic store and use a zip store for what needs plain Odoo files.</li>
+<li>Zips are not encrypted: the store's own access control is all that guards
+  them. <code>encryptionKeySecret</code> is not needed.</li>
+<li>A zip store cannot be the first store (backups are taken into restic
+  stores only), and it is never <a href="../store-check-prune/">checked or pruned</a>.
+  Its <code>format</code> cannot change once it is created.</li>
+<li>A restore whose backup's own store is not ready restores the zip instead;
+  a <a href="../drills/">drill</a> only uses restic copies.</li>
 </ul>
 <h2 id="probes">Probes<a class="headerlink" href="#probes" title="Permanent link">&para;</a></h2>
 <p>The operator probes each store with a short Job that writes, reads and deletes

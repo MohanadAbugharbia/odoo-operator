@@ -736,6 +736,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#export-a-backup-as-an-odoo-zip" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Export a backup as an Odoo zip
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1481,6 +1492,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#export-a-backup-as-an-odoo-zip" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Export a backup as an Odoo zip
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1582,12 +1604,65 @@ hours by default) for its log.</p>
 <h2 id="copies">Copies<a class="headerlink" href="#copies" title="Permanent link">&para;</a></h2>
 <p>Each backup is copied (<code>restic copy</code>) to every store after the
 first in <code>spec.backup.stores</code>, in the same Job, and retention runs in each
-copy too. A store that is missing or whose Secret is incomplete is skipped; a
+copy too. A <a href="../backup-stores/#zip-stores">zip store</a> gets the backup as an
+Odoo zip instead, and loses the zip when retention forgets the backup. A store that is missing or whose Secret is incomplete is skipped; a
 store that is not ready is still tried. A skipped store or a copy that fails leaves
 the backup <code>PartiallyCompleted</code> with <code>status.copies</code> saying why; the backup in
 the first store is still good. A restore (or drill) whose backup's store is
 not ready restores a copy from a ready store instead, with an event saying so.
 Stores may use different kinds and different encryption keys.</p>
+<h2 id="export-a-backup-as-an-odoo-zip">Export a backup as an Odoo zip<a class="headerlink" href="#export-a-backup-as-an-odoo-zip" title="Permanent link">&para;</a></h2>
+<p><code>odoo-backup export</code> writes one backup as the zip Odoo's database manager
+makes, for a backup that is not in a <a href="../backup-stores/#zip-stores">zip store</a>:
+to hand to someone, or to load into an Odoo outside the cluster. Run it in a
+one-off Job with the backup image, the store mounted and the encryption key.
+For a PVC store:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">batch/v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Job</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">export-my-odoo</span>
+<span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">shop</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">backoffLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0</span>
+<span class="w">  </span><span class="nt">template</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">spec</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">restartPolicy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Never</span>
+<span class="w">      </span><span class="nt">containers</span><span class="p">:</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">export</span>
+<span class="w">          </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ghcr.io/mohanadabugharbia/odoo-operator-backup:0.6.0</span><span class="w">   </span><span class="c1"># the operator's version</span>
+<span class="w">          </span><span class="nt">command</span><span class="p">:</span>
+<span class="w">            </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">odoo-backup</span>
+<span class="w">            </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">export</span>
+<span class="w">            </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">--no-lock</span>
+<span class="w">            </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">--host=shop/my-odoo</span><span class="w">        </span><span class="c1"># &lt;namespace&gt;/&lt;deployment&gt;</span>
+<span class="w">            </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">--tag=kind=manual</span><span class="w">          </span><span class="c1"># optional: the newest manual backup</span>
+<span class="w">            </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">--output=/exports/my-odoo.zip</span>
+<span class="w">          </span><span class="nt">env</span><span class="p">:</span>
+<span class="w">            </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> name</span><span class="p">:</span><span class="w"> </span><span class="nv">RESTIC_REPOSITORY</span><span class="p p-Indicator">,</span><span class="nt"> value</span><span class="p">:</span><span class="w"> </span><span class="nv">/store/shop/my-odoo</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<span class="w">            </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> name</span><span class="p">:</span><span class="w"> </span><span class="nv">RESTIC_PASSWORD_FILE</span><span class="p p-Indicator">,</span><span class="nt"> value</span><span class="p">:</span><span class="w"> </span><span class="nv">/key/password</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<span class="w">          </span><span class="nt">volumeMounts</span><span class="p">:</span>
+<span class="w">            </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> name</span><span class="p">:</span><span class="w"> </span><span class="nv">store</span><span class="p p-Indicator">,</span><span class="nt"> mountPath</span><span class="p">:</span><span class="w"> </span><span class="nv">/store</span><span class="p p-Indicator">,</span><span class="nt"> readOnly</span><span class="p">:</span><span class="w"> </span><span class="nv">true</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<span class="w">            </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> name</span><span class="p">:</span><span class="w"> </span><span class="nv">key</span><span class="p p-Indicator">,</span><span class="nt"> mountPath</span><span class="p">:</span><span class="w"> </span><span class="nv">/key</span><span class="p p-Indicator">,</span><span class="nt"> readOnly</span><span class="p">:</span><span class="w"> </span><span class="nv">true</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<span class="w">            </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> name</span><span class="p">:</span><span class="w"> </span><span class="nv">exports</span><span class="p p-Indicator">,</span><span class="nt"> mountPath</span><span class="p">:</span><span class="w"> </span><span class="nv">/exports</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<span class="w">      </span><span class="nt">volumes</span><span class="p">:</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">store</span>
+<span class="w">          </span><span class="nt">persistentVolumeClaim</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> claimName</span><span class="p">:</span><span class="w"> </span><span class="nv">backups</span><span class="p p-Indicator">,</span><span class="nt"> readOnly</span><span class="p">:</span><span class="w"> </span><span class="nv">true</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">key</span>
+<span class="w">          </span><span class="nt">secret</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> secretName</span><span class="p">:</span><span class="w"> </span><span class="nv">backup-key</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">exports</span>
+<span class="w">          </span><span class="nt">persistentVolumeClaim</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> claimName</span><span class="p">:</span><span class="w"> </span><span class="nv">exports</span><span class="w"> </span><span class="p p-Indicator">}</span>
+</code></pre></div>
+<ul>
+<li><code>--snapshot</code> picks a backup by its <code>status.snapshotID</code>; without it the
+  newest snapshot with <code>--host</code> and every <code>--tag</code> is exported.</li>
+<li><code>--output -</code> writes the zip to the Job's log stream instead of a file,
+  which is only useful when you run the command yourself
+  (<code>kubectl run</code>, <code>kubectl exec</code>).</li>
+<li><code>--target</code> uploads the zip with rclone instead (for example
+  <code>:sftp:/exports/</code>, with the <code>RCLONE_SFTP_*</code> settings in the environment). A
+  target ending in <code>/</code> names the zip as zip stores do.</li>
+<li>The Job exits 0 when the zip is complete; a failed export leaves no file.</li>
+</ul>
 
 
 

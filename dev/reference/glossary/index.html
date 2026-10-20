@@ -1453,6 +1453,10 @@ by its rules, keeps the newest <code>retention.preUpgrade</code> pre-upgrade bac
 <dd>A store with <code>readOnly: true</code>: the operator only reads backups from it
 (restores and bootstraps with <code>from</code>), never writes, locks, checks or
 prunes it. See <a href="../../guides/backup-stores/#read-only-stores">Read-only stores</a>.</dd>
+<dt><strong>Zip store</strong></dt>
+<dd>A store with <code>format: zip</code>: it takes copies of backups as Odoo zips,
+which any Odoo loads, instead of restic snapshots. See <a href="../../guides/backup-stores/#zip-stores">Zip
+stores</a>.</dd>
 <dt><strong>Backup file</strong></dt>
 <dd>A backup made by Odoo's database manager rather than by the operator: a
 <code>.zip</code> (<code>dump.sql</code>, <code>manifest.json</code>, <code>filestore/</code>) or a <code>.dump</code>
@@ -1470,7 +1474,7 @@ providers and other integrations are turned off, and the database gets a
 new <code>database.uuid</code>. For copies of production.</dd>
 <dt><strong>Copy</strong></dt>
 <dd>The same snapshot copied (<code>restic copy</code>) to every store after the first in
-<code>spec.backup.stores</code>.</dd>
+<code>spec.backup.stores</code>; in a zip store, the snapshot written as an Odoo zip.</dd>
 <dt><strong>Prune</strong></dt>
 <dd>Freeing the space of forgotten snapshots in a store (<code>restic prune</code>).
 Retention only forgets; a store's <a href="../../guides/store-check-prune/">prune</a>

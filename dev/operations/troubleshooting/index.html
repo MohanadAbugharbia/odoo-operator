@@ -1990,6 +1990,16 @@ deleted (see below).</p>
 <td>The backup is in the first store, but a copy failed.</td>
 <td><code>status.copies</code> says why; fix the copy's store.</td>
 </tr>
+<tr>
+<td><code>Failed</code>, "keeps zip files and only takes copies"</td>
+<td>The first store in <code>spec.backup.stores</code> is a zip store.</td>
+<td>List a restic store first and the zip store after it.</td>
+</tr>
+<tr>
+<td><code>CompletedWithWarnings</code>, "could not delete …, whose backups retention forgot"</td>
+<td>A zip store refused to delete the zip of a forgotten backup.</td>
+<td>Check the store's credentials allow deleting; delete the named zips by hand. The next backup does not try again.</td>
+</tr>
 </tbody>
 </table>
 <p>A failed backup is final: the operator does not retry it. The
