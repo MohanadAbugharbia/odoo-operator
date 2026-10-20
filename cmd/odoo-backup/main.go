@@ -270,6 +270,7 @@ func runRestore(ctx context.Context, fs *flag.FlagSet, c *common, command string
 		o.Mode = agent.ModeUndo
 	}
 	var modules string
+	var upgrade string
 	var tags stringList
 	fs.StringVar(&o.Suffix, "suffix", "", "this restore's suffix")
 	fs.StringVar(&o.Snapshot, "snapshot", "", "snapshot to restore (restore): an ID, or latest")
@@ -282,6 +283,8 @@ func runRestore(ctx context.Context, fs *flag.FlagSet, c *common, command string
 	fs.BoolVar(&o.LoadOnly, "load-only", false, "load and check the backup, then stop (the first step); "+
 		"the result goes to <work-dir>/"+agent.WorkLoadResult)
 	fs.BoolVar(&o.Neutralize, "neutralize", false, "require the Odoo step to have neutralized the backup")
+	fs.StringVar(&upgrade, "upgrade", "", "comma-separated modules the Odoo step must have upgraded")
+	fs.StringVar(&o.UpgradeImage, "upgrade-image", "", "with --upgrade: the image the Odoo step upgraded on")
 	fs.StringVar(&o.UndoSuffix, "undo-suffix", "", "suffix of the restore to undo (undo)")
 	fs.StringVar(&o.DataRoot, "data", layout.DataMount, "root of the instance's data volume")
 	fs.StringVar(&modules, "expect-modules", "", "comma-separated modules the instance should have")
@@ -293,6 +296,15 @@ func runRestore(ctx context.Context, fs *flag.FlagSet, c *common, command string
 		if m = strings.TrimSpace(m); m != "" {
 			o.ExpectModules = append(o.ExpectModules, m)
 		}
+	}
+	for _, m := range strings.Split(upgrade, ",") {
+		if m = strings.TrimSpace(m); m != "" {
+			o.UpgradeModules = append(o.UpgradeModules, m)
+		}
+	}
+	if len(o.UpgradeModules) > 0 && (o.UpgradeImage == "" || o.WorkDir == "") {
+		fmt.Fprintln(os.Stderr, "restore: --upgrade needs --upgrade-image and --work-dir")
+		return 2
 	}
 	o.Tags = tags
 	if o.File != "" && (!agent.IsBackupFile(o.File) || o.StoreTarget == "") {

@@ -113,6 +113,54 @@ var _ = Describe("Bootstrap from a backup", func() {
 		Expect(h.bootstrapRestore()).To(BeNil())
 	})
 
+	It("upgrades the restored database to spec.image when asked, and then needs no upgrade Job", func() {
+		h = newBootstrapHarness(false)
+		od := h.get()
+		od.Spec.Bootstrap.FromBackup.Upgrade = true
+		od.Spec.Upgrade.Modules = []string{"shop", "pos"}
+		od.Spec.Upgrade.Token = "t1"
+		Expect(k8sClient.Update(ctx, od)).To(Succeed())
+		h.reconcile()
+		Expect(h.bootstrapRestore().Spec.Upgrade).To(BeTrue())
+
+		_, od = h.reconcile()
+		job := h.job(od.Status.CurrentOperation.Job)
+		Expect(job).NotTo(BeNil())
+		args := jobArgs(job)
+		Expect(args).To(ContainSubstring("--upgrade shop,pos"))
+		Expect(args).To(ContainSubstring("--upgrade-image odoo:a"))
+		odooStep := job.Spec.Template.Spec.InitContainers[1]
+		Expect(odooStep.Image).To(Equal("odoo:a"))
+		Expect(odooStep.Env).To(ContainElement(corev1.EnvVar{Name: "UPGRADE", Value: "shop,pos"}))
+
+		h.finishJob(od.Status.CurrentOperation.Job, &result.Result{
+			OK: true, LiveChanged: true, PreviousKept: true, OdooVersion: "18.0", Image: "odoo:a",
+			File: "exports/shop_2026-02-01.zip",
+		})
+		_, od = h.reconcile()
+		Expect(h.bootstrapRestore().Status.Phase).To(Equal(odoov1.RestorePhaseCompleted))
+		Expect(od.Status.AppliedImage).To(Equal("odoo:a"))
+		Expect(od.Status.AppliedUpgradeToken).To(Equal("t1"))
+		for i := 0; i < 3; i++ {
+			_, od = h.reconcile()
+		}
+		Expect(h.job(od.MaintenanceJobName(nil, false))).To(BeNil(), "the restore already upgraded the data")
+		Expect(od.Status.Phase).To(Equal(odoov1.PhaseRunning), "status: %+v", od.Status)
+	})
+
+	It("upgrades all modules when spec.upgrade.modules is empty", func() {
+		h = newBootstrapHarness(true)
+		od := h.get()
+		od.Spec.Bootstrap.FromBackup.Upgrade = true
+		od.Spec.Upgrade.Modules = nil
+		Expect(k8sClient.Update(ctx, od)).To(Succeed())
+		h.reconcile()
+		_, od = h.reconcile()
+		args := jobArgs(h.job(od.Status.CurrentOperation.Job))
+		Expect(args).To(ContainSubstring("--upgrade all"))
+		Expect(args).To(ContainSubstring("--neutralize"))
+	})
+
 	It("counts a restored database as initialized even when spec.modules is empty", func() {
 		h = newBootstrapHarness(false)
 		od := h.get()

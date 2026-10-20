@@ -1315,6 +1315,11 @@ func (r *OdooDeploymentReconciler) driveRestore(ctx context.Context, s *reconcil
 			// it is also the Odoo that neutralizes.
 			jobSrc.OdooImage = orDefault(od.Status.AppliedImage, od.Spec.Image)
 		}
+		if rs.Spec.Upgrade {
+			// The data is upgraded to the image the instance is to run.
+			jobSrc.OdooImage = od.Spec.Image
+			jobSrc.UpgradeModules = restoreUpgradeModules(od)
+		}
 		attempt := rs.Status.Attempts + 1
 		job, err := jobspec.RestoreJob(params, rs, rs.Status.Suffix, jobSrc, od.Spec.Modules, attempt)
 		if err != nil {
@@ -1392,6 +1397,15 @@ func (r *OdooDeploymentReconciler) driveRestore(ctx context.Context, s *reconcil
 	return ctrl.Result{RequeueAfter: delay}, false, nil
 }
 
+// restoreUpgradeModules are the modules an OdooRestore with spec.upgrade
+// upgrades: spec.upgrade.modules, or all of them when that is empty.
+func restoreUpgradeModules(od *odoov1.OdooDeployment) []string {
+	if len(od.Spec.Upgrade.Modules) == 0 {
+		return []string{"all"}
+	}
+	return od.Spec.Upgrade.Modules
+}
+
 // finishRestore records a restore that swapped the data in and points the
 // instance at what the backup ran.
 func (r *OdooDeploymentReconciler) finishRestore(ctx context.Context, s *reconcileState, w instanceWork,
@@ -1457,9 +1471,10 @@ func (r *OdooDeploymentReconciler) finishRestore(ctx context.Context, s *reconci
 	if image != "" {
 		od.Status.AppliedImage = image
 	}
-	if image == "" && rs.Spec.From != nil {
-		// A backup from elsewhere records neither: the data now runs on
-		// this instance's image and counts as upgraded for its token.
+	if (image == "" && rs.Spec.From != nil) || rs.Spec.Upgrade {
+		// A backup from elsewhere records neither, and an upgraded restore
+		// was upgraded to spec.image: the data now runs on this instance's
+		// image and counts as upgraded for its token.
 		token = od.Spec.Upgrade.Token
 	}
 	od.Status.AppliedUpgradeToken = token

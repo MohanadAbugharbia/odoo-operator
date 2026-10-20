@@ -291,27 +291,32 @@ func TestRestoreOdooFileRefusals(t *testing.T) {
 	}
 }
 
+// loadForOdooStep runs the load step of a restore Job with an Odoo step on
+// fixture x: the fixture, the store, the shared folder and the suffix.
+func loadForOdooStep(t *testing.T, x odooFixture) (*fixture, string, string, string) {
+	t.Helper()
+	f := newFixture(t)
+	store := t.TempDir()
+	putFile(t, store, x.series+"/fixture.zip", "fixture.zip")
+	work := t.TempDir()
+	suffix := f.nextSuffix()
+	rr := f.restoreFile(store, "fixture.zip", suffix, func(o *RestoreOptions) { o.WorkDir, o.LoadOnly = work, true })
+	if !rr.OK || rr.LiveChanged {
+		t.Fatalf("load step: %+v", rr)
+	}
+	source, err := os.ReadFile(filepath.Join(work, WorkSource))
+	if err != nil || string(source) != layout.RestoreName(f.db, suffix) {
+		t.Fatalf("the load step named %q (%v) for the Odoo step", source, err)
+	}
+	return f, store, work, suffix
+}
+
 // The three steps of a restore Job with an Odoo step: the load step stops
 // before the swap, the Odoo step (simulated) reports its version and
 // neutralizes, the last step checks both and swaps.
 func TestRestoreWithOdooStep(t *testing.T) {
 	x := odooFixtures[1]
-	setup := func(t *testing.T) (*fixture, string, string, string) {
-		f := newFixture(t)
-		store := t.TempDir()
-		putFile(t, store, x.series+"/fixture.zip", "fixture.zip")
-		work := t.TempDir()
-		suffix := f.nextSuffix()
-		rr := f.restoreFile(store, "fixture.zip", suffix, func(o *RestoreOptions) { o.WorkDir, o.LoadOnly = work, true })
-		if !rr.OK || rr.LiveChanged {
-			t.Fatalf("load step: %+v", rr)
-		}
-		source, err := os.ReadFile(filepath.Join(work, WorkSource))
-		if err != nil || string(source) != layout.RestoreName(f.db, suffix) {
-			t.Fatalf("the load step named %q (%v) for the Odoo step", source, err)
-		}
-		return f, store, work, suffix
-	}
+	setup := func(t *testing.T) (*fixture, string, string, string) { return loadForOdooStep(t, x) }
 	last := func(f *fixture, store, work, suffix string, neutralize bool) result.Result {
 		return f.restoreFile(store, "fixture.zip", suffix, func(o *RestoreOptions) { o.WorkDir, o.Neutralize = work, neutralize })
 	}
@@ -362,6 +367,55 @@ func TestRestoreWithOdooStep(t *testing.T) {
 		rr := f.restoreFile(t.TempDir(), "fixture.zip", f.nextSuffix(), func(o *RestoreOptions) { o.WorkDir = work })
 		if rr.OK || rr.LiveChanged || rr.Step != result.StepFetch {
 			t.Fatalf("last step after a failed load: %+v", rr)
+		}
+	})
+}
+
+// An upgraded restore: the last step requires the Odoo step's upgrade, on
+// Odoo of the backup's series, and reports the image it upgraded on.
+func TestRestoreUpgradeWithOdooStep(t *testing.T) {
+	x := odooFixtures[1]
+	setup := func(t *testing.T) (*fixture, string, string, string) { return loadForOdooStep(t, x) }
+	upgraded := func(f *fixture, store, work, suffix string) result.Result {
+		return f.restoreFile(store, "fixture.zip", suffix, func(o *RestoreOptions) {
+			o.WorkDir, o.UpgradeModules, o.UpgradeImage = work, []string{"shop", "pos"}, "registry.example/shop:2"
+		})
+	}
+	t.Run("upgraded", func(t *testing.T) {
+		f, store, work, suffix := setup(t)
+		hWrite(t, filepath.Join(work, WorkOdooVersion), []byte("Odoo Server 18.0-20261015\n"))
+		hWrite(t, filepath.Join(work, WorkUpgradeExit), []byte("0\n"))
+		rr := upgraded(f, store, work, suffix)
+		if !rr.OK || !rr.LiveChanged || rr.Image != "registry.example/shop:2" {
+			t.Fatalf("last step: %+v", rr)
+		}
+		if !slices.ContainsFunc(rr.Warnings, func(w string) bool { return strings.Contains(w, "upgraded (-u shop,pos)") }) {
+			t.Errorf("warnings = %q", rr.Warnings)
+		}
+		f.assertOdooFixture(x, false)
+	})
+	t.Run("upgrade failed", func(t *testing.T) {
+		f, store, work, suffix := setup(t)
+		live := f.state(f.db)
+		hWrite(t, filepath.Join(work, WorkOdooVersion), []byte("Odoo Server 18.0-20261015\n"))
+		hWrite(t, filepath.Join(work, WorkUpgradeExit), []byte("1\n"))
+		hWrite(t, filepath.Join(work, WorkUpgradeLog), []byte("KeyError: 'x_field'\n"))
+		rr := upgraded(f, store, work, suffix)
+		if rr.OK || rr.LiveChanged || rr.Step != result.StepCheck || !strings.Contains(rr.Error, "x_field") {
+			t.Fatalf("last step: %+v", rr)
+		}
+		f.assertState(f.db, live, "after the failed upgrade")
+		if got := f.databases(); strings.Join(got, ",") != f.db {
+			t.Errorf("the loaded database was not dropped: %v", got)
+		}
+	})
+	t.Run("upgrade on Odoo of another series", func(t *testing.T) {
+		f, store, work, suffix := setup(t)
+		hWrite(t, filepath.Join(work, WorkOdooVersion), []byte("Odoo Server 19.0-20261015\n"))
+		hWrite(t, filepath.Join(work, WorkUpgradeExit), []byte("0\n"))
+		rr := upgraded(f, store, work, suffix)
+		if rr.OK || rr.LiveChanged || !strings.Contains(rr.Error, "19.0") {
+			t.Fatalf("last step: %+v", rr)
 		}
 	})
 }

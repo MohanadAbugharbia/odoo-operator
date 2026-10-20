@@ -7,7 +7,7 @@ moves onto the operator, and how a staging copy of production is made.
 ```mermaid
 flowchart TD
   create([OdooDeployment with bootstrap.fromBackup]) --> rs["The operator creates OdooRestore &lt;name&gt;-bootstrap"]
-  rs --> restore["Restore: load, check, Odoo reports its version,<br/>neutralize when asked, swap in"]
+  rs --> restore["Restore: load, check, Odoo reports its version,<br/>neutralize and upgrade when asked, swap in"]
   restore -->|Completed| run([Odoo starts on the restored data;<br/>no init Job runs])
   restore -->|Failed| degraded["Degraded: BootstrapFailed<br/>Odoo does not start"]
   degraded -->|fix the cause, delete the OdooRestore| rs
@@ -84,7 +84,11 @@ kubectl -n shop get odoodeployment my-odoo -o jsonpath='{.status.bootstrap}'
 ```
 
 When the restore is `Completed`, `status.bootstrap.completed` is true and
-Odoo starts on the restored data, on `spec.image`. `status.file` on the
+Odoo starts on the restored data, on `spec.image`. The data keeps the module
+versions of the backup: when `spec.image` holds newer versions of its modules,
+add `upgrade: true` under `fromBackup` and the restore upgrades them
+(`spec.upgrade.modules`, or all) before Odoo first starts. See
+[Upgrade the restored data](restore.md#upgrade-the-restored-data). `status.file` on the
 OdooRestore names the file a pattern picked, and `status.warnings` lists what
 the checks found.
 

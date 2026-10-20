@@ -756,6 +756,11 @@ type BootstrapFromBackup struct {
 	// Odoo first starts on it, and gives it a new database.uuid (see
 	// OdooRestore spec.neutralize). Set it for a copy of production.
 	Neutralize bool `json:"neutralize,omitempty"`
+	// Upgrade upgrades the restored database to spec.image before Odoo
+	// first starts on it (see OdooRestore spec.upgrade). Set it when the
+	// backup was made by other code than spec.image holds, such as a
+	// production backup started on a newer version of its modules.
+	Upgrade bool `json:"upgrade,omitempty"`
 }
 
 // BootstrapStatus records the restore spec.bootstrap.fromBackup started.

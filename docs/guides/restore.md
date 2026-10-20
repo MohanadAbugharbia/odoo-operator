@@ -77,7 +77,8 @@ A backup from elsewhere records no image, so the instance's own Odoo image
 checks it: before the swap, Odoo reports its version, and a backup of another
 Odoo series (17.0 on an 18.0 image) is refused with the live data untouched.
 Afterwards the instance counts as running `spec.image` and `spec.upgrade.token`,
-so no upgrade follows. A backup the operator made (a restic snapshot) still
+so no upgrade follows: set [`upgrade: true`](#upgrade-the-restored-data) when
+the backup was made by other code than `spec.image` holds. A backup the operator made (a restic snapshot) still
 records its image and token, and is handled like the instance's own backups.
 
 The checks use what the backup carries. Every attachment the restored
@@ -95,6 +96,37 @@ integrations each module marks, and the database gets a new `database.uuid`,
 so it does not claim production's subscription or IAP credits. The restore
 fails, with the live data untouched, when Odoo cannot neutralize the database.
 Neutralize needs Odoo 16 or later, and cannot be set on an undo.
+
+## Upgrade the restored data
+
+`upgrade: true` upgrades the restored database to `spec.image` before it is
+swapped in: the instance's Odoo runs `-u` with `spec.upgrade.modules` (all
+modules when that is empty) on the loaded database and its filestore, after
+neutralize when that is set too.
+
+```yaml
+spec:
+  odooDeployment: staging
+  from:
+    store: production-files
+    path: shop_*.zip
+  neutralize: true
+  upgrade: true                    # the backup's modules are older than spec.image's
+```
+
+Use it when the backup was made by other code than the instance runs: a
+production backup restored onto an instance that runs a newer version of the
+same modules, such as a staging or review copy of a branch. Without it, the
+database keeps the module versions of the backup until the next upgrade.
+
+- The instance's Odoo must be the backup's series, as for any backup from
+  elsewhere; `upgrade` moves modules forward within a series, not across one.
+- The restore fails, with the live data untouched, when the upgrade fails;
+  `status.message` ends with the end of Odoo's log.
+- Afterwards the instance counts as running `spec.image` and
+  `spec.upgrade.token`, so no upgrade Job follows.
+- `upgrade` cannot be set on an undo. The upgrade runs inside the restore Job,
+  so the Job's deadline (`spec.backup.activeDeadlineSeconds`) covers it too.
 
 ## What a restore needs
 
@@ -120,10 +152,10 @@ flowchart TD
   load --> check[Check row counts, attachments<br/>and a sample of checksums]
   load -->|error| failed([Failed: live data untouched])
   check -->|row counts differ or<br/>attachments missing| failed
-  check --> odoo{"from or neutralize?"}
+  check --> odoo{"from, neutralize<br/>or upgrade?"}
   odoo -- "no" --> swap
-  odoo -- "yes" --> step["The instance's Odoo reports its version<br/>and neutralizes the loaded database"]
-  step -->|another series, or<br/>neutralize failed| failed
+  odoo -- "yes" --> step["The instance's Odoo reports its version,<br/>neutralizes and upgrades the loaded database<br/>when asked"]
+  step -->|another series, or<br/>neutralize or upgrade failed| failed
   step --> swap["Swap: live becomes db_prev_suffix,<br/>restored becomes db"]
   swap -->|Job dies| retry["Retried Job reads the journal<br/>and finishes the swap<br/>(Degraded: RestoreIncomplete meanwhile)"]
   retry --> swap

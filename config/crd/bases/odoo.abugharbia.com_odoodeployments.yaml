@@ -348,6 +348,13 @@ spec:
                         maxItems: 10
                         type: array
                         x-kubernetes-list-type: atomic
+                      upgrade:
+                        description: |-
+                          Upgrade upgrades the restored database to spec.image before Odoo
+                          first starts on it (see OdooRestore spec.upgrade). Set it when the
+                          backup was made by other code than spec.image holds, such as a
+                          production backup started on a newer version of its modules.
+                        type: boolean
                     required:
                     - store
                     type: object

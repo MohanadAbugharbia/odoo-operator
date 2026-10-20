@@ -8,7 +8,7 @@
 # Odoo's own CLI loads, a backup before an upgrade to a store that cannot be
 # reached (Odoo keeps serving), and a failed upgrade undone with the backup
 # taken before it. Last, a second instance starts from Odoo's own backup file
-# (bootstrap, neutralized) and restores the first instance's repository from
+# (bootstrap, neutralized and upgraded) and restores the first instance's repository from
 # a readOnly store.
 #
 #   kind create cluster && hack/backup-e2e.sh
@@ -374,7 +374,7 @@ psql_q "DROP TRIGGER e2e_block_upgrade ON ir_module_module; DROP FUNCTION e2e_bl
 k delete odoorestore e2e-undo-upgrade --wait=true --timeout=10m
 k patch odoodeployment "$OD" --type=merge -p '{"spec":{"backup":{"beforeUpgrade":"Off"}}}'
 
-log "a new instance starts from Odoo's own backup file in a readOnly store, neutralized"
+log "a new instance starts from Odoo's own backup file in a readOnly store, neutralized and upgraded"
 BOOT=e2e-boot
 BOOT_DB=e2e_boot
 FIXTURES=internal/backup/agent/testdata/odoo/18.0
@@ -415,8 +415,10 @@ YAML
 wait_for odoobackupstore/imports .status.ready true 420
 sed -e "s/name: $OD\$/name: $BOOT/" -e "s/name: $DB\$/name: $BOOT_DB/" -e '/^  backup:/,$d' \
 	test/e2e/testdata/backup/odoodeployment.yaml | kubectl apply -f -
-k patch odoodeployment "$BOOT" --type=merge -p '{"spec":{"bootstrap":{"fromBackup":{"store":"imports","path":"exports/shop_*.zip","neutralize":true}}}}'
+k patch odoodeployment "$BOOT" --type=merge -p '{"spec":{"upgrade":{"modules":["base"]},
+  "bootstrap":{"fromBackup":{"store":"imports","path":"exports/shop_*.zip","neutralize":true,"upgrade":true}}}}'
 wait_for odoorestore/"$BOOT"-bootstrap .status.phase Completed 900
+boot_started="$(k get odoorestore "$BOOT"-bootstrap -o jsonpath='{.metadata.creationTimestamp}')"
 wait_for odoodeployment/"$BOOT" .status.phase Running 900
 k rollout status deploy/"$BOOT" --timeout=5m
 [ "$(k get odoorestore "$BOOT"-bootstrap -o jsonpath='{.status.file}')" = exports/shop_2026-10-01.zip ] ||
@@ -427,6 +429,13 @@ k rollout status deploy/"$BOOT" --timeout=5m
 [ "$(k exec deploy/"$BOOT" -c odoo -- cat "$(data_dir)/filestore/$BOOT_DB/b1/$FIXTURE_SHA")" = "odoo fixture 18.0" ] ||
 	fail "the backup's attachment file is missing"
 [ "$(boot_psql "SELECT lower(value) FROM ir_config_parameter WHERE key = 'database.is_neutralized'")" = true ] || fail "the database was not neutralized"
+# -u base rewrote the module's record in the loaded database, before the swap.
+[ "$(boot_psql "SELECT write_date > '$boot_started'::timestamptz AT TIME ZONE 'UTC' FROM ir_module_module WHERE name = 'base'")" = t ] ||
+	fail "the restored database was not upgraded"
+k get odoorestore "$BOOT"-bootstrap -o jsonpath='{.status.warnings}' | grep -q 'upgraded (-u base)' || fail "the restore does not say it upgraded"
+[ "$(k get odoodeployment "$BOOT" -o jsonpath='{.status.appliedImage}')" = odoo:18 ] || fail "the upgraded data does not count as running spec.image"
+! k get job -l odoo.abugharbia.com/job-kind=upgrade,odoo.abugharbia.com/odoodeployment="$BOOT" -o name | grep -q . ||
+	fail "an upgrade Job ran after the restore had upgraded the data"
 uuid="$(boot_psql "SELECT value FROM ir_config_parameter WHERE key = 'database.uuid'")"
 [ -n "$uuid" ] && [ "$uuid" != "$FIXTURE_UUID" ] || fail "the neutralized copy kept database.uuid $uuid"
 k exec deploy/"$BOOT" -c odoo -- python3 -c \

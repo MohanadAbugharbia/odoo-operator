@@ -64,6 +64,12 @@ The words these pages use, and what each one means here.
     providers and other integrations are turned off, and the database gets a
     new `database.uuid`. For copies of production.
 
+**Upgrade (of a restore)**
+:   `upgrade` on an OdooRestore or `spec.bootstrap.fromBackup`: the instance's
+    Odoo runs `-u` on the loaded database before the swap, so a backup made by
+    older code runs on `spec.image`'s modules. See
+    [Upgrade the restored data](../guides/restore.md#upgrade-the-restored-data).
+
 **Copy**
 :   The same snapshot copied (`restic copy`) to every store after the first in
     `spec.backup.stores`; in a zip store, the snapshot written as an Odoo zip.
