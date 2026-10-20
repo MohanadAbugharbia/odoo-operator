@@ -308,6 +308,28 @@ func loadForOdooStep(t *testing.T, x odooFixture) (*fixture, string, string, str
 	if err != nil || string(source) != layout.RestoreName(f.db, suffix) {
 		t.Fatalf("the load step named %q (%v) for the Odoo step", source, err)
 	}
+	if st, err := os.Stat(filepath.Join(work, WorkSource)); err != nil || st.Mode().Perm() != 0o644 {
+		t.Fatalf("%s: %v %v; the Odoo step may run as another user and must read it", WorkSource, st.Mode(), err)
+	}
+	fs := filepath.Join(f.dataRoot, layout.FilestorePath(layout.RestoreName(f.db, suffix)))
+	if err := filepath.WalkDir(fs, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		switch {
+		case d.IsDir() && info.Mode()&(os.ModeSetgid|os.ModePerm) != os.ModeSetgid|0o775:
+			t.Errorf("folder %s has mode %v, want 2775: Odoo must write to it as another user of the pod's group", path, info.Mode())
+		case d.Type().IsRegular() && info.Mode().Perm() != 0o664:
+			t.Errorf("file %s has mode %v, want 0664", path, info.Mode())
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	return f, store, work, suffix
 }
 

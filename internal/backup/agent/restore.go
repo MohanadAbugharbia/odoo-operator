@@ -246,8 +246,13 @@ func Restore(ctx context.Context, e *Env, o RestoreOptions) result.Result {
 	}
 	if o.LoadOnly {
 		if j.Stage == stageRestored && o.WorkDir != "" {
-			// The Odoo step may neutralize this database.
-			if err := writeFileAtomic(filepath.Join(o.WorkDir, WorkSource), []byte(j.Source)); err != nil {
+			// The Odoo step may neutralize this database. It may run as
+			// another user than this step, so the name is readable by all.
+			path := filepath.Join(o.WorkDir, WorkSource)
+			if err := writeFileAtomic(path, []byte(j.Source)); err != nil {
+				return r.failed(result.StepLoad, err)
+			}
+			if err := os.Chmod(path, 0o644); err != nil {
 				return r.failed(result.StepLoad, err)
 			}
 		}
@@ -382,6 +387,9 @@ func (r *restoreRun) load(ctx context.Context) (string, error) {
 		return result.StepLoad, err
 	}
 	if err := r.moveFilestore(files, repaired, source); err != nil {
+		return result.StepLoad, err
+	}
+	if err := shareWithGroup(r.fs(source)); err != nil {
 		return result.StepLoad, err
 	}
 	if err := os.RemoveAll(staging); err != nil {
@@ -612,6 +620,26 @@ func (r *restoreRun) loadSQL(ctx context.Context, database string, m manifest.Ma
 	}
 	e.logf("loaded %d bytes of SQL", counter.n)
 	return nil
+}
+
+// shareWithGroup makes a restored filestore writable by the pod's group:
+// folders 2775 (new files keep the folder's group), files 0664. The restore
+// Job's steps and the instance's Odoo may run as different users that share
+// the pod's fsGroup (a podSecurityContext without runAsUser), and Odoo must
+// write to the filestore it restores into (an upgrade) and later serves.
+func shareWithGroup(root string) error {
+	return filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		switch {
+		case d.IsDir():
+			return os.Chmod(path, os.ModeSetgid|0o775)
+		case d.Type().IsRegular():
+			return os.Chmod(path, 0o664)
+		}
+		return nil
+	})
 }
 
 // moveFilestore moves the unpacked filestore into <dataRoot>/filestore/<source>

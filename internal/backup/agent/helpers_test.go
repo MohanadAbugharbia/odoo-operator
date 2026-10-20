@@ -936,3 +936,28 @@ func TestUseSSHAuthPrivateKey(t *testing.T) {
 		t.Errorf("no key: %q", got)
 	}
 }
+
+// TestShareWithGroup: a restored filestore's folders get 2775 and its files
+// 0664, so Odoo can write to it as another user of the pod's group.
+func TestShareWithGroup(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "ab"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(root, "ab", "abcdef")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := shareWithGroup(root); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{root, filepath.Join(root, "ab")} {
+		st, err := os.Stat(dir)
+		if err != nil || st.Mode()&(os.ModeSetgid|os.ModePerm) != os.ModeSetgid|0o775 {
+			t.Errorf("%s: %v %v", dir, st.Mode(), err)
+		}
+	}
+	if st, err := os.Stat(file); err != nil || st.Mode().Perm() != 0o664 {
+		t.Errorf("%s: %v %v", file, st.Mode(), err)
+	}
+}
