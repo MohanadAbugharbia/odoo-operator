@@ -147,6 +147,21 @@ p { margin: 0; font-size: 14px; color: var(--muted); }
           }
         }
         break;
+      case "backing-up":
+        if (s.job === "upgrade") {
+          title = T.updTitle;
+          steps = [["now", T.stepBackup, elapsed], ["todo", T.stepUpdate], ["todo", T.stepStart]];
+        } else {
+          title = T.backupTitle;
+          steps = [["now", T.stepBackup, elapsed], ["todo", T.stepStart]];
+        }
+        note = T.autoNote;
+        break;
+      case "restoring":
+        title = T.restoreTitle;
+        steps = [["now", T.stepRestore, elapsed], ["todo", T.stepStart]];
+        note = T.autoNote;
+        break;
       case "failed":
         title = s.job === "upgrade" ? T.failTitle : T.failSetupTitle;
         steps = s.job === "upgrade"
@@ -185,7 +200,7 @@ p { margin: 0; font-size: 14px; color: var(--muted); }
     $("stale").hidden = !stale;
     $("stale").textContent = stale ? T.unavailableNote : "";
 
-    var showMeta = s.state === "updating" && (s.version || s.startedAt);
+    var showMeta = (s.state === "updating" || (s.state === "backing-up" && s.job === "upgrade")) && (s.version || s.startedAt);
     $("meta").hidden = !showMeta;
     if (showMeta) {
       $("version-label").textContent = T.version;

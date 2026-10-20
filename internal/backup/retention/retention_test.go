@@ -202,8 +202,18 @@ func TestManualAndPreUpgradeHaveTheirOwnCount(t *testing.T) {
 	forget, _, _ = Apply(Policy{Daily: 7, Manual: 1}, snaps, Protect{})
 	got := ids(forget)
 	sort.Strings(got)
+	if want := []string{"m1", "m2"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("pre-upgrade 0 keeps every pre-upgrade backup: forget %v, want %v", got, want)
+	}
+	forget, _, _ = Apply(Policy{Daily: 7, Manual: 1, PreUpgrade: 1}, snaps, Protect{})
+	got = ids(forget)
+	sort.Strings(got)
 	if want := []string{"m1", "m2", "u1"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("forget %v, want %v", got, want)
+	}
+	forget, _, _ = Apply(Policy{Daily: 7, Manual: 3, PreUpgrade: 1}, snaps, Protect{})
+	if got := ids(forget); !reflect.DeepEqual(got, []string{"u1"}) {
+		t.Fatalf("pre-upgrade backups do not use up the manual count: forget %v", got)
 	}
 }
 

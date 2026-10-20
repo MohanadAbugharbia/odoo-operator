@@ -7,6 +7,9 @@ flowchart TD
   trigger["spec.image changes (onImageChange: true)<br/>or spec.upgrade.token changes"]
   check["image check Job<br/>pulls the new image, runs odoo --version<br/>(skipped when the image is unchanged)"]
   old["old image keeps serving<br/>Degraded: ImagePullFailed or ImageCheckFailed"]
+  pre{"spec.backup.beforeUpgrade?"}
+  backup["backup of the running version<br/>Odoo stopped"]
+  kept["old image starts again<br/>Degraded: PreUpgradeBackupFailed<br/>delete the OdooBackup to retry"]
   modules{"spec.upgrade.modules<br/>empty?"}
   roll["roll the Deployment<br/>to the new image, no Job"]
   stop["scale Odoo to 0<br/>phase Upgrading"]
@@ -17,7 +20,11 @@ flowchart TD
   trigger --> check
   check -- "cannot pull or run" --> old
   old -- "a later spec.image replaces the check" --> check
-  check -- "succeeds" --> modules
+  check -- "succeeds" --> pre
+  pre -- Off --> modules
+  pre -- "BestEffort or Required" --> backup
+  backup -- "succeeds, or fails with BestEffort" --> modules
+  backup -- "fails with Required" --> kept
   modules -- yes --> roll --> running
   modules -- no --> stop --> job
   job -- succeeds --> running
@@ -44,6 +51,25 @@ flowchart TD
   run the upgrade on demand. A `spec.image` change then does nothing until the
   token changes, with one exception: a new entry in `spec.modules` is installed
   by a Job on `spec.image`, and the instance moves to that image without `-u`.
+- **A backup before each upgrade.** With `spec.backup.beforeUpgrade` set to
+  `BestEffort` or `Required` (default `Off`; it needs `spec.backup.stores`),
+  a new image or upgrade token first gets an OdooBackup named
+  `<name>-pre-upgrade-<yyyymmdd-hhmmss>` (label
+  `odoo.abugharbia.com/backup-kind: pre-upgrade`), taken once the new image
+  has pulled, before the upgrade Job or the roll. Odoo is stopped for it
+  whatever `consistency` says, once a short check shows the store can be
+  reached (a store that cannot be reached fails the backup with the old image
+  still serving), and stays stopped until the upgrade Job starts;
+  the [maintenance page](maintenance-page.md) shows the backup as the first
+  step of the update. `status.preUpgradeBackup` names it. If it fails:
+    - `BestEffort` upgrades anyway, with a `PreUpgradeBackupFailed` warning
+      event;
+    - `Required` starts the old image again and sets `Degraded`
+      (`PreUpgradeBackupFailed`) with the backup's message. Deleting that
+      OdooBackup tries again, and so does a new `spec.image` or token.
+
+  Retention keeps the newest `retention.preUpgrade` of these (default 5).
+  Restoring one is the way back from an upgrade that went wrong.
 - A failed Job stays, with Odoo stopped, until you delete it: deleting it
   retries the upgrade. Read its log first, or restore a backup instead.
 - `spec.jobs` bounds the Jobs (`activeDeadlineSeconds`, `backoffLimit`). Its
@@ -51,4 +77,4 @@ flowchart TD
   init and upgrade Jobs have none, as the operator deletes them when they
   succeed and keeps a failed one until you delete it.
 
-A failed upgrade can be rolled back by [restoring a backup](restore.md): a restore replaces a failed init or upgrade Job.
+A failed upgrade can be rolled back by [restoring a backup](restore.md), such as the one `beforeUpgrade` took: a restore replaces a failed init or upgrade Job.

@@ -27,11 +27,14 @@ The words these pages use, and what each one means here.
     [retention](../guides/backups.md) forgets snapshots and deletes their
     OdooBackups.
 
-**Scheduled backup / manual backup**
+**Scheduled, manual and pre-upgrade backups**
 :   A scheduled backup is one the operator creates from
     `spec.backup.schedule`, named `<name>-<yyyymmdd-hhmm>`; a manual backup is
-    one you create. Retention thins scheduled backups by its rules; manual
-    backups are kept unless you set `retention.manual`.
+    one you create; a pre-upgrade backup is one the operator takes before an
+    upgrade when `spec.backup.beforeUpgrade` asks for it, named
+    `<name>-pre-upgrade-<yyyymmdd-hhmmss>`. Retention thins scheduled backups
+    by its rules, keeps the newest `retention.preUpgrade` pre-upgrade backups
+    (default 5), and keeps manual backups unless you set `retention.manual`.
 
 **Copy**
 :   The same snapshot copied (`restic copy`) to every store after the first in

@@ -99,11 +99,13 @@ spec:
     stores: [offsite, cold]     # backups go to offsite, and are copied to cold
     schedule: "0 3 * * *"       # every night at 03:00
     timeZone: Europe/Berlin
+    beforeUpgrade: Required     # back up before every upgrade, and don't upgrade if that fails
     retention:                  # keep 7 daily, 4 weekly and 12 monthly backups
       daily: 7
       weekly: 4
       monthly: 12
       manual: 10                # and the 10 newest manual ones
+      preUpgrade: 5             # and the 5 newest taken before upgrades (the default)
     drill:
       schedule: "0 5 * * 0"     # Sundays: prove the newest backup restores
 ```

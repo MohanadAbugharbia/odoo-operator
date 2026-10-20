@@ -62,6 +62,9 @@ fails.
 |---|---|
 | `Degraded` `ImagePullFailed`, the old image still serving | The `<name>-image-<hash>` check could not pull the new `spec.image`. Push it or fix the pull secret; retried every 15 s. |
 | `Degraded` `ImageCheckFailed` | The image pulled but `<odooCommand> --version` failed. Read `kubectl logs job/<name>-image-<hash>`, fix the image, then delete that Job to check again. |
+| `Degraded` `PreUpgradeBackupFailed`, the old image still serving | `spec.backup.beforeUpgrade` is `Required` and the backup before the upgrade failed; the message names it. Read the OdooBackup's `status.message`, fix the cause, then delete that OdooBackup to take it again. |
+| OdooBackup `Failed`: "store … cannot be reached, so Odoo was not stopped" | The check before an offline or pre-upgrade backup could not write to the store, so Odoo kept serving. Read `kubectl -n <ns> logs job/<job>` (the message names it), fix the network, credentials or store, then take the backup again (for a pre-upgrade backup, delete the failed OdooBackup). |
+| Phase `BackingUp`, Odoo stopped, before an upgrade | The backup `spec.backup.beforeUpgrade` takes before the upgrade runs with Odoo stopped; the upgrade starts when it ends. `status.preUpgradeBackup` names it. |
 | Nothing happens | `spec.upgrade.onImageChange` is `false`: a new image is applied only when `spec.upgrade.token` changes. See [Upgrade Odoo](../guides/upgrades.md). |
 
 ### The maintenance page does not appear

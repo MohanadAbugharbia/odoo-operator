@@ -53,6 +53,7 @@ spec:
       monthly: 12
       within: 2d                      # also keep everything from the last 2 days (y, m, d, h)
       manual: 10                      # newest manual backups kept; 0 (default) keeps all
+      preUpgrade: 5                   # newest backups taken before upgrades kept (default 5); 0 keeps all
     drill:
       schedule: "0 5 * * 0"           # [restore drill](drills.md)
 ```
@@ -68,7 +69,8 @@ Retention runs in the backup Job, after the new backup is verified. The keep
 rules are restic's (`last`, `hourly`, `daily`, `weekly`, `monthly`, `yearly`,
 `within`, with restic's meaning: `within` counts back from the newest backup,
 not from now), but the periods are counted in `timeZone`, and they apply to
-scheduled backups; manual backups keep their newest `manual`. Never deleted: the newest backup, a backup with
+scheduled backups; manual backups keep their newest `manual`, and backups
+taken [before upgrades](upgrades.md) their newest `preUpgrade`. Never deleted: the newest backup, a backup with
 `spec.keep: true` (it does not use up a slot of the rules either), a snapshot
 an unfinished restore needs, and snapshots the operator did not take. The
 OdooBackups of deleted snapshots are deleted too; a retention that fails leaves

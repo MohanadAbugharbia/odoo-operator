@@ -70,6 +70,25 @@ _Appears in:_
 | `restic` | BackupStoreFormatRestic keeps one encrypted, deduplicated restic<br />repository per OdooDeployment.<br /> |
 
 
+#### BeforeUpgrade
+
+_Underlying type:_ _string_
+
+BeforeUpgrade says whether a backup is taken before an upgrade.
+
+_Validation:_
+- Enum: [Off BestEffort Required]
+
+_Appears in:_
+- [OdooBackupConfig](#odoobackupconfig)
+
+| Field | Description |
+| --- | --- |
+| `Off` | BeforeUpgradeOff upgrades without a backup first.<br /> |
+| `BestEffort` | BeforeUpgradeBestEffort takes a backup first and upgrades even when<br />it fails.<br /> |
+| `Required` | BeforeUpgradeRequired upgrades only after the backup succeeded; a<br />failed backup keeps the running image.<br /> |
+
+
 
 
 #### DatabaseCreatePolicy
@@ -230,6 +249,7 @@ _Appears in:_
 | `timeZone` _string_ | TimeZone of Schedule, the drill schedule and the retention rules, as an<br />IANA name such as Europe/Berlin. | UTC | MaxLength: 100 <br /> |
 | `retention` _[OdooBackupRetention](#odoobackupretention)_ | Retention says which backups are kept after each backup. | \{  \} |  |
 | `drill` _[OdooBackupDrill](#odoobackupdrill)_ | Drill restores the newest backup on a schedule to prove it works. |  | Optional: \{\} <br /> |
+| `beforeUpgrade` _[BeforeUpgrade](#beforeupgrade)_ | BeforeUpgrade takes a backup before each upgrade (a new spec.image or<br />spec.upgrade.token), with Odoo stopped so the backup holds the data<br />exactly as the upgrade found it. Off (default) upgrades without one;<br />BestEffort upgrades even when the backup fails; Required keeps the<br />running image when it fails, until the failed OdooBackup is deleted<br />(which tries again) or the upgrade target changes. | Off | Enum: [Off BestEffort Required] <br /> |
 | `consistency` _[BackupConsistency](#backupconsistency)_ | Consistency: Online (default) backs up while Odoo keeps serving;<br />Offline stops Odoo for the backup. | Online | Enum: [Online Offline] <br /> |
 | `restore` _[OdooRestoreConfig](#odoorestoreconfig)_ | Restore holds the defaults of in-place restores (OdooRestore). | \{  \} |  |
 | `resources` _[ResourceRequirements](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#resourcerequirements-v1-core)_ | Resources of the backup and restore Jobs. |  | Optional: \{\} <br /> |
@@ -261,7 +281,8 @@ _Appears in:_
 OdooBackupRetention says which backups are kept. Scheduled backups are
 thinned with restic's keep rules (daily: 7 keeps the newest backup of each
 of the last 7 days that have one; a backup kept by any rule stays); manual
-and pre-upgrade backups each keep their newest Manual. A backup with
+backups keep their newest Manual and pre-upgrade backups their newest
+PreUpgrade. A backup with
 spec.keep, and the newest backup, are never deleted. Unset fields take the
 defaults below.
 
@@ -280,6 +301,7 @@ _Appears in:_
 | `yearly` _integer_ | Yearly keeps the newest backup of each of the last N years that have one. |  | Minimum: 0 <br /> |
 | `within` _string_ | Within keeps every backup newer than this, counted from the newest<br />backup, such as 30d, 12h or 1y6m (restic's duration format). |  | Pattern: `^([0-9]+[ymdh])*$` <br /> |
 | `manual` _integer_ | Manual keeps the newest N manual backups; 0 keeps them all. |  | Minimum: 0 <br /> |
+| `preUpgrade` _integer_ | PreUpgrade keeps the newest N backups taken before upgrades; 0 keeps<br />them all. | 5 | Minimum: 0 <br /> |
 | `keepAll` _boolean_ | KeepAll turns retention off: no backup is ever deleted. |  |  |
 
 
@@ -605,6 +627,7 @@ _Appears in:_
 | `currentInitJob` _[MaintenanceJobStatus](#maintenancejobstatus)_ | The maintenance Job (init or upgrade) currently running |  | Optional: \{\} <br /> |
 | `currentOperation` _[OperationStatus](#operationstatus)_ | CurrentOperation is the backup, restore or cleanup in progress. |  | Optional: \{\} <br /> |
 | `backup` _[OdooBackupScheduleStatus](#odoobackupschedulestatus)_ | Backup reports the backup schedule and the last restore drill. |  | Optional: \{\} <br /> |
+| `preUpgradeBackup` _[PreUpgradeBackupStatus](#preupgradebackupstatus)_ | PreUpgradeBackup is the backup spec.backup.beforeUpgrade takes before<br />the pending upgrade. It is cleared once no upgrade is pending. |  | Optional: \{\} <br /> |
 | `lastMaintenanceDuration` _[Duration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#duration-v1-meta)_ | LastMaintenanceDuration is how long the last successful upgrade Job<br />took, from its creation to its completion. The maintenance page uses it<br />to estimate the next one. Init Jobs are not counted: they run once and<br />take far longer than an upgrade. |  | Optional: \{\} <br /> |
 | `odooAdminSecretName` _string_ | The secret name for the Odoo admin password |  | Optional: \{\} <br /> |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#condition-v1-meta) array_ |  |  | Optional: \{\} <br /> |
@@ -810,6 +833,7 @@ _Appears in:_
 | `name` _string_ | Name of the OdooBackup or OdooRestore. |  |  |
 | `job` _string_ | Job running it; empty while the operator is still stopping Odoo for it. |  |  |
 | `stoppedOdoo` _boolean_ | StoppedOdoo is true when the operation scaled Odoo to zero and must<br />bring it back. |  |  |
+| `storeReached` _boolean_ | StoreReached is true once an offline backup has checked, with Odoo<br />still serving, that its store can be reached. |  |  |
 | `startedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta)_ | StartedAt is when the operation started. |  |  |
 
 
@@ -849,6 +873,23 @@ _Appears in:_
 | `storageClassName` _string_ | StorageClass is the storageClassName used to create a new persistent volume claim | standard | Optional: \{\} <br /> |
 | `accessModes` _[PersistentVolumeAccessMode](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#persistentvolumeaccessmode-v1-core) array_ | AccessMode defines the access mode of the new persistent volume claim | [ReadWriteOnce] | Optional: \{\} <br /> |
 | `deletionPolicy` _[DeletionPolicy](#deletionpolicy)_ | DeletionPolicy controls whether the filestore PVC is garbage collected<br />with the OdooDeployment (Delete) or left behind (Retain, the default). | Retain | Enum: [Retain Delete] <br /> |
+
+
+#### PreUpgradeBackupStatus
+
+
+
+PreUpgradeBackupStatus names the backup taken before an upgrade.
+
+
+
+_Appears in:_
+- [OdooDeploymentStatus](#odoodeploymentstatus)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `name` _string_ | Name of the OdooBackup. |  | Optional: \{\} <br /> |
+| `target` _string_ | Target is the image and upgrade token it was taken for. |  | Optional: \{\} <br /> |
 
 
 #### RestorePrevious

@@ -1232,8 +1232,21 @@ var _ = Describe("Backup CRD admission", func() {
 			Expect(od.Spec.Backup.Consistency).To(Equal(odoov1.BackupConsistencyOffline))
 			By("the retention defaults are filled in")
 			Expect(od.Spec.Backup.TimeZone).To(Equal("UTC"))
-			Expect(od.Spec.Backup.Retention.Counts()).To(Equal(odoov1.RetentionCounts{Daily: 7, Weekly: 4, Monthly: 12}))
+			Expect(od.Spec.Backup.Retention.Counts()).To(Equal(odoov1.RetentionCounts{Daily: 7, Weekly: 4, Monthly: 12, PreUpgrade: 5}))
 			Expect(*od.Spec.Backup.Retention.Daily).To(Equal(int32(7)))
+		})
+
+		It("needs a store for a backup before upgrades", func() {
+			expectInvalid(k8sClient.Create(ctx, h.spec(func(od *odoov1.OdooDeployment) {
+				od.Spec.Backup.BeforeUpgrade = odoov1.BeforeUpgradeRequired
+			})), "spec.backup.beforeUpgrade needs spec.backup.stores")
+			expectInvalid(k8sClient.Create(ctx, h.spec(func(od *odoov1.OdooDeployment) {
+				od.Spec.Backup.BeforeUpgrade = "Always"
+			})), "beforeUpgrade")
+			h.create(func(od *odoov1.OdooDeployment) {
+				od.Spec.Backup.BeforeUpgrade = odoov1.BeforeUpgradeOff
+			})
+			Expect(h.get().Spec.Backup.BeforeUpgradeValue()).To(Equal(odoov1.BeforeUpgradeOff))
 		})
 
 		It("rejects a keep-within that restic cannot read and a negative count", func() {

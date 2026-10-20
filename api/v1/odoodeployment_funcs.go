@@ -977,6 +977,20 @@ func (o *OdooBackupConfig) KeepPreviousValue() time.Duration {
 	return o.Restore.KeepPrevious.Duration
 }
 
+// BeforeUpgradeValue is spec.backup.beforeUpgrade or its default (Off).
+func (o *OdooBackupConfig) BeforeUpgradeValue() BeforeUpgrade {
+	if o.BeforeUpgrade == "" {
+		return BeforeUpgradeOff
+	}
+	return o.BeforeUpgrade
+}
+
+// UpgradeTarget names the upgrade spec asks for, as a pre-upgrade
+// OdooBackup's AnnotationUpgradeTarget records it.
+func (od *OdooDeployment) UpgradeTarget() string {
+	return od.Spec.Image + " " + od.Spec.Upgrade.Token
+}
+
 // ConsistencyValue is spec.backup.consistency or its default (Online).
 func (o *OdooBackupConfig) ConsistencyValue() BackupConsistency {
 	if o.Consistency == "" {
@@ -996,11 +1010,11 @@ func (o *OdooBackupConfig) ActiveDeadlineSecondsValue() int64 {
 // RetentionCounts are the keep counts of a retention with its defaults
 // filled in.
 type RetentionCounts struct {
-	Last, Hourly, Daily, Weekly, Monthly, Yearly, Manual int32
+	Last, Hourly, Daily, Weekly, Monthly, Yearly, Manual, PreUpgrade int32
 }
 
 // Counts returns the keep counts, the defaults (daily 7, weekly 4,
-// monthly 12) standing in for unset fields.
+// monthly 12, pre-upgrade 5) standing in for unset fields.
 func (r *OdooBackupRetention) Counts() RetentionCounts {
 	val := func(p *int32, d int32) int32 {
 		if p == nil {
@@ -1009,12 +1023,13 @@ func (r *OdooBackupRetention) Counts() RetentionCounts {
 		return *p
 	}
 	return RetentionCounts{
-		Last:    val(r.Last, 0),
-		Hourly:  val(r.Hourly, 0),
-		Daily:   val(r.Daily, 7),
-		Weekly:  val(r.Weekly, 4),
-		Monthly: val(r.Monthly, 12),
-		Yearly:  val(r.Yearly, 0),
-		Manual:  val(r.Manual, 0),
+		Last:       val(r.Last, 0),
+		Hourly:     val(r.Hourly, 0),
+		Daily:      val(r.Daily, 7),
+		Weekly:     val(r.Weekly, 4),
+		Monthly:    val(r.Monthly, 12),
+		Yearly:     val(r.Yearly, 0),
+		Manual:     val(r.Manual, 0),
+		PreUpgrade: val(r.PreUpgrade, 5),
 	}
 }

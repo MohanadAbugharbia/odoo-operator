@@ -40,7 +40,7 @@ spec:
   page with status 503, and every other request (RPC, assets, `/web/health`,
   service worker fetches) gets an empty 503. Nothing is cacheable.
 - The page shows the phase as steps (preparing the database, installing,
-  updating, starting), the elapsed time and, for upgrades, an estimate from
+  backing up, updating, restoring, starting), the elapsed time and, for upgrades, an estimate from
   `status.lastMaintenanceDuration`. It polls `/__maintenance/status.json` and
   `/web/health` every 3 seconds, and reopens the URL that was asked for as soon
   as Odoo answers. A failed Job shows only "Please contact your

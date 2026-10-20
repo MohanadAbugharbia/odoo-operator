@@ -4,7 +4,9 @@
 # server and a PVC store. It backs up, changes the data, restores, undoes the
 # restore and checks the database and filestore at every step; then runs
 # scheduled backups with retention and a copy, a restore drill through the
-# real Odoo image, and a store check and prune.
+# real Odoo image, a store check and prune, a backup before an upgrade to a
+# store that cannot be reached (Odoo keeps serving), and a failed upgrade
+# undone with the backup taken before it.
 #
 #   kind create cluster && hack/backup-e2e.sh
 set -Eeuo pipefail
@@ -45,6 +47,10 @@ wait_for() {
 	done
 }
 odoo_exec() { k exec deploy/"$OD" -c odoo -- "$@"; }
+odoo_pod_uid() {
+	k get pod -o jsonpath='{.items[0].metadata.uid}' -l "$(k get deploy "$OD" -o jsonpath='{.spec.selector.matchLabels}' |
+		jq -r 'to_entries | map("\(.key)=\(.value)") | join(",")')"
+}
 data_dir() { k get odoodeployment "$OD" -o jsonpath='{.spec.config.dataDir}'; }
 
 log "build and load the images"
@@ -196,6 +202,86 @@ wait_for odoobackupstore/s3 .status.lastPrune.result Passed 900
 wait_for odoobackupstore/s3 .status.lastCheck.result Passed 900
 kubectl -n "$NS" patch odoobackupstore s3 --type=merge -p '{"spec":{"check":{"schedule":""},"prune":{"schedule":""}}}'
 k get odoobackupstore s3 -o jsonpath='{.status.lastCheck.message}{"\n"}{.status.lastPrune.message}{"\n"}'
+
+log "a backup before an upgrade to a store that cannot be reached never stops Odoo"
+# The same S3 server on a port nothing listens on: the store is not there.
+cat <<YAML | kubectl apply -f -
+apiVersion: odoo.abugharbia.com/v1
+kind: OdooBackupStore
+metadata: { name: unreachable, namespace: $NS }
+spec:
+  s3:
+    endpoint: http://e2e-s3.$NS.svc.cluster.local:1
+    region: us-east-1
+    bucket: odoo-backups
+    path: e2e
+    forcePathStyle: true
+    credentialsSecret: { name: e2e-s3-credentials }
+  encryptionKeySecret: { name: e2e-restic, key: password }
+YAML
+pod_before="$(odoo_pod_uid)"
+k patch odoodeployment "$OD" --type=merge -p '{"spec":{"backup":{"stores":["unreachable"],"beforeUpgrade":"Required"},
+  "upgrade":{"token":"e2e-unreachable"}}}'
+deadline=$((SECONDS + 300))
+until pre="$(k get odoodeployment "$OD" -o jsonpath='{.status.preUpgradeBackup.name}')" && [ -n "$pre" ]; do
+	[ $SECONDS -ge $deadline ] && fail "no backup was taken before the upgrade"
+	sleep 5
+done
+deadline=$((SECONDS + 600))
+until [ "$(k get odoobackup "$pre" -o jsonpath='{.status.phase}')" = Failed ]; do
+	[ "$(k get deploy "$OD" -o jsonpath='{.spec.replicas}')" = 1 ] || fail "Odoo was stopped for a backup to a store that cannot be reached"
+	[ $SECONDS -ge $deadline ] && fail "$pre did not fail on the store that cannot be reached"
+	sleep 5
+done
+k get odoobackup "$pre" -o jsonpath='{.status.message}' | grep -q "cannot be reached, so Odoo was not stopped" ||
+	fail "$pre failed for another reason: $(k get odoobackup "$pre" -o jsonpath='{.status.message}')"
+[ -z "$(k get odoobackup "$pre" -o jsonpath='{.status.job}')" ] || fail "a backup Job ran for $pre"
+wait_for odoodeployment/"$OD" '.status.conditions[?(@.type=="Degraded")].reason' PreUpgradeBackupFailed 120
+[ "$(k get deploy "$OD" -o jsonpath='{.spec.replicas}')" = 1 ] || fail "Odoo is not serving after the failed backup"
+pod_after="$(odoo_pod_uid)"
+[ "$pod_before" = "$pod_after" ] || fail "the Odoo pod was replaced during the failed backup"
+k patch odoodeployment "$OD" --type=merge -p '{"spec":{"backup":{"stores":["s3"],"beforeUpgrade":"Off"},"upgrade":{"token":null}}}'
+k delete odoobackup "$pre" --wait=true --timeout=3m
+k delete odoobackupstore unreachable --wait=true --timeout=3m
+wait_for odoodeployment/"$OD" .status.preUpgradeBackup.name "" 120
+
+log "a backup before an upgrade, the upgrade failing, and the way back"
+put_state "before-upgrade"
+# The upgrade fails at the database: nothing may change a module's state.
+psql_q "CREATE FUNCTION e2e_block_upgrade() RETURNS trigger LANGUAGE plpgsql AS
+	\$\$ BEGIN RAISE EXCEPTION 'e2e: upgrades are blocked'; END \$\$;
+	CREATE TRIGGER e2e_block_upgrade BEFORE UPDATE ON ir_module_module FOR EACH ROW
+	WHEN (NEW.state IS DISTINCT FROM OLD.state) EXECUTE FUNCTION e2e_block_upgrade();"
+k patch odoodeployment "$OD" --type=merge -p '{"spec":{"backup":{"stores":["s3"],"beforeUpgrade":"Required"},
+  "upgrade":{"modules":["base"],"token":"e2e-blocked"}}}'
+deadline=$((SECONDS + 300))
+until pre="$(k get odoodeployment "$OD" -o jsonpath='{.status.preUpgradeBackup.name}')" && [ -n "$pre" ]; do
+	[ $SECONDS -ge $deadline ] && fail "no backup was taken before the upgrade"
+	sleep 5
+done
+[ "$(k get odoobackup "$pre" -o jsonpath='{.metadata.labels.odoo\.abugharbia\.com/backup-kind}')" = pre-upgrade ] ||
+	fail "$pre is not labelled pre-upgrade"
+wait_for odoobackup/"$pre" .status.phase Completed 900
+[ "$(k get odoobackup "$pre" -o jsonpath='{.status.consistency}')" = Offline ] || fail "$pre ran with Odoo running"
+wait_for odoodeployment/"$OD" .status.phase Failed 900
+k get odoodeployment "$OD" -o jsonpath='{.status.currentInitJob.name}{"\n"}'
+
+log "undo the upgrade: back to the old token, restore the backup taken before it"
+k patch odoodeployment "$OD" --type=merge -p '{"spec":{"upgrade":{"token":null}}}'
+cat <<YAML | kubectl apply -f -
+apiVersion: odoo.abugharbia.com/v1
+kind: OdooRestore
+metadata: { name: e2e-undo-upgrade, namespace: $NS }
+spec: { odooDeployment: $OD, backup: $pre }
+YAML
+wait_for odoorestore/e2e-undo-upgrade .status.phase Completed 900
+wait_for odoodeployment/"$OD" .status.phase Running 600
+check_state "before-upgrade" "after restoring the backup taken before the upgrade"
+psql_q "DROP TRIGGER e2e_block_upgrade ON ir_module_module; DROP FUNCTION e2e_block_upgrade();"
+[ -z "$(k get odoodeployment "$OD" -o jsonpath='{.status.preUpgradeBackup.name}')" ] ||
+	fail "status.preUpgradeBackup is kept with no upgrade pending"
+k delete odoorestore e2e-undo-upgrade --wait=true --timeout=10m
+k patch odoodeployment "$OD" --type=merge -p '{"spec":{"backup":{"beforeUpgrade":"Off"}}}'
 
 # The restore Jobs and their finished pods stay until their TTL; they must not
 # hold up deleting the instance.
