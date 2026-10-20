@@ -2908,6 +2908,12 @@ OdooBackupStore of the same namespace.</p>
 <td></td>
 <td></td>
 </tr>
+<tr>
+<td><code>upgrade</code> <em>boolean</em></td>
+<td>Upgrade upgrades the restored database to spec.image before Odoo<br />first starts on it (see OdooRestore spec.upgrade). Set it when the<br />backup was made by other code than spec.image holds, such as a<br />production backup started on a newer version of its modules.</td>
+<td></td>
+<td></td>
+</tr>
 </tbody>
 </table>
 <h4 id="bootstrapstatus">BootstrapStatus<a class="headerlink" href="#bootstrapstatus" title="Permanent link">&para;</a></h4>
@@ -4725,6 +4731,12 @@ for keepPrevious so the restore can be undone.</p>
 <tr>
 <td><code>neutralize</code> <em>boolean</em></td>
 <td>Neutralize runs Odoo's neutralize on the restored database before it<br />is swapped in, and gives it a new database.uuid: scheduled actions,<br />outgoing mail servers, payment providers and similar integrations<br />are turned off, so a copy of production cannot act as production.<br />It runs with the instance's image.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>upgrade</code> <em>boolean</em></td>
+<td>Upgrade upgrades the restored database to the instance's spec.image<br />before it is swapped in: Odoo runs -u with spec.upgrade.modules (all<br />modules when that is empty), after neutralize. Set it when the backup<br />was made by other code than the instance runs, such as a backup from<br />another Odoo: a backup from elsewhere otherwise counts as already<br />upgraded. The instance's Odoo must be the backup's series. A failed<br />upgrade fails the restore and leaves the live data as it was.</td>
 <td></td>
 <td></td>
 </tr>

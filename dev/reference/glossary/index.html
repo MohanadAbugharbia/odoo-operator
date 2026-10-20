@@ -1472,6 +1472,11 @@ creates the OdooRestore <code>&lt;name&gt;-bootstrap</code> in place of the init
 when <code>neutralize</code> is set: outgoing mail, scheduled actions, payment
 providers and other integrations are turned off, and the database gets a
 new <code>database.uuid</code>. For copies of production.</dd>
+<dt><strong>Upgrade (of a restore)</strong></dt>
+<dd><code>upgrade</code> on an OdooRestore or <code>spec.bootstrap.fromBackup</code>: the instance's
+Odoo runs <code>-u</code> on the loaded database before the swap, so a backup made by
+older code runs on <code>spec.image</code>'s modules. See
+<a href="../../guides/restore/#upgrade-the-restored-data">Upgrade the restored data</a>.</dd>
 <dt><strong>Copy</strong></dt>
 <dd>The same snapshot copied (<code>restic copy</code>) to every store after the first in
 <code>spec.backup.stores</code>; in a zip store, the snapshot written as an Odoo zip.</dd>

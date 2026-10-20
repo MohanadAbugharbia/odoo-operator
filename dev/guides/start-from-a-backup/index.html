@@ -1634,7 +1634,7 @@ backup instead of a fresh <code>odoo -i</code>. It is how an Odoo that runs else
 moves onto the operator, and how a staging copy of production is made.</p>
 <pre class="mermaid"><code>flowchart TD
   create([OdooDeployment with bootstrap.fromBackup]) --&gt; rs["The operator creates OdooRestore &amp;lt;name&amp;gt;-bootstrap"]
-  rs --&gt; restore["Restore: load, check, Odoo reports its version,&lt;br/&gt;neutralize when asked, swap in"]
+  rs --&gt; restore["Restore: load, check, Odoo reports its version,&lt;br/&gt;neutralize and upgrade when asked, swap in"]
   restore --&gt;|Completed| run([Odoo starts on the restored data;&lt;br/&gt;no init Job runs])
   restore --&gt;|Failed| degraded["Degraded: BootstrapFailed&lt;br/&gt;Odoo does not start"]
   degraded --&gt;|fix the cause, delete the OdooRestore| rs</code></pre>
@@ -1690,7 +1690,11 @@ OdooRestore <code>my-odoo-bootstrap</code> instead of the init Job. Follow it:</
 kubectl<span class="w"> </span>-n<span class="w"> </span>shop<span class="w"> </span>get<span class="w"> </span>odoodeployment<span class="w"> </span>my-odoo<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.status.bootstrap}'</span>
 </code></pre></div>
 <p>When the restore is <code>Completed</code>, <code>status.bootstrap.completed</code> is true and
-Odoo starts on the restored data, on <code>spec.image</code>. <code>status.file</code> on the
+Odoo starts on the restored data, on <code>spec.image</code>. The data keeps the module
+versions of the backup: when <code>spec.image</code> holds newer versions of its modules,
+add <code>upgrade: true</code> under <code>fromBackup</code> and the restore upgrades them
+(<code>spec.upgrade.modules</code>, or all) before Odoo first starts. See
+<a href="../restore/#upgrade-the-restored-data">Upgrade the restored data</a>. <code>status.file</code> on the
 OdooRestore names the file a pattern picked, and <code>status.warnings</code> lists what
 the checks found.</p>
 <h3 id="4-after-the-move">4. After the move<a class="headerlink" href="#4-after-the-move" title="Permanent link">&para;</a></h3>
