@@ -72,6 +72,7 @@ fi
 
 # The tests run as an unprivileged user, as the Jobs do.
 docker run --rm --network "$NET" --user 65532:65532 -v "$WORK/ssh:/it:ro" -v "$PWD/cover:/cover" \
+	-v "$PWD/internal/backup/agent/testdata/odoo:/odoo-fixtures:ro" -e TEST_ODOO_FIXTURES=/odoo-fixtures \
 	-e TEST_BACKUP_PG_HOST=backup-it-pg -e TEST_BACKUP_PG_PASSWORD=postgres \
 	-e TEST_SFTP_HOST=backup-it-sftp -e TEST_SFTP_USER=backup -e TEST_SFTP_PATH=upload \
 	-e TEST_SFTP_KEY_FILE=/it/id_ed25519 -e TEST_SFTP_KNOWN_HOSTS=/it/known_hosts \

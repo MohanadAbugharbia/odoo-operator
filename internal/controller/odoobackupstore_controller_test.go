@@ -138,7 +138,7 @@ func (s *storeHarness) pvcStore() *odoov1.OdooBackupStore {
 		ObjectMeta: metav1.ObjectMeta{Name: s.name, Namespace: ns},
 		Spec: odoov1.OdooBackupStoreSpec{
 			PVC: &odoov1.PVCStore{ClaimName: "backups"},
-			EncryptionKeySecret: corev1.SecretKeySelector{
+			EncryptionKeySecret: &corev1.SecretKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: s.name + "-key"}, Key: "password",
 			},
 		},
@@ -280,6 +280,23 @@ var _ = Describe("OdooBackupStore reconciler", func() {
 		Expect(s.events()).To(BeEmpty())
 	})
 
+	It("says a readOnly store was only listed when its probe succeeds", func() {
+		ro := s.pvcStore()
+		ro.Spec.ReadOnly, ro.Spec.EncryptionKeySecret = true, nil
+		s.t.create(ro)
+		s.reconcile()
+		jobName := s.get().Status.ProbeJob
+		s.finishJob(jobName, true)
+		s.podReporting(jobName, `{"ok":true}`, 0)
+		s.reconcile()
+
+		store := s.get()
+		Expect(store.Status.Ready).To(BeTrue())
+		cond := meta.FindStatusCondition(store.Status.Conditions, odoov1.ConditionReady)
+		Expect(cond.Reason).To(Equal(ReasonStoreReachable))
+		Expect(cond.Message).To(Equal("the store can be listed; it is readOnly, so it is never written to"))
+	})
+
 	It("marks the store reachable when the probe succeeds and deletes the Job", func() {
 		s.createPVCStore()
 		s.reconcile()
@@ -299,6 +316,7 @@ var _ = Describe("OdooBackupStore reconciler", func() {
 		cond := meta.FindStatusCondition(store.Status.Conditions, odoov1.ConditionReady)
 		Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 		Expect(cond.Reason).To(Equal(ReasonStoreReachable))
+		Expect(cond.Message).To(Equal("the store can be written to, read from and deleted from"))
 		Eventually(func() *batchv1.Job { return s.job(jobName) }).Should(BeNil())
 		Expect(s.events()).To(BeEmpty())
 
@@ -681,8 +699,8 @@ var _ = Describe("OdooBackupStore reconciler", func() {
 		DeferCleanup(func() { _ = k8sClient.Delete(ctx, other) })
 
 		base := bwName("map")
-		key := func(name string) corev1.SecretKeySelector {
-			return corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: name}, Key: "password"}
+		key := func(name string) *corev1.SecretKeySelector {
+			return &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: name}, Key: "password"}
 		}
 		s3 := &odoov1.OdooBackupStore{
 			ObjectMeta: metav1.ObjectMeta{Name: base + "-s3", Namespace: ns},
@@ -1053,23 +1071,64 @@ var _ = Describe("Backup CRD admission", func() {
 	AfterEach(func() { t.cleanup() })
 
 	Context("OdooRestore", func() {
-		It("requires exactly one of backup, snapshotID and undo", func() {
+		It("requires exactly one of backup, snapshotID, from and undo", func() {
 			rs := newRestore(bwName("rs"), "od")
 			rs.Spec.Backup = ""
-			expectInvalid(k8sClient.Create(ctx, rs), "set exactly one of backup, snapshotID, undo")
+			expectInvalid(k8sClient.Create(ctx, rs), "set exactly one of backup, snapshotID, from, undo")
 
 			rs = newRestore(bwName("rs"), "od")
 			rs.Spec.SnapshotID = "0123abcd"
-			expectInvalid(k8sClient.Create(ctx, rs), "set exactly one of backup, snapshotID, undo")
+			expectInvalid(k8sClient.Create(ctx, rs), "set exactly one of backup, snapshotID, from, undo")
 
 			for _, mutate := range []func(*odoov1.OdooRestore){
 				func(rs *odoov1.OdooRestore) {},
 				func(rs *odoov1.OdooRestore) { rs.Spec.Backup, rs.Spec.SnapshotID = "", "0123abcd" },
 				func(rs *odoov1.OdooRestore) { rs.Spec.Backup, rs.Spec.Undo = "", "earlier-restore" },
+				func(rs *odoov1.OdooRestore) {
+					rs.Spec.Backup, rs.Spec.From = "", &odoov1.BackupSource{Store: "old", Path: "exports/shop_*.zip"}
+				},
 			} {
 				rs := newRestore(bwName("rs"), "od")
 				mutate(rs)
 				t.create(rs)
+			}
+		})
+
+		It("checks spec.from and neutralize", func() {
+			from := func(src odoov1.BackupSource, neutralize bool) *odoov1.OdooRestore {
+				rs := newRestore(bwName("rs"), "od")
+				rs.Spec.Backup, rs.Spec.From, rs.Spec.Neutralize = "", &src, neutralize
+				return rs
+			}
+			expectInvalid(k8sClient.Create(ctx, from(odoov1.BackupSource{Store: "s", Path: "a.zip", Snapshot: "latest"}, false)),
+				"snapshot, host and tags are for restic repositories")
+			expectInvalid(k8sClient.Create(ctx, from(odoov1.BackupSource{Store: "s", Path: "a.dump", Tags: []string{"x"}}, false)),
+				"snapshot, host and tags are for restic repositories")
+			for _, bad := range []string{"../a.zip", "a/../b.zip", "/abs.zip", "a//b.zip", "dir/", "a*/b.zip"} {
+				expectInvalid(k8sClient.Create(ctx, from(odoov1.BackupSource{Store: "s", Path: bad}, false)), "spec.from.path")
+			}
+			expectInvalid(k8sClient.Create(ctx, from(odoov1.BackupSource{Store: "s", Path: "shop/odoo-*"}, false)),
+				"only a .zip or .dump path may be a pattern")
+			expectInvalid(k8sClient.Create(ctx, from(odoov1.BackupSource{Store: "s", Path: "shop/odoo", Snapshot: "LATEST"}, false)),
+				"spec.from.snapshot")
+			undo := newRestore(bwName("rs"), "od")
+			undo.Spec.Backup, undo.Spec.Undo, undo.Spec.Neutralize = "", "r1", true
+			expectInvalid(k8sClient.Create(ctx, undo), "neutralize cannot be set")
+
+			for _, src := range []odoov1.BackupSource{
+				{Store: "s", Path: "exports/shop_2026-*.zip"},
+				{Store: "s", Path: "shop.dump"},
+				{Store: "s", Path: "other-ns/odoo", Snapshot: "0123abcd", Host: "other-ns/odoo", Tags: []string{"kind:manual"}},
+			} {
+				rs := from(src, true)
+				t.create(rs)
+				cur := getRestore(rs.Name)
+				cur.Spec.Neutralize = false
+				expectInvalid(k8sClient.Update(ctx, cur), "immutable")
+				cur = getRestore(rs.Name)
+				cur.Spec.From.Path = "elsewhere.zip"
+				cur.Spec.From.Snapshot, cur.Spec.From.Host, cur.Spec.From.Tags = "", "", nil
+				expectInvalid(k8sClient.Update(ctx, cur), "immutable")
 			}
 		})
 
@@ -1090,9 +1149,9 @@ var _ = Describe("Backup CRD admission", func() {
 				mutate(cur)
 				return k8sClient.Update(ctx, cur)
 			}
-			expectInvalid(update(func(r *odoov1.OdooRestore) { r.Spec.Backup = "another" }), "backup, snapshotID and undo are immutable")
-			expectInvalid(update(func(r *odoov1.OdooRestore) { r.Spec.Backup, r.Spec.SnapshotID = "", "0123abcd" }), "backup, snapshotID and undo are immutable")
-			expectInvalid(update(func(r *odoov1.OdooRestore) { r.Spec.Backup, r.Spec.Undo = "", "x" }), "backup, snapshotID and undo are immutable")
+			expectInvalid(update(func(r *odoov1.OdooRestore) { r.Spec.Backup = "another" }), "backup, snapshotID, from, undo and neutralize are immutable")
+			expectInvalid(update(func(r *odoov1.OdooRestore) { r.Spec.Backup, r.Spec.SnapshotID = "", "0123abcd" }), "backup, snapshotID, from, undo and neutralize are immutable")
+			expectInvalid(update(func(r *odoov1.OdooRestore) { r.Spec.Backup, r.Spec.Undo = "", "x" }), "backup, snapshotID, from, undo and neutralize are immutable")
 			expectInvalid(update(func(r *odoov1.OdooRestore) { r.Spec.OdooDeployment = "other" }), "spec.odooDeployment is immutable")
 			Expect(update(func(r *odoov1.OdooRestore) {
 				r.Spec.KeepPrevious = &metav1.Duration{Duration: time.Hour}
@@ -1103,14 +1162,14 @@ var _ = Describe("Backup CRD admission", func() {
 			t.create(snap)
 			cur := getRestore(snap.Name)
 			cur.Spec.SnapshotID = "0123abce"
-			expectInvalid(k8sClient.Update(ctx, cur), "backup, snapshotID and undo are immutable")
+			expectInvalid(k8sClient.Update(ctx, cur), "backup, snapshotID, from, undo and neutralize are immutable")
 
 			undo := newRestore(bwName("rs"), "od")
 			undo.Spec.Backup, undo.Spec.Undo = "", "r1"
 			t.create(undo)
 			cur = getRestore(undo.Name)
 			cur.Spec.Undo = "r2"
-			expectInvalid(k8sClient.Update(ctx, cur), "backup, snapshotID and undo are immutable")
+			expectInvalid(k8sClient.Update(ctx, cur), "backup, snapshotID, from, undo and neutralize are immutable")
 		})
 	})
 
@@ -1137,7 +1196,7 @@ var _ = Describe("Backup CRD admission", func() {
 			st := &odoov1.OdooBackupStore{
 				ObjectMeta: metav1.ObjectMeta{Name: bwName("bs"), Namespace: ns},
 				Spec: odoov1.OdooBackupStoreSpec{
-					EncryptionKeySecret: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "k"}, Key: "password"},
+					EncryptionKeySecret: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "k"}, Key: "password"},
 				},
 			}
 			mutate(&st.Spec)
@@ -1162,6 +1221,19 @@ var _ = Describe("Backup CRD admission", func() {
 					Expect(st.Spec.SFTP.Port).To(Equal(int32(22)))
 				}
 			}
+		})
+
+		It("needs a key unless it is readOnly, and never checks or prunes a readOnly store", func() {
+			noKey := func(s *odoov1.OdooBackupStoreSpec) { s.PVC, s.EncryptionKeySecret = pvc, nil }
+			expectInvalid(k8sClient.Create(ctx, store(noKey)), "encryptionKeySecret is required unless the store is readOnly")
+			t.create(store(func(s *odoov1.OdooBackupStoreSpec) { noKey(s); s.ReadOnly = true }))
+			t.create(store(func(s *odoov1.OdooBackupStoreSpec) { s.PVC, s.ReadOnly = pvc, true }))
+			expectInvalid(k8sClient.Create(ctx, store(func(s *odoov1.OdooBackupStoreSpec) {
+				s.PVC, s.ReadOnly, s.Check.Schedule = pvc, true, "@weekly"
+			})), "a readOnly store is never checked or pruned")
+			expectInvalid(k8sClient.Create(ctx, store(func(s *odoov1.OdooBackupStoreSpec) {
+				s.PVC, s.ReadOnly, s.Prune.Schedule = pvc, true, "@weekly"
+			})), "a readOnly store is never checked or pruned")
 		})
 
 		DescribeTable("requires exactly one kind of store",

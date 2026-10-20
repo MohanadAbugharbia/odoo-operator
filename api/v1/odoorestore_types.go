@@ -17,6 +17,8 @@ limitations under the License.
 package v1
 
 import (
+	"strings"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -46,9 +48,61 @@ const (
 // data it replaced has been deleted.
 const RestoreFinalizer = "odoo.abugharbia.com/restore"
 
+// BackupSource is a backup that is not one of the instance's own
+// OdooBackups: an Odoo backup file (.zip or .dump, as Odoo's database
+// manager makes them) or a snapshot in any restic repository, in an
+// OdooBackupStore of the same namespace.
+// +kubebuilder:validation:XValidation:rule="!has(self.path) || !(self.path.endsWith('.zip') || self.path.endsWith('.dump')) || (!has(self.snapshot) && !has(self.host) && !has(self.tags))",message="snapshot, host and tags are for restic repositories, not for .zip or .dump files"
+// +kubebuilder:validation:XValidation:rule="!has(self.path) || self.path.endsWith('.zip') || self.path.endsWith('.dump') || !(self.path.contains('*') || self.path.contains('?') || self.path.contains('['))",message="only a .zip or .dump path may be a pattern"
+type BackupSource struct {
+	// Store is the OdooBackupStore that holds the backup.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Store string `json:"store"`
+	// Path inside the store, below its path (or subPath). A path ending in
+	// .zip or .dump is an Odoo backup file; its last segment may be a
+	// pattern (*, ?, [a-z]), and the match whose name sorts last, the
+	// newest for dated names, is restored. Any other path is a restic
+	// repository folder; empty is this instance's own repository
+	// (<namespace>/<name>).
+	// +kubebuilder:validation:MaxLength=512
+	// +kubebuilder:validation:Pattern=`^([A-Za-z0-9._~+@=-]+/)*[A-Za-z0-9._~+@=*?\[\]-]+$`
+	// +kubebuilder:validation:XValidation:rule="!self.split('/').exists(s, s == '..' || s == '.')",message="path segments cannot be . or .."
+	Path string `json:"path,omitempty"`
+	// Snapshot in a restic repository: its ID, or latest (default) for the
+	// newest snapshot with Host and Tags.
+	// +kubebuilder:validation:Pattern=`^(latest|[0-9a-f]{8,64})$`
+	Snapshot string `json:"snapshot,omitempty"`
+	// Host picks latest among the snapshots of one restic --host, such as
+	// <namespace>/<name> for the operator's own snapshots.
+	// +kubebuilder:validation:MaxLength=253
+	Host string `json:"host,omitempty"`
+	// Tags picks latest among the snapshots that have all these restic
+	// tags, such as deployment=<namespace>/<name>.
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=10
+	// +kubebuilder:validation:items:MaxLength=253
+	Tags []string `json:"tags,omitempty"`
+}
+
+// IsFile reports whether the source is an Odoo backup file rather than a
+// restic repository.
+func (s *BackupSource) IsFile() bool {
+	return s != nil && (strings.HasSuffix(s.Path, ".zip") || strings.HasSuffix(s.Path, ".dump"))
+}
+
+// SnapshotValue is the snapshot to restore from a restic repository.
+func (s *BackupSource) SnapshotValue() string {
+	if s.Snapshot == "" {
+		return "latest"
+	}
+	return s.Snapshot
+}
+
 // OdooRestoreSpec says which backup replaces an instance's data.
-// +kubebuilder:validation:XValidation:rule="(has(self.backup) ? 1 : 0) + (has(self.snapshotID) ? 1 : 0) + (has(self.undo) ? 1 : 0) == 1",message="set exactly one of backup, snapshotID, undo"
-// +kubebuilder:validation:XValidation:rule="(has(self.backup) == has(oldSelf.backup)) && (!has(self.backup) || self.backup == oldSelf.backup) && (has(self.snapshotID) == has(oldSelf.snapshotID)) && (!has(self.snapshotID) || self.snapshotID == oldSelf.snapshotID) && (has(self.undo) == has(oldSelf.undo)) && (!has(self.undo) || self.undo == oldSelf.undo)",message="backup, snapshotID and undo are immutable"
+// +kubebuilder:validation:XValidation:rule="(has(self.backup) ? 1 : 0) + (has(self.snapshotID) ? 1 : 0) + (has(self.undo) ? 1 : 0) + (has(self.from) ? 1 : 0) == 1",message="set exactly one of backup, snapshotID, from, undo"
+// +kubebuilder:validation:XValidation:rule="(has(self.backup) == has(oldSelf.backup)) && (!has(self.backup) || self.backup == oldSelf.backup) && (has(self.snapshotID) == has(oldSelf.snapshotID)) && (!has(self.snapshotID) || self.snapshotID == oldSelf.snapshotID) && (has(self.undo) == has(oldSelf.undo)) && (!has(self.undo) || self.undo == oldSelf.undo) && (has(self.from) == has(oldSelf.from)) && (!has(self.from) || self.from == oldSelf.from) && (has(self.neutralize) ? self.neutralize : false) == (has(oldSelf.neutralize) ? oldSelf.neutralize : false)",message="backup, snapshotID, from, undo and neutralize are immutable"
+// +kubebuilder:validation:XValidation:rule="!has(self.neutralize) || !self.neutralize || !has(self.undo)",message="an undo puts the replaced data back as it was; neutralize cannot be set"
 type OdooRestoreSpec struct {
 	// OdooDeployment whose database and filestore are replaced, in the same namespace.
 	// +kubebuilder:validation:MinLength=1
@@ -71,6 +125,18 @@ type OdooRestoreSpec struct {
 	// instance since.
 	// +kubebuilder:validation:MinLength=1
 	Undo string `json:"undo,omitempty"`
+	// From is a backup in any store: an Odoo .zip or .dump file, or a
+	// snapshot in another restic repository, such as another instance's
+	// or another cluster's.
+	// +kubebuilder:validation:Optional
+	From *BackupSource `json:"from,omitempty"`
+
+	// Neutralize runs Odoo's neutralize on the restored database before it
+	// is swapped in, and gives it a new database.uuid: scheduled actions,
+	// outgoing mail servers, payment providers and similar integrations
+	// are turned off, so a copy of production cannot act as production.
+	// It runs with the instance's image.
+	Neutralize bool `json:"neutralize,omitempty"`
 
 	// KeepPrevious is how long the replaced database and files are kept
 	// for an undo. Overrides spec.backup.restore.keepPrevious.
@@ -109,9 +175,11 @@ type OdooRestoreStatus struct {
 	// <db>_restore_<suffix> while restoring, <db>_prev_<suffix> for the
 	// data it replaced.
 	Suffix string `json:"suffix,omitempty"`
-	// Store and SnapshotID are the backup that was restored.
+	// Store and SnapshotID are the backup that was restored; File is the
+	// Odoo backup file restored from Store instead of a snapshot.
 	Store      string `json:"store,omitempty"`
 	SnapshotID string `json:"snapshotID,omitempty"`
+	File       string `json:"file,omitempty"`
 	// Image is the Odoo image recorded in the backup; the instance is
 	// started on it.
 	Image string `json:"image,omitempty"`

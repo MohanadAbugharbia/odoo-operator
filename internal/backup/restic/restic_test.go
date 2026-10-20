@@ -547,3 +547,36 @@ func TestContextCancelStopsRestic(t *testing.T) {
 		t.Fatal("cancel did not stop restic")
 	}
 }
+
+func TestNoLockReplacesRetryLock(t *testing.T) {
+	f := newFake(t)
+	f.r.RetryLock = 31 * time.Minute
+	f.r.NoLock = true
+	f.on("snapshots", 0, "[]", "", 0)
+	if _, err := f.r.Snapshots(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.args(1); !reflect.DeepEqual(got, []string{"--no-lock", "snapshots", "--json"}) {
+		t.Fatalf("args = %q", got)
+	}
+}
+
+func TestLatest(t *testing.T) {
+	f := newFake(t)
+	f.on("snapshots", 1, snapshotsJSON, "", 0)
+	s, err := f.r.Latest(context.Background(), "ns/dep", "kind=manual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.ID != "bbbb2222" {
+		t.Fatalf("latest = %+v", s)
+	}
+	if got := f.args(1); !reflect.DeepEqual(got, []string{"snapshots", "--json", "--host", "ns/dep", "--tag", "kind=manual"}) {
+		t.Fatalf("args = %q", got)
+	}
+	f.on("snapshots", 2, "[]", "", 0)
+	if _, err := f.r.Latest(context.Background(), "ns/dep", "kind=manual"); err == nil ||
+		err.Error() != "the repository has no snapshots with host ns/dep and tags kind=manual" {
+		t.Fatalf("err = %v", err)
+	}
+}

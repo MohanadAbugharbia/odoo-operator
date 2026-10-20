@@ -6,7 +6,9 @@
 # scheduled backups with retention and a copy, a restore drill through the
 # real Odoo image, a store check and prune, a backup before an upgrade to a
 # store that cannot be reached (Odoo keeps serving), and a failed upgrade
-# undone with the backup taken before it.
+# undone with the backup taken before it. Last, a second instance starts from
+# Odoo's own backup file (bootstrap, neutralized) and restores the first
+# instance's repository from a readOnly store.
 #
 #   kind create cluster && hack/backup-e2e.sh
 set -Eeuo pipefail
@@ -282,6 +284,114 @@ psql_q "DROP TRIGGER e2e_block_upgrade ON ir_module_module; DROP FUNCTION e2e_bl
 	fail "status.preUpgradeBackup is kept with no upgrade pending"
 k delete odoorestore e2e-undo-upgrade --wait=true --timeout=10m
 k patch odoodeployment "$OD" --type=merge -p '{"spec":{"backup":{"beforeUpgrade":"Off"}}}'
+
+log "a new instance starts from Odoo's own backup file in a readOnly store, neutralized"
+BOOT=e2e-boot
+BOOT_DB=e2e_boot
+FIXTURES=internal/backup/agent/testdata/odoo/18.0
+FIXTURE_SHA=b1780c43e423d9840c8bbf5f9e8a36580d76b83a
+FIXTURE_UUID=27eb0a80-cb43-11f1-ad4f-39ab03fe46e7
+boot_psql() { psql_q "$1" "$BOOT_DB"; }
+k create configmap e2e-fixture-new --from-file=shop_2026-10-01.zip="$FIXTURES/fixture.zip"
+k create configmap e2e-fixture-old --from-file=shop_2026-09-01.zip="$FIXTURES/wrapped.zip"
+cat <<YAML | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata: { name: e2e-upload, namespace: $NS }
+spec:
+  restartPolicy: Never
+  containers:
+    - name: upload
+      image: busybox:1.37
+      command: ["sh", "-c", "mkdir -p /pvc/imports/exports && cp /new/* /old/* /pvc/imports/exports/ && ls -l /pvc/imports/exports"]
+      volumeMounts:
+        - { name: pvc, mountPath: /pvc }
+        - { name: new, mountPath: /new }
+        - { name: old, mountPath: /old }
+  volumes:
+    - { name: pvc, persistentVolumeClaim: { claimName: e2e-backups } }
+    - { name: new, configMap: { name: e2e-fixture-new } }
+    - { name: old, configMap: { name: e2e-fixture-old } }
+YAML
+wait_for pod/e2e-upload .status.phase Succeeded 300
+k logs e2e-upload
+cat <<YAML | kubectl apply -f -
+apiVersion: odoo.abugharbia.com/v1
+kind: OdooBackupStore
+metadata: { name: imports, namespace: $NS }
+spec:
+  pvc: { claimName: e2e-backups, subPath: imports }
+  readOnly: true
+YAML
+wait_for odoobackupstore/imports .status.ready true 420
+sed -e "s/name: $OD\$/name: $BOOT/" -e "s/name: $DB\$/name: $BOOT_DB/" -e '/^  backup:/,$d' \
+	test/e2e/testdata/backup/odoodeployment.yaml | kubectl apply -f -
+k patch odoodeployment "$BOOT" --type=merge -p '{"spec":{"bootstrap":{"fromBackup":{"store":"imports","path":"exports/shop_*.zip","neutralize":true}}}}'
+wait_for odoorestore/"$BOOT"-bootstrap .status.phase Completed 900
+wait_for odoodeployment/"$BOOT" .status.phase Running 900
+k rollout status deploy/"$BOOT" --timeout=5m
+[ "$(k get odoorestore "$BOOT"-bootstrap -o jsonpath='{.status.file}')" = exports/shop_2026-10-01.zip ] ||
+	fail "the bootstrap did not pick the newest file: $(k get odoorestore "$BOOT"-bootstrap -o jsonpath='{.status.file}')"
+[ "$(k get odoodeployment "$BOOT" -o jsonpath='{.status.bootstrap.completed}')" = true ] || fail "status.bootstrap is not completed"
+! k get job "$BOOT"-init >/dev/null 2>&1 || fail "an init Job ran over the restored database"
+[ "$(boot_psql "SELECT store_fname FROM ir_attachment WHERE id = 14")" = "b1/$FIXTURE_SHA" ] || fail "the backup's attachment row is missing"
+[ "$(k exec deploy/"$BOOT" -c odoo -- cat "$(data_dir)/filestore/$BOOT_DB/b1/$FIXTURE_SHA")" = "odoo fixture 18.0" ] ||
+	fail "the backup's attachment file is missing"
+[ "$(boot_psql "SELECT lower(value) FROM ir_config_parameter WHERE key = 'database.is_neutralized'")" = true ] || fail "the database was not neutralized"
+uuid="$(boot_psql "SELECT value FROM ir_config_parameter WHERE key = 'database.uuid'")"
+[ -n "$uuid" ] && [ "$uuid" != "$FIXTURE_UUID" ] || fail "the neutralized copy kept database.uuid $uuid"
+k exec deploy/"$BOOT" -c odoo -- python3 -c \
+	"import urllib.request; r = urllib.request.urlopen('http://localhost:8069/web/login'); assert r.status == 200, r.status" ||
+	fail "Odoo does not serve the restored database"
+
+log "restore another instance's repository into it, read-only and by tag, then undo"
+cat <<YAML | kubectl apply -f -
+apiVersion: odoo.abugharbia.com/v1
+kind: OdooBackupStore
+metadata: { name: s3-readonly, namespace: $NS }
+spec:
+  s3:
+    endpoint: http://e2e-s3.odoo-e2e.svc.cluster.local:8333
+    region: us-east-1
+    bucket: odoo-backups
+    path: e2e
+    forcePathStyle: true
+    credentialsSecret: { name: e2e-s3-credentials }
+  encryptionKeySecret: { name: e2e-restic, key: password }
+  readOnly: true
+---
+apiVersion: odoo.abugharbia.com/v1
+kind: OdooRestore
+metadata: { name: e2e-boot-from-repo, namespace: $NS }
+spec:
+  odooDeployment: $BOOT
+  from:
+    store: s3-readonly
+    path: $NS/$OD
+    host: $NS/$OD
+    tags: [kind=manual]
+  neutralize: true
+YAML
+wait_for odoobackupstore/s3-readonly .status.ready true 420
+wait_for odoorestore/e2e-boot-from-repo .status.phase Completed 900
+wait_for odoodeployment/"$BOOT" .status.phase Running 900
+[ "$(boot_psql 'SELECT word FROM e2e_marker')" = before-s3 ] || fail "the latest manual backup of $OD was not restored"
+[ "$(boot_psql "SELECT lower(value) FROM ir_config_parameter WHERE key = 'database.is_neutralized'")" = true ] || fail "the restore was not neutralized"
+[ -n "$(k get odoorestore e2e-boot-from-repo -o jsonpath='{.status.snapshotID}')" ] || fail "the snapshot latest resolved to is not recorded"
+cat <<YAML | kubectl apply -f -
+apiVersion: odoo.abugharbia.com/v1
+kind: OdooRestore
+metadata: { name: e2e-boot-undo, namespace: $NS }
+spec: { odooDeployment: $BOOT, undo: e2e-boot-from-repo }
+YAML
+wait_for odoorestore/e2e-boot-undo .status.phase Completed 900
+wait_for odoodeployment/"$BOOT" .status.phase Running 600
+[ "$(boot_psql "SELECT store_fname FROM ir_attachment WHERE id = 14")" = "b1/$FIXTURE_SHA" ] || fail "the undo did not bring the bootstrapped data back"
+k delete odoorestore e2e-boot-undo e2e-boot-from-repo "$BOOT"-bootstrap --wait=true --timeout=10m
+k delete odoodeployment "$BOOT" --wait=true --timeout=3m
+k delete odoobackupstore imports s3-readonly
+k delete pod e2e-upload
+k delete configmap e2e-fixture-new e2e-fixture-old
 
 # The restore Jobs and their finished pods stay until their TTL; they must not
 # hold up deleting the instance.

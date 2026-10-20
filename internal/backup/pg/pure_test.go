@@ -3,6 +3,7 @@ package pg
 // Tests of the parts of package pg that need no database.
 
 import (
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -218,5 +219,20 @@ func TestShouldWait(t *testing.T) {
 	}
 	if wait, _ := (Autovacuum{Found: true, Active: true, Now: now, NextCall: now.Add(time.Minute)}).ShouldWait(0); wait {
 		t.Error("a zero window still waits for a cron due in the future")
+	}
+}
+
+func TestClientsNewest(t *testing.T) {
+	tmpl := installClients(t, 13, 16)
+	c := Clients{BinDirTemplate: tmpl, Majors: []int{13, 18, 16}}
+	dir, err := c.Newest()
+	if err != nil || dir != fmt.Sprintf(tmpl, 16) {
+		t.Fatalf("Newest = %q, %v; want the 16 client (18 is listed but not installed)", dir, err)
+	}
+	if dir, err := (Clients{}).Newest(); err != nil || dir != "" {
+		t.Fatalf("Newest without a template = %q, %v", dir, err)
+	}
+	if _, err := (Clients{BinDirTemplate: filepath.Join(t.TempDir(), "pg%d"), Majors: []int{16}}).Newest(); err == nil {
+		t.Fatal("Newest with nothing installed: want an error")
 	}
 }

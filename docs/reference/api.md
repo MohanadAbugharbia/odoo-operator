@@ -53,6 +53,30 @@ _Appears in:_
 | `error` _string_ | Error says why the copy failed. |  |  |
 
 
+#### BackupSource
+
+
+
+BackupSource is a backup that is not one of the instance's own
+OdooBackups: an Odoo backup file (.zip or .dump, as Odoo's database
+manager makes them) or a snapshot in any restic repository, in an
+OdooBackupStore of the same namespace.
+
+
+
+_Appears in:_
+- [BootstrapFromBackup](#bootstrapfrombackup)
+- [OdooRestoreSpec](#odoorestorespec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `store` _string_ | Store is the OdooBackupStore that holds the backup. |  | MaxLength: 253 <br />MinLength: 1 <br /> |
+| `path` _string_ | Path inside the store, below its path (or subPath). A path ending in<br />.zip or .dump is an Odoo backup file; its last segment may be a<br />pattern (*, ?, [a-z]), and the match whose name sorts last, the<br />newest for dated names, is restored. Any other path is a restic<br />repository folder; empty is this instance's own repository<br />(&lt;namespace>/&lt;name>). |  | MaxLength: 512 <br />Pattern: `^([A-Za-z0-9._~+@=-]+/)*[A-Za-z0-9._~+@=*?\[\]-]+$` <br /> |
+| `snapshot` _string_ | Snapshot in a restic repository: its ID, or latest (default) for the<br />newest snapshot with Host and Tags. |  | Pattern: `^(latest\|[0-9a-f]\{8,64\})$` <br /> |
+| `host` _string_ | Host picks latest among the snapshots of one restic --host, such as<br />&lt;namespace>/&lt;name> for the operator's own snapshots. |  | MaxLength: 253 <br /> |
+| `tags` _string array_ | Tags picks latest among the snapshots that have all these restic<br />tags, such as deployment=&lt;namespace>/&lt;name>. |  | MaxItems: 10 <br />items:MaxLength: 253 <br /> |
+
+
 #### BackupStoreFormat
 
 _Underlying type:_ _string_
@@ -87,6 +111,60 @@ _Appears in:_
 | `Off` | BeforeUpgradeOff upgrades without a backup first.<br /> |
 | `BestEffort` | BeforeUpgradeBestEffort takes a backup first and upgrades even when<br />it fails.<br /> |
 | `Required` | BeforeUpgradeRequired upgrades only after the backup succeeded; a<br />failed backup keeps the running image.<br /> |
+
+
+#### Bootstrap
+
+
+
+Bootstrap says how an instance's database is made on first boot.
+
+
+
+_Appears in:_
+- [OdooDeploymentSpec](#odoodeploymentspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `fromBackup` _[BootstrapFromBackup](#bootstrapfrombackup)_ | FromBackup restores a backup instead of initializing a new database:<br />the way an existing Odoo moves onto the operator, or an instance is<br />recreated from its backups. It is used once, before Odoo first<br />starts; later changes are ignored. |  | Optional: \{\} <br /> |
+
+
+#### BootstrapFromBackup
+
+
+
+BootstrapFromBackup is the backup an instance starts from.
+
+
+
+_Appears in:_
+- [Bootstrap](#bootstrap)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `store` _string_ | Store is the OdooBackupStore that holds the backup. |  | MaxLength: 253 <br />MinLength: 1 <br /> |
+| `path` _string_ | Path inside the store, below its path (or subPath). A path ending in<br />.zip or .dump is an Odoo backup file; its last segment may be a<br />pattern (*, ?, [a-z]), and the match whose name sorts last, the<br />newest for dated names, is restored. Any other path is a restic<br />repository folder; empty is this instance's own repository<br />(&lt;namespace>/&lt;name>). |  | MaxLength: 512 <br />Pattern: `^([A-Za-z0-9._~+@=-]+/)*[A-Za-z0-9._~+@=*?\[\]-]+$` <br /> |
+| `snapshot` _string_ | Snapshot in a restic repository: its ID, or latest (default) for the<br />newest snapshot with Host and Tags. |  | Pattern: `^(latest\|[0-9a-f]\{8,64\})$` <br /> |
+| `host` _string_ | Host picks latest among the snapshots of one restic --host, such as<br />&lt;namespace>/&lt;name> for the operator's own snapshots. |  | MaxLength: 253 <br /> |
+| `tags` _string array_ | Tags picks latest among the snapshots that have all these restic<br />tags, such as deployment=&lt;namespace>/&lt;name>. |  | MaxItems: 10 <br />items:MaxLength: 253 <br /> |
+| `neutralize` _boolean_ | Neutralize runs Odoo's neutralize on the restored database before<br />Odoo first starts on it, and gives it a new database.uuid (see<br />OdooRestore spec.neutralize). Set it for a copy of production. |  |  |
+
+
+#### BootstrapStatus
+
+
+
+BootstrapStatus records the restore spec.bootstrap.fromBackup started.
+
+
+
+_Appears in:_
+- [OdooDeploymentStatus](#odoodeploymentstatus)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `restore` _string_ | Restore is the OdooRestore that restores the backup. |  |  |
+| `completed` _boolean_ | Completed is set once it has restored the backup. |  |  |
 
 
 
@@ -425,7 +503,8 @@ _Appears in:_
 | `sftp` _[SFTPStore](#sftpstore)_ | SFTP stores backups on an SSH server. |  |  |
 | `nfs` _[NFSStore](#nfsstore)_ | NFS stores backups on an NFS export. |  |  |
 | `pvc` _[PVCStore](#pvcstore)_ | PVC stores backups on a PersistentVolumeClaim. |  |  |
-| `encryptionKeySecret` _[SecretKeySelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#secretkeyselector-v1-core)_ | EncryptionKeySecret is the restic password that encrypts every<br />backup in the store. Without it no backup can be read: keep a copy<br />outside the cluster. |  |  |
+| `encryptionKeySecret` _[SecretKeySelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#secretkeyselector-v1-core)_ | EncryptionKeySecret is the restic password that encrypts every<br />backup in the store. Without it no backup can be read: keep a copy<br />outside the cluster. A readOnly store that only holds Odoo zip or<br />.dump files does not need one. |  | Optional: \{\} <br /> |
+| `readOnly` _boolean_ | ReadOnly stores are only read from: OdooRestores and<br />spec.bootstrap.fromBackup take backups from them, but no backup or<br />copy is ever written there, they are never checked or pruned, and<br />their probe only lists the store. Read-only credentials are enough,<br />and restic reads the repositories without locking them. |  |  |
 | `check` _[StoreCheck](#storecheck)_ | Check reads the store's repositories back on a schedule (restic check)<br />to find damage before a restore needs them. |  | Optional: \{\} <br /> |
 | `prune` _[StoreSchedule](#storeschedule)_ | Prune frees the space of the backups retention has removed, on a<br />schedule (restic prune). |  | Optional: \{\} <br /> |
 | `timeZone` _string_ | TimeZone of the check and prune schedules, as an IANA name. | UTC | MaxLength: 100 <br /> |
@@ -446,7 +525,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `observedGeneration` _integer_ | ObservedGeneration is the generation the status describes. |  |  |
-| `ready` _boolean_ | Ready is true when the last probe could write to, read from and<br />delete a file in the store. |  | Optional: \{\} <br /> |
+| `ready` _boolean_ | Ready is true when the last probe could write to, read from and<br />delete a file in the store (list it, for a readOnly store). |  | Optional: \{\} <br /> |
 | `lastProbeTime` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta)_ | LastProbeTime is when the store was last probed. |  |  |
 | `probeJob` _string_ | ProbeJob is the Job probing the store right now. |  |  |
 | `probedHash` _string_ | ProbedHash identifies the spec and Secrets the last probe ran with. |  |  |
@@ -600,6 +679,7 @@ _Appears in:_
 | `podSecurityContext` _[PodSecurityContext](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#podsecuritycontext-v1-core)_ | PodSecurityContext of the Odoo pods (Deployment and Jobs). When unset the<br />operator uses runAsUser 100, runAsGroup 101, fsGroup 101, runAsNonRoot. |  | Optional: \{\} <br /> |
 | `maintenancePage` _[MaintenancePageConfig](#maintenancepageconfig)_ | MaintenancePage serves a status page instead of an empty Service while<br />Odoo is being installed, upgraded or started. | \{  \} | Optional: \{\} <br /> |
 | `backup` _[OdooBackupConfig](#odoobackupconfig)_ | Backup says where this instance's backups (OdooBackup) are written and<br />how they and in-place restores (OdooRestore) run. | \{  \} | Optional: \{\} <br /> |
+| `bootstrap` _[Bootstrap](#bootstrap)_ | Bootstrap says how the database is made on first boot. Without it a<br />new database is initialized with spec.modules. |  | Optional: \{\} <br /> |
 
 
 #### OdooDeploymentStatus
@@ -628,6 +708,7 @@ _Appears in:_
 | `currentOperation` _[OperationStatus](#operationstatus)_ | CurrentOperation is the backup, restore or cleanup in progress. |  | Optional: \{\} <br /> |
 | `backup` _[OdooBackupScheduleStatus](#odoobackupschedulestatus)_ | Backup reports the backup schedule and the last restore drill. |  | Optional: \{\} <br /> |
 | `preUpgradeBackup` _[PreUpgradeBackupStatus](#preupgradebackupstatus)_ | PreUpgradeBackup is the backup spec.backup.beforeUpgrade takes before<br />the pending upgrade. It is cleared once no upgrade is pending. |  | Optional: \{\} <br /> |
+| `bootstrap` _[BootstrapStatus](#bootstrapstatus)_ | Bootstrap is the restore spec.bootstrap.fromBackup started. |  | Optional: \{\} <br /> |
 | `lastMaintenanceDuration` _[Duration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#duration-v1-meta)_ | LastMaintenanceDuration is how long the last successful upgrade Job<br />took, from its creation to its completion. The maintenance page uses it<br />to estimate the next one. Init Jobs are not counted: they run once and<br />take far longer than an upgrade. |  | Optional: \{\} <br /> |
 | `odooAdminSecretName` _string_ | The secret name for the Odoo admin password |  | Optional: \{\} <br /> |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#condition-v1-meta) array_ |  |  | Optional: \{\} <br /> |
@@ -761,6 +842,8 @@ _Appears in:_
 | `backup` _string_ | Backup is the OdooBackup to restore. |  | MinLength: 1 <br /> |
 | `snapshotID` _string_ | SnapshotID is a restic snapshot in the instance's own repository on<br />its first store (spec.backup.stores[0]), for a backup that has no<br />OdooBackup any more. |  | Pattern: `^[0-9a-f]\{8,64\}$` <br /> |
 | `undo` _string_ | Undo reverses the OdooRestore of this name: the database and files it<br />replaced go back in place, and the ones it restored are kept as the<br />previous data of this restore. Refused once that data has been<br />removed (keepPrevious passed) or when another restore ran on the<br />instance since. |  | MinLength: 1 <br /> |
+| `from` _[BackupSource](#backupsource)_ | From is a backup in any store: an Odoo .zip or .dump file, or a<br />snapshot in another restic repository, such as another instance's<br />or another cluster's. |  | Optional: \{\} <br /> |
+| `neutralize` _boolean_ | Neutralize runs Odoo's neutralize on the restored database before it<br />is swapped in, and gives it a new database.uuid: scheduled actions,<br />outgoing mail servers, payment providers and similar integrations<br />are turned off, so a copy of production cannot act as production.<br />It runs with the instance's image. |  |  |
 | `keepPrevious` _[Duration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#duration-v1-meta)_ | KeepPrevious is how long the replaced database and files are kept<br />for an undo. Overrides spec.backup.restore.keepPrevious. |  | Optional: \{\} <br /> |
 
 
@@ -780,8 +863,9 @@ _Appears in:_
 | `phase` _string_ | Phase: Pending, Stopping (Odoo is being stopped), Restoring,<br />Completed or Failed. |  | Enum: [Pending Stopping Restoring Completed Failed] <br /> |
 | `message` _string_ | Message explains the phase in a sentence. |  |  |
 | `suffix` _string_ | Suffix names the database and filestore folders of this restore:<br />&lt;db>_restore_&lt;suffix> while restoring, &lt;db>_prev_&lt;suffix> for the<br />data it replaced. |  |  |
-| `store` _string_ | Store and SnapshotID are the backup that was restored. |  |  |
+| `store` _string_ | Store and SnapshotID are the backup that was restored; File is the<br />Odoo backup file restored from Store instead of a snapshot. |  |  |
 | `snapshotID` _string_ |  |  |  |
+| `file` _string_ |  |  |  |
 | `image` _string_ | Image is the Odoo image recorded in the backup; the instance is<br />started on it. |  |  |
 | `odooVersion` _string_ | OdooVersion is the Odoo series in the backup. |  |  |
 | `job` _string_ | Job is the Job running the restore. Attempts counts the Jobs that<br />ran it. |  |  |

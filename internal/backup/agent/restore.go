@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -76,6 +77,13 @@ type journal struct {
 	// tag), carried over to the database swapped in.
 	LiveComment *string `json:"liveComment,omitempty"`
 
+	// File is the Odoo backup file restored, when it was not a snapshot.
+	// SnapshotID is the snapshot it read, when it read one.
+	SnapshotID string `json:"snapshotID,omitempty"`
+	File       string `json:"file,omitempty"`
+	// Neutralized is set once the database to swap in was neutralized.
+	Neutralized bool `json:"neutralized,omitempty"`
+
 	// From the backup.
 	Image          string   `json:"image,omitempty"`
 	UpgradeToken   string   `json:"upgradeToken,omitempty"`
@@ -112,8 +120,18 @@ type RestoreOptions struct {
 	Mode string
 	// Suffix names this restore's databases and folders.
 	Suffix string
-	// Snapshot to restore (ModeRestore).
+	// Snapshot to restore (ModeRestore): an ID, or "latest" for the newest
+	// with Host and Tags.
 	Snapshot string
+	Host     string
+	Tags     []string
+	// File is an Odoo backup file (.zip or .dump) to restore instead of a
+	// snapshot, below StoreTarget; its last segment may be a pattern.
+	File string
+	// StoreTarget is the store's root as rclone names it.
+	StoreTarget string
+	// Rclone is the rclone executable; "rclone" when empty.
+	Rclone string
 	// UndoSuffix is the suffix of the restore being undone (ModeUndo).
 	UndoSuffix string
 	// DataRoot is the root of the instance's data PVC (layout.DataMount).
@@ -124,7 +142,33 @@ type RestoreOptions struct {
 	// CheckSample is how many restored files have their content checked
 	// against their name.
 	CheckSample int
+
+	// WorkDir is the folder the steps of a restore Job with an Odoo step
+	// share (see the Work* names). Empty for a Job with one step.
+	WorkDir string
+	// LoadOnly ends the run once the backup is loaded and checked, before
+	// the swap: the first step of such a Job.
+	LoadOnly bool
+	// Neutralize requires the Odoo step to have neutralized the loaded
+	// database (WorkNeutralizeExit), and gives it a new database.uuid,
+	// before it is swapped in.
+	Neutralize bool
 }
+
+// Files the steps of a restore Job share in RestoreOptions.WorkDir.
+const (
+	// WorkLoadResult is the load step's result.Result.
+	WorkLoadResult = "load.json"
+	// WorkSource names the loaded database, written once it may be
+	// neutralized (and only then).
+	WorkSource = "source"
+	// WorkOdooVersion is the output of the instance's `odoo --version`.
+	WorkOdooVersion = "odoo-version"
+	// WorkNeutralizeExit and WorkNeutralizeLog are the exit code and the
+	// output of `odoo neutralize`.
+	WorkNeutralizeExit = "neutralize.exit"
+	WorkNeutralizeLog  = "neutralize.log"
+)
 
 // restoreRun is one restore attempt.
 type restoreRun struct {
@@ -140,7 +184,7 @@ func (r *restoreRun) fs(name string) string {
 	return filepath.Join(r.o.DataRoot, layout.FilestorePath(name))
 }
 
-// Restore restores a snapshot (or undoes an earlier restore) in place. Odoo
+// Restore restores a backup (or undoes an earlier restore) in place. Odoo
 // must be stopped. Until the swap starts, live data is untouched and a
 // failure leaves it as it was; once it has started, Restore (run again by a
 // retried Job) finishes it.
@@ -163,6 +207,11 @@ func Restore(ctx context.Context, e *Env, o RestoreOptions) result.Result {
 		return result.Failed(result.StepConnect, fmt.Errorf("restore journal is for a %s, not a %s", j.Mode, o.Mode))
 	}
 	r.j = j
+	if j.Stage == stageNew && o.WorkDir != "" && !o.LoadOnly {
+		// The load step stopped before the backup was loaded: its result
+		// says why.
+		return r.loadStepResult()
+	}
 	r.maint, err = pg.Connect(ctx, e.Config, e.MaintenanceDB)
 	if err != nil {
 		return r.failed(result.StepConnect, err)
@@ -183,6 +232,23 @@ func Restore(ctx context.Context, e *Env, o RestoreOptions) result.Result {
 			return r.failed(step, err)
 		}
 	}
+	if o.LoadOnly {
+		if j.Stage == stageRestored && o.WorkDir != "" {
+			// The Odoo step may neutralize this database.
+			if err := writeFileAtomic(filepath.Join(o.WorkDir, WorkSource), []byte(j.Source)); err != nil {
+				return r.failed(result.StepLoad, err)
+			}
+		}
+		return result.Result{OK: true}
+	}
+	if j.Stage == stageRestored {
+		if step, err := r.beforeSwap(ctx); err != nil {
+			if cleanupErr := r.discardSource(ctx); cleanupErr != nil {
+				e.logf("could not remove the half-restored copy: %v", cleanupErr)
+			}
+			return r.failed(step, err)
+		}
+	}
 	if err := r.swap(ctx); err != nil {
 		return r.failed(result.StepSwap, err)
 	}
@@ -196,6 +262,8 @@ func Restore(ctx context.Context, e *Env, o RestoreOptions) result.Result {
 		OdooVersion:    j.OdooVersion,
 		MissingModules: j.MissingModules,
 		Warnings:       j.Warnings,
+		File:           j.File,
+		SnapshotID:     j.SnapshotID,
 	}
 }
 
@@ -205,25 +273,55 @@ func (r *restoreRun) failed(step string, err error) result.Result {
 	return res
 }
 
-// load restores the snapshot into <db>_restore_<suffix> and checks it.
+// loadStepResult is the outcome of a load step that did not load the
+// backup.
+func (r *restoreRun) loadStepResult() result.Result {
+	data, err := os.ReadFile(filepath.Join(r.o.WorkDir, WorkLoadResult))
+	if err != nil {
+		return result.Failed(result.StepLoad, fmt.Errorf("the load step left no result: %w", err))
+	}
+	var res result.Result
+	if err := json.Unmarshal(data, &res); err != nil {
+		return result.Failed(result.StepLoad, fmt.Errorf("the load step's result is unreadable: %w", err))
+	}
+	if res.OK {
+		return result.Failed(result.StepLoad, errors.New("the load step succeeded but left no loaded backup"))
+	}
+	res.LiveChanged = false
+	return res
+}
+
+// load restores the backup into <db>_restore_<suffix> and checks it.
 func (r *restoreRun) load(ctx context.Context) (string, error) {
 	e, o := r.e, r.o
 	source := layout.RestoreName(r.live, o.Suffix)
 	r.j.Source = source
 
-	snap, err := e.Restic.Snapshot(ctx, o.Snapshot)
-	if err != nil {
-		return result.StepFetch, err
+	// Leftovers of an attempt that stopped before the swap.
+	if err := r.discardSource(ctx); err != nil {
+		return result.StepLoad, err
 	}
-	if len(snap.Paths) != 1 {
-		return result.StepFetch, fmt.Errorf("snapshot %s holds %d paths; an Odoo backup holds one", o.Snapshot, len(snap.Paths))
+	staging := filepath.Join(o.DataRoot, layout.StagingDir(o.Suffix))
+	if err := os.MkdirAll(staging, 0o750); err != nil {
+		return result.StepLoad, err
 	}
-	root := snap.Paths[0]
-	var mbuf bytes.Buffer
-	if err := e.Restic.Dump(ctx, snap.ID, filepath.Join(root, layout.ManifestFile), &mbuf); err != nil {
-		return result.StepFetch, fmt.Errorf("read manifest.json: %w", err)
+	var src backupSource
+	if o.File != "" {
+		fs, err := openFileSource(ctx, r, staging)
+		if err != nil {
+			return result.StepFetch, err
+		}
+		src = fs
+	} else {
+		rs, err := openResticSource(ctx, e, o.Snapshot, o.Host, o.Tags)
+		if err != nil {
+			return result.StepFetch, err
+		}
+		r.j.SnapshotID = rs.snap.ID
+		src = rs
 	}
-	m, err := manifest.Parse(mbuf.Bytes())
+	defer src.close()
+	m, err := src.manifest(ctx)
 	if err != nil {
 		return result.StepFetch, err
 	}
@@ -232,31 +330,49 @@ func (r *restoreRun) load(ctx context.Context) (string, error) {
 	if err != nil {
 		return result.StepConnect, err
 	}
+	liveSeries := ""
 	if liveInfo.Exists {
-		liveSeries, err := r.liveSeries(ctx)
-		if err != nil {
+		if liveSeries, err = r.seriesOf(ctx, r.live); err != nil {
 			return result.StepConnect, err
 		}
-		if err := manifest.CheckSeries(m.Series(), liveSeries); err != nil {
-			return result.StepCheck, err
+		if m.Series() != "" {
+			if err := manifest.CheckSeries(m.Series(), liveSeries); err != nil {
+				return result.StepCheck, err
+			}
 		}
 	}
 
-	// Leftovers of an attempt that stopped before the swap.
-	if err := r.discardSource(ctx); err != nil {
-		return result.StepLoad, err
-	}
-	e.logf("loading snapshot %s into database %s", snap.ShortID, source)
+	e.logf("loading %s into database %s", src.describe(), source)
 	if err := pg.CreateLike(ctx, r.maint, source, liveInfo); err != nil {
 		return result.StepLoad, err
 	}
-	if err := r.loadDump(ctx, snap.ID, filepath.Join(root, layout.DumpFile), source, m); err != nil {
+	if err := src.loadDatabase(ctx, r, source, m); err != nil {
 		return result.StepLoad, err
 	}
 	if err := e.fault(FaultRestoreLoaded); err != nil {
 		return result.StepLoad, err
 	}
-	if err := r.loadFilestore(ctx, snap.ID, root, source); err != nil {
+	series := m.Series()
+	if series == "" {
+		// A backup without a manifest: the loaded database says.
+		if series, err = r.seriesOf(ctx, source); err != nil {
+			return result.StepCheck, err
+		}
+		if series == "" {
+			return result.StepCheck, fmt.Errorf("%s holds no Odoo database (no base module)", src.describe())
+		}
+		if err := manifest.CheckSeries(series, liveSeries); err != nil {
+			return result.StepCheck, err
+		}
+	}
+	files, repaired, err := src.filestore(ctx, staging)
+	if err != nil {
+		return result.StepLoad, err
+	}
+	if err := r.moveFilestore(files, repaired, source); err != nil {
+		return result.StepLoad, err
+	}
+	if err := os.RemoveAll(staging); err != nil {
 		return result.StepLoad, err
 	}
 	if err := e.fault(FaultRestoreFilestore); err != nil {
@@ -273,9 +389,9 @@ func (r *restoreRun) load(ctx context.Context) (string, error) {
 		r.j.Image = m.Operator.Image
 		r.j.UpgradeToken = m.Operator.UpgradeToken
 	}
-	r.j.OdooVersion = m.Series()
+	r.j.OdooVersion = series
 	r.j.MissingModules = missingModules
-	r.j.Warnings = warnings
+	r.j.Warnings = append(src.warnings(), warnings...)
 	r.j.Stage = stageRestored
 	if err := r.j.save(r.path); err != nil {
 		return result.StepLoad, err
@@ -283,10 +399,10 @@ func (r *restoreRun) load(ctx context.Context) (string, error) {
 	return "", nil
 }
 
-// liveSeries is the Odoo series of the live database ("" for a database that
-// is not an Odoo database yet).
-func (r *restoreRun) liveSeries(ctx context.Context) (string, error) {
-	conn, err := pg.Connect(ctx, r.e.Config, r.live)
+// seriesOf is the Odoo series of a database ("" for a database that is not
+// an Odoo database yet).
+func (r *restoreRun) seriesOf(ctx context.Context, database string) (string, error) {
+	conn, err := pg.Connect(ctx, r.e.Config, database)
 	if err != nil {
 		return "", err
 	}
@@ -296,6 +412,78 @@ func (r *restoreRun) liveSeries(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return manifest.Series(v), nil
+}
+
+// beforeSwap runs the checks a restore Job with an Odoo step adds, once the
+// backup is loaded: the instance's Odoo must be the backup's series when the
+// restored data will run on it, and a neutralized restore needs the Odoo
+// step to have neutralized the loaded database.
+func (r *restoreRun) beforeSwap(ctx context.Context) (string, error) {
+	o, j := r.o, r.j
+	if o.WorkDir == "" || o.Mode != ModeRestore {
+		return "", nil
+	}
+	if j.Image == "" {
+		// The backup does not name an image: Odoo starts on the instance's.
+		data, err := os.ReadFile(filepath.Join(o.WorkDir, WorkOdooVersion))
+		if err != nil {
+			return result.StepCheck, fmt.Errorf("the Odoo step did not report the instance's Odoo version: %w", err)
+		}
+		series := OdooVersionSeries(string(data))
+		if series == "" {
+			return result.StepCheck, fmt.Errorf("cannot read the instance's Odoo version from %q", tail(string(data)))
+		}
+		if err := manifest.CheckSeries(j.OdooVersion, series); err != nil {
+			return result.StepCheck, err
+		}
+	}
+	if o.Neutralize && !j.Neutralized {
+		code, _ := os.ReadFile(filepath.Join(o.WorkDir, WorkNeutralizeExit))
+		if strings.TrimSpace(string(code)) != "0" {
+			out, _ := os.ReadFile(filepath.Join(o.WorkDir, WorkNeutralizeLog))
+			return result.StepCheck, fmt.Errorf("odoo neutralize did not succeed (exit %q): %s",
+				strings.TrimSpace(string(code)), tail(string(out)))
+		}
+		if err := r.newDatabaseUUID(ctx, j.Source); err != nil {
+			return result.StepCheck, err
+		}
+		j.Neutralized = true
+		j.Warnings = append(j.Warnings, "the restored database was neutralized and has a new database.uuid")
+		if err := j.save(r.path); err != nil {
+			return result.StepCheck, err
+		}
+		r.e.logf("database %s neutralized", j.Source)
+	}
+	return "", nil
+}
+
+var odooVersionRE = regexp.MustCompile(`(saas~)?[0-9]+\.[0-9]+`)
+
+// OdooVersionSeries reads the series from `odoo --version` ("Odoo Server
+// 18.0-20250101" → "18.0", "Odoo Server saas~18.2+e" → "saas~18.2").
+func OdooVersionSeries(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.Contains(line, "Odoo Server") {
+			continue
+		}
+		return odooVersionRE.FindString(strings.SplitN(line, "Odoo Server", 2)[1])
+	}
+	return ""
+}
+
+// newDatabaseUUID gives a database a new database.uuid, so a copy is not
+// taken for the original by the services that know it.
+func (r *restoreRun) newDatabaseUUID(ctx context.Context, database string) error {
+	conn, err := pg.Connect(ctx, r.e.Config, database)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close(context.Background()) }()
+	_, err = conn.Exec(ctx, `UPDATE ir_config_parameter SET value = gen_random_uuid()::text WHERE key = 'database.uuid'`)
+	if err != nil {
+		return fmt.Errorf("set a new database.uuid: %w", err)
+	}
+	return nil
 }
 
 // discardSource removes this restore's own copy (never live data, never
@@ -314,22 +502,40 @@ func (r *restoreRun) discardSource(ctx context.Context) error {
 	if err := os.RemoveAll(r.fs(source)); err != nil {
 		return err
 	}
+	if r.j.Stage == stageRestored {
+		// Load it again from the start.
+		r.j.Stage = stageNew
+		r.j.Neutralized = false
+		if err := r.j.save(r.path); err != nil {
+			return err
+		}
+	}
 	return os.RemoveAll(filepath.Join(r.o.DataRoot, layout.StagingDir(r.o.Suffix)))
 }
 
-// loadDump streams dump.sql from the snapshot into psql.
-func (r *restoreRun) loadDump(ctx context.Context, snapshot, file, database string, m manifest.Manifest) error {
-	e := r.e
-	conn, err := pg.Connect(ctx, e.Config, database)
+// clientFor finds the client tools for the server that holds database, and
+// that server's major.
+func (r *restoreRun) clientFor(ctx context.Context, database string) (string, int, error) {
+	conn, err := pg.Connect(ctx, r.e.Config, database)
 	if err != nil {
-		return err
+		return "", 0, err
 	}
 	serverVersion, err := pg.ServerVersionNum(ctx, conn)
 	_ = conn.Close(ctx)
 	if err != nil {
-		return err
+		return "", 0, err
 	}
-	binDir, err := e.Clients.Pick(pg.Major(serverVersion))
+	major := pg.Major(serverVersion)
+	dir, err := r.e.Clients.Pick(major)
+	return dir, major, err
+}
+
+// loadSQL streams a plain SQL dump, which feed writes, into psql, and checks
+// it against the manifest's checksum when it has one.
+func (r *restoreRun) loadSQL(ctx context.Context, database string, m manifest.Manifest,
+	feed func(context.Context, io.Writer) error) error {
+	e := r.e
+	binDir, serverMajor, err := r.clientFor(ctx, database)
 	if err != nil {
 		return err
 	}
@@ -338,11 +544,15 @@ func (r *restoreRun) loadDump(ctx context.Context, snapshot, file, database stri
 	pr, pw := io.Pipe()
 	h := sha256.New()
 	counter := &countingWriter{}
-	dumpErr := make(chan error, 1)
+	filter := &preambleFilter{w: pw, serverMajor: serverMajor}
+	feedErr := make(chan error, 1)
 	go func() {
-		err := e.Restic.Dump(ctx, snapshot, file, io.MultiWriter(pw, h, counter))
+		err := feed(ctx, io.MultiWriter(filter, h, counter))
+		if err == nil {
+			err = filter.flush()
+		}
 		_ = pw.CloseWithError(err)
-		dumpErr <- err
+		feedErr <- err
 	}()
 	cmd := exec.CommandContext(ctx, pg.Tool(binDir, "psql"),
 		"--no-psqlrc", "--quiet", "--set", "ON_ERROR_STOP=1", "--output", os.DevNull)
@@ -356,12 +566,12 @@ func (r *restoreRun) loadDump(ctx context.Context, snapshot, file, database stri
 		cancel()
 		_ = pr.CloseWithError(psqlErr)
 	}
-	derr := <-dumpErr
+	ferr := <-feedErr
 	if psqlErr != nil {
 		return fmt.Errorf("psql: %w: %s", psqlErr, tail(stderr.String()))
 	}
-	if derr != nil {
-		return fmt.Errorf("read dump.sql from the snapshot: %w", derr)
+	if ferr != nil {
+		return ferr
 	}
 	if m.Operator != nil && m.Operator.DumpSHA256 != "" {
 		if got := hex.EncodeToString(h.Sum(nil)); got != m.Operator.DumpSHA256 {
@@ -372,23 +582,14 @@ func (r *restoreRun) loadDump(ctx context.Context, snapshot, file, database stri
 	return nil
 }
 
-// loadFilestore restores the filestore into <dataRoot>/filestore/<source>.
-// Both live in the data PVC, so moving the files in is a rename.
-func (r *restoreRun) loadFilestore(ctx context.Context, snapshot, root, source string) error {
-	staging := filepath.Join(r.o.DataRoot, layout.StagingDir(r.o.Suffix))
-	if err := os.MkdirAll(staging, 0o750); err != nil {
-		return err
-	}
-	err := r.e.Restic.Restore(ctx, snapshot, staging,
-		filepath.Join(root, layout.FilestoreDir), filepath.Join(root, layout.RepairedDir))
-	if err != nil {
-		return fmt.Errorf("restore the filestore: %w", err)
-	}
+// moveFilestore moves the unpacked filestore into <dataRoot>/filestore/<source>
+// (both live in the data PVC, so it is a rename) and puts the repaired
+// attachments back into it.
+func (r *restoreRun) moveFilestore(restored, repaired, source string) error {
 	dst := r.fs(source)
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	restored := filepath.Join(staging, root, layout.FilestoreDir)
 	if ok, err := exists(restored); err != nil {
 		return err
 	} else if ok {
@@ -398,34 +599,32 @@ func (r *restoreRun) loadFilestore(ctx context.Context, snapshot, root, source s
 	} else if err := os.MkdirAll(dst, 0o755); err != nil {
 		return err
 	}
-	repaired := filepath.Join(staging, root, layout.RepairedDir)
-	err = filepath.WalkDir(repaired, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) && path == repaired {
-				return filepath.SkipDir
+	if repaired != "" {
+		err := filepath.WalkDir(repaired, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) && path == repaired {
+					return filepath.SkipDir
+				}
+				return err
 			}
-			return err
-		}
-		if !d.Type().IsRegular() {
-			return nil
-		}
-		rel, err := filepath.Rel(repaired, path)
+			if !d.Type().IsRegular() {
+				return nil
+			}
+			rel, err := filepath.Rel(repaired, path)
+			if err != nil {
+				return err
+			}
+			target := filepath.Join(dst, rel)
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			return os.Rename(path, target)
+		})
 		if err != nil {
-			return err
+			return fmt.Errorf("put back the repaired attachments: %w", err)
 		}
-		target := filepath.Join(dst, rel)
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		return os.Rename(path, target)
-	})
-	if err != nil {
-		return fmt.Errorf("put back the repaired attachments: %w", err)
 	}
-	if err := syncDir(filepath.Dir(dst)); err != nil {
-		return err
-	}
-	return os.RemoveAll(staging)
+	return syncDir(filepath.Dir(dst))
 }
 
 // check compares the restored copy with the manifest: every table's row

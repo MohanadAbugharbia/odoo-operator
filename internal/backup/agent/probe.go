@@ -38,12 +38,15 @@ type ProbeOptions struct {
 	// for a remote configured through RCLONE_CONFIG_STORE_*, or a local
 	// folder for nfs and pvc stores.
 	Target string
+	// ReadOnly only lists the store: a read-only store is never written.
+	ReadOnly bool
 }
 
 // Probe writes a small file to the store, reads it back and deletes it, so a
 // store that cannot be written (wrong credentials, read-only mount, unknown
 // host key) is reported before the first backup needs it. The file name
 // starts with .odoo-operator-probe- and is the only thing it ever deletes.
+// A read-only store is only listed.
 func Probe(ctx context.Context, o ProbeOptions) result.Result {
 	bin := o.Rclone
 	if bin == "" {
@@ -73,6 +76,12 @@ func Probe(ctx context.Context, o ProbeOptions) result.Result {
 		return stdout.Bytes(), nil
 	}
 
+	if o.ReadOnly {
+		if _, err := run(nil, "lsf", "--max-depth", "1", o.Target); err != nil {
+			return result.Failed(result.StepProbe, fmt.Errorf("cannot list the store: %w", err))
+		}
+		return result.Result{OK: true}
+	}
 	if _, err := run(content, "rcat", file); err != nil {
 		return result.Failed(result.StepProbe, fmt.Errorf("cannot write to the store: %w", err))
 	}

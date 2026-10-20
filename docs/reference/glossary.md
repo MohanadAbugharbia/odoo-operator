@@ -36,6 +36,29 @@ The words these pages use, and what each one means here.
     by its rules, keeps the newest `retention.preUpgrade` pre-upgrade backups
     (default 5), and keeps manual backups unless you set `retention.manual`.
 
+**Read-only store**
+:   A store with `readOnly: true`: the operator only reads backups from it
+    (restores and bootstraps with `from`), never writes, locks, checks or
+    prunes it. See [Read-only stores](../guides/backup-stores.md#read-only-stores).
+
+**Backup file**
+:   A backup made by Odoo's database manager rather than by the operator: a
+    `.zip` (`dump.sql`, `manifest.json`, `filestore/`) or a `.dump`
+    (`pg_dump` custom format, no filestore). A restore or bootstrap reads it
+    with `from.path`.
+
+**Bootstrap**
+:   Making a new instance's first database from a backup
+    (`spec.bootstrap.fromBackup`) instead of initializing it: the operator
+    creates the OdooRestore `<name>-bootstrap` in place of the init Job. See
+    [Start an instance from a backup](../guides/start-from-a-backup.md).
+
+**Neutralize**
+:   Odoo's `odoo neutralize`, which a restore runs on the loaded database
+    when `neutralize` is set: outgoing mail, scheduled actions, payment
+    providers and other integrations are turned off, and the database gets a
+    new `database.uuid`. For copies of production.
+
 **Copy**
 :   The same snapshot copied (`restic copy`) to every store after the first in
     `spec.backup.stores`.

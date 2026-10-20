@@ -91,7 +91,6 @@ rules:
   - odoo.abugharbia.com
   resources:
   - odoobackupstores
-  - odoorestores
   verbs:
   - get
   - list
@@ -105,3 +104,14 @@ rules:
   - odoorestores/finalizers
   verbs:
   - update
+- apiGroups:
+  - odoo.abugharbia.com
+  resources:
+  - odoorestores
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch

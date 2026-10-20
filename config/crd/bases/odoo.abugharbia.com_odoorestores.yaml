@@ -63,11 +63,78 @@ spec:
                 description: Backup is the OdooBackup to restore.
                 minLength: 1
                 type: string
+              from:
+                description: |-
+                  From is a backup in any store: an Odoo .zip or .dump file, or a
+                  snapshot in another restic repository, such as another instance's
+                  or another cluster's.
+                properties:
+                  host:
+                    description: |-
+                      Host picks latest among the snapshots of one restic --host, such as
+                      <namespace>/<name> for the operator's own snapshots.
+                    maxLength: 253
+                    type: string
+                  path:
+                    description: |-
+                      Path inside the store, below its path (or subPath). A path ending in
+                      .zip or .dump is an Odoo backup file; its last segment may be a
+                      pattern (*, ?, [a-z]), and the match whose name sorts last, the
+                      newest for dated names, is restored. Any other path is a restic
+                      repository folder; empty is this instance's own repository
+                      (<namespace>/<name>).
+                    maxLength: 512
+                    pattern: ^([A-Za-z0-9._~+@=-]+/)*[A-Za-z0-9._~+@=*?\[\]-]+$
+                    type: string
+                    x-kubernetes-validations:
+                    - message: path segments cannot be . or ..
+                      rule: '!self.split(''/'').exists(s, s == ''..'' || s == ''.'')'
+                  snapshot:
+                    description: |-
+                      Snapshot in a restic repository: its ID, or latest (default) for the
+                      newest snapshot with Host and Tags.
+                    pattern: ^(latest|[0-9a-f]{8,64})$
+                    type: string
+                  store:
+                    description: Store is the OdooBackupStore that holds the backup.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  tags:
+                    description: |-
+                      Tags picks latest among the snapshots that have all these restic
+                      tags, such as deployment=<namespace>/<name>.
+                    items:
+                      maxLength: 253
+                      type: string
+                    maxItems: 10
+                    type: array
+                    x-kubernetes-list-type: atomic
+                required:
+                - store
+                type: object
+                x-kubernetes-validations:
+                - message: snapshot, host and tags are for restic repositories, not
+                    for .zip or .dump files
+                  rule: '!has(self.path) || !(self.path.endsWith(''.zip'') || self.path.endsWith(''.dump''))
+                    || (!has(self.snapshot) && !has(self.host) && !has(self.tags))'
+                - message: only a .zip or .dump path may be a pattern
+                  rule: '!has(self.path) || self.path.endsWith(''.zip'') || self.path.endsWith(''.dump'')
+                    || !(self.path.contains(''*'') || self.path.contains(''?'') ||
+                    self.path.contains(''[''))'
               keepPrevious:
                 description: |-
                   KeepPrevious is how long the replaced database and files are kept
                   for an undo. Overrides spec.backup.restore.keepPrevious.
                 type: string
+              neutralize:
+                description: |-
+                  Neutralize runs Odoo's neutralize on the restored database before it
+                  is swapped in, and gives it a new database.uuid: scheduled actions,
+                  outgoing mail servers, payment providers and similar integrations
+                  are turned off, so a copy of production cannot act as production.
+                  It runs with the instance's image.
+                type: boolean
               odooDeployment:
                 description: OdooDeployment whose database and filestore are replaced,
                   in the same namespace.
@@ -97,15 +164,20 @@ spec:
             - odooDeployment
             type: object
             x-kubernetes-validations:
-            - message: set exactly one of backup, snapshotID, undo
+            - message: set exactly one of backup, snapshotID, from, undo
               rule: '(has(self.backup) ? 1 : 0) + (has(self.snapshotID) ? 1 : 0) +
-                (has(self.undo) ? 1 : 0) == 1'
-            - message: backup, snapshotID and undo are immutable
-              rule: (has(self.backup) == has(oldSelf.backup)) && (!has(self.backup)
+                (has(self.undo) ? 1 : 0) + (has(self.from) ? 1 : 0) == 1'
+            - message: backup, snapshotID, from, undo and neutralize are immutable
+              rule: '(has(self.backup) == has(oldSelf.backup)) && (!has(self.backup)
                 || self.backup == oldSelf.backup) && (has(self.snapshotID) == has(oldSelf.snapshotID))
                 && (!has(self.snapshotID) || self.snapshotID == oldSelf.snapshotID)
                 && (has(self.undo) == has(oldSelf.undo)) && (!has(self.undo) || self.undo
-                == oldSelf.undo)
+                == oldSelf.undo) && (has(self.from) == has(oldSelf.from)) && (!has(self.from)
+                || self.from == oldSelf.from) && (has(self.neutralize) ? self.neutralize
+                : false) == (has(oldSelf.neutralize) ? oldSelf.neutralize : false)'
+            - message: an undo puts the replaced data back as it was; neutralize cannot
+                be set
+              rule: '!has(self.neutralize) || !self.neutralize || !has(self.undo)'
           status:
             description: OdooRestoreStatus describes the restore.
             properties:
@@ -123,6 +195,8 @@ spec:
                 type: integer
               completedAt:
                 format: date-time
+                type: string
+              file:
                 type: string
               image:
                 description: |-
@@ -198,7 +272,9 @@ spec:
                 format: date-time
                 type: string
               store:
-                description: Store and SnapshotID are the backup that was restored.
+                description: |-
+                  Store and SnapshotID are the backup that was restored; File is the
+                  Odoo backup file restored from Store instead of a snapshot.
                 type: string
               suffix:
                 description: |-

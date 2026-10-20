@@ -99,6 +99,9 @@ type Location struct {
 	Repository string
 	// ProbeTarget is the store root as rclone names it.
 	ProbeTarget string
+	// ResticNoLock reads the repository without locking it (a readOnly
+	// store).
+	ResticNoLock bool
 }
 
 func secretEnv(name, secret, key string) corev1.EnvVar {
@@ -291,20 +294,25 @@ func locate(store *odoov1.OdooBackupStore, repo string, sl slot) (Location, erro
 		return loc, fmt.Errorf("store %s sets none of s3, sftp, nfs, pvc", store.Name)
 	}
 
-	key := spec.EncryptionKeySecret.Key
-	if key == "" {
-		key = passwordFile
+	if spec.ReadOnly {
+		loc.ResticNoLock = true
 	}
-	loc.Volumes = append(loc.Volumes, corev1.Volume{
-		Name: sl.volPass,
-		VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
-			SecretName:  spec.EncryptionKeySecret.Name,
-			DefaultMode: ptr(int32(0o440)),
-			Items:       []corev1.KeyToPath{{Key: key, Path: passwordFile}},
-		}},
-	})
-	loc.Mounts = append(loc.Mounts, corev1.VolumeMount{Name: sl.volPass, MountPath: sl.passMount, ReadOnly: true})
-	loc.Env = append(loc.Env, plainEnv(sl.env+"RESTIC_PASSWORD_FILE", sl.passMount+"/"+passwordFile))
+	if ref := spec.EncryptionKeySecret; ref != nil {
+		key := ref.Key
+		if key == "" {
+			key = passwordFile
+		}
+		loc.Volumes = append(loc.Volumes, corev1.Volume{
+			Name: sl.volPass,
+			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+				SecretName:  ref.Name,
+				DefaultMode: ptr(int32(0o440)),
+				Items:       []corev1.KeyToPath{{Key: key, Path: passwordFile}},
+			}},
+		})
+		loc.Mounts = append(loc.Mounts, corev1.VolumeMount{Name: sl.volPass, MountPath: sl.passMount, ReadOnly: true})
+		loc.Env = append(loc.Env, plainEnv(sl.env+"RESTIC_PASSWORD_FILE", sl.passMount+"/"+passwordFile))
+	}
 	if repo != "" {
 		loc.Env = append(loc.Env, plainEnv(sl.env+"RESTIC_REPOSITORY", loc.Repository))
 	}
@@ -327,11 +335,13 @@ func StoreSecrets(store *odoov1.OdooBackupStore) map[string][]string {
 	case spec.SFTP != nil:
 		add(spec.SFTP.SSHSecret.Name, odoov1.SSHPrivateKeyKey+"|"+odoov1.SSHAuthPrivateKeyKey, odoov1.SSHKnownHostsKey)
 	}
-	key := spec.EncryptionKeySecret.Key
-	if key == "" {
-		key = passwordFile
+	if ref := spec.EncryptionKeySecret; ref != nil {
+		key := ref.Key
+		if key == "" {
+			key = passwordFile
+		}
+		add(ref.Name, key)
 	}
-	add(spec.EncryptionKeySecret.Name, key)
 	return out
 }
 
@@ -433,6 +443,9 @@ func (p Params) commonArgs(loc Location) []string {
 	args = append(args, "--maintenance-db", p.Instance.Spec.Database.MaintenanceDatabaseValue())
 	for _, o := range loc.ResticOptions {
 		args = append(args, "--restic-option", o)
+	}
+	if loc.ResticNoLock {
+		args = append(args, "--no-lock")
 	}
 	return args
 }
@@ -597,21 +610,77 @@ func BackupJob(p Params, backup *odoov1.OdooBackup, kind string, attempt int32, 
 		spec, backoff, od.Spec.Backup.ActiveDeadlineSecondsValue()), nil
 }
 
-// RestoreJobName is the name of attempt of a restore's Job.
-func RestoreJobName(instance *odoov1.OdooDeployment, restore string, attempt int32) string {
-	return jobName(instance.Name, KindRestore, attempt, instance.Namespace, restore)
+// RestoreJobName is the name of attempt of a restore's Job. The restore's
+// UID is part of it, so a restore made again under the same name never
+// meets the finished Job of the one before.
+func RestoreJobName(instance *odoov1.OdooDeployment, restore *odoov1.OdooRestore, attempt int32) string {
+	return jobName(instance.Name, KindRestore, attempt, instance.Namespace, restore.Name, string(restore.UID))
 }
 
-// RestoreJob renders the Job that restores snapshot in place (or, with
-// undoSuffix, undoes an earlier restore; the store is then not needed).
-func RestoreJob(p Params, restore *odoov1.OdooRestore, suffix, snapshot, undoSuffix string,
+// RestoreSource is what a restore Job restores.
+type RestoreSource struct {
+	// Snapshot in Repository: an ID, or "latest" with Host and Tags.
+	Snapshot string
+	Host     string
+	Tags     []string
+	// Repository is the restic repository folder in p.Store; empty is the
+	// instance's own.
+	Repository string
+	// File is an Odoo backup file below p.Store's root, restored instead
+	// of a snapshot.
+	File string
+	// UndoSuffix undoes the restore with this suffix instead; the store is
+	// then not needed.
+	UndoSuffix string
+	// OdooImage, when set, adds the Odoo step: it reports the Odoo version
+	// the restored data will run on and, with Neutralize, neutralizes the
+	// loaded database before it is swapped in.
+	OdooImage  string
+	Neutralize bool
+}
+
+// Paths of the restore Job's shared folder.
+const (
+	volWork   = "work"
+	workMount = "/work"
+)
+
+// restoreOdooScript is the Odoo step of a restore Job: `odoo --version`
+// for the agent to compare with the backup's, and `odoo neutralize` of the
+// loaded database when the load step named it (agent.WorkSource). It exits 0
+// either way: the agent's last step judges. The file names are the agent's
+// (agent.WorkOdooVersion and the rest).
+const restoreOdooScript = `"$@" --version >"$WORK/odoo-version" 2>&1 || true
+if [ -n "$NEUTRALIZE" ] && [ -f "$WORK/source" ]; then
+  "$@" neutralize -c "$ODOO_CONF" -d "$(cat "$WORK/source")" >"$WORK/neutralize.log" 2>&1
+  echo "$?" >"$WORK/neutralize.exit"
+  cat "$WORK/neutralize.log"
+fi
+exit 0`
+
+// RestoreJob renders the Job that restores a backup in place (or undoes an
+// earlier restore).
+//
+//nolint:gocyclo // one branch per kind of source
+func RestoreJob(p Params, restore *odoov1.OdooRestore, suffix string, src RestoreSource,
 	expectModules []string, attempt int32) (batchv1.Job, error) {
 	od := p.Instance
-	command := []string{toolBinary, "restore", "--snapshot", snapshot}
-	if undoSuffix != "" {
-		command = []string{toolBinary, "undo", "--undo-suffix", undoSuffix}
+	var args []string
+	switch {
+	case src.UndoSuffix != "":
+		args = []string{"--undo-suffix", src.UndoSuffix}
+	case src.File != "":
+		args = []string{"--file", src.File}
+	default:
+		args = []string{"--snapshot", src.Snapshot}
+		if src.Host != "" {
+			args = append(args, "--host", src.Host)
+		}
+		for _, t := range src.Tags {
+			args = append(args, "--tag", t)
+		}
 	}
-	command = append(command,
+	args = append(args,
 		"--suffix", suffix,
 		"--data", layout.DataMount,
 		"--expect-modules", strings.Join(expectModules, ","),
@@ -624,19 +693,76 @@ func RestoreJob(p Params, restore *odoov1.OdooRestore, suffix, snapshot, undoSuf
 		{Name: volTmp, MountPath: tmpDir},
 	}
 	var loc Location
-	if undoSuffix == "" {
+	if src.UndoSuffix == "" {
+		repo := src.Repository
+		if repo == "" {
+			repo = layout.Repository(od.Namespace, od.Name)
+		}
+		if src.File != "" {
+			repo = ""
+		}
 		var err error
-		loc, err = Locate(p.Store, layout.Repository(od.Namespace, od.Name))
+		loc, err = Locate(p.Store, repo)
 		if err != nil {
 			return batchv1.Job{}, err
+		}
+		if src.File != "" {
+			args = append(args, "--store-target", loc.ProbeTarget)
 		}
 		env = append(env, loc.Env...)
 		volumes = append(volumes, loc.Volumes...)
 		mounts = append(mounts, loc.Mounts...)
 	}
-	command = append(command, p.commonArgs(loc)...)
-	spec := p.podSpec(command, env, volumes, mounts)
-	return p.job(RestoreJobName(od, restore.Name, attempt), KindRestore, map[string]string{LabelRestore: restore.Name},
+	args = append(args, p.commonArgs(loc)...)
+	command := "restore"
+	if src.UndoSuffix != "" {
+		command = "undo"
+	}
+	if src.OdooImage == "" || src.UndoSuffix != "" {
+		spec := p.podSpec(append([]string{toolBinary, command}, args...), env, volumes, mounts)
+		return p.job(RestoreJobName(od, restore, attempt), KindRestore, map[string]string{LabelRestore: restore.Name},
+			spec, restoreBackoff, od.Spec.Backup.ActiveDeadlineSecondsValue()), nil
+	}
+
+	// Three steps sharing /work: the agent loads and checks the backup,
+	// Odoo reports its version and neutralizes it, the agent swaps it in.
+	volumes = append(volumes, emptyDir(volWork))
+	mounts = append(mounts, corev1.VolumeMount{Name: volWork, MountPath: workMount})
+	last := append([]string{toolBinary, command, "--work-dir", workMount}, args...)
+	if src.Neutralize {
+		last = append(last, "--neutralize")
+	}
+	spec := p.podSpec(last, env, volumes, mounts)
+	loader := spec.Containers[0]
+	loader.Name = "load"
+	loader.Command = append([]string{toolBinary, command, "--work-dir", workMount, "--load-only"}, args...)
+	loader.TerminationMessagePath = ""
+	loader.TerminationMessagePolicy = ""
+
+	odooCmd := make([]string, 0, 4+len(od.Spec.OdooCommand))
+	odooCmd = append(odooCmd, "sh", "-c", restoreOdooScript, "sh")
+	odooCmd = append(odooCmd, od.Spec.OdooCommand...)
+	odooEnv := append(append([]corev1.EnvVar(nil), od.Spec.Env...),
+		plainEnv("WORK", workMount), plainEnv("ODOO_CONF", odoov1.OdooConfigFile))
+	if src.Neutralize {
+		odooEnv = append(odooEnv, plainEnv("NEUTRALIZE", "1"))
+	}
+	odoo := corev1.Container{
+		Name:            "odoo",
+		Image:           src.OdooImage,
+		ImagePullPolicy: od.ImagePullPolicyValue(),
+		Command:         odooCmd,
+		Env:             odooEnv,
+		EnvFrom:         od.Spec.EnvFrom,
+		Resources:       *od.Spec.Resources.DeepCopy(),
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: volConfig, MountPath: odoov1.OdooConfigMountPath, ReadOnly: true},
+			{Name: volWork, MountPath: workMount},
+		},
+	}
+	spec.InitContainers = []corev1.Container{loader, odoo}
+	spec.ImagePullSecrets = od.Spec.ImagePullSecrets
+	return p.job(RestoreJobName(od, restore, attempt), KindRestore, map[string]string{LabelRestore: restore.Name},
 		spec, restoreBackoff, od.Spec.Backup.ActiveDeadlineSecondsValue()), nil
 }
 
@@ -743,8 +869,8 @@ func DrillJob(p Params, d Drill) (batchv1.Job, error) {
 }
 
 // CleanupJobName is the name of attempt of a restore's cleanup Job.
-func CleanupJobName(instance *odoov1.OdooDeployment, restore string, attempt int32) string {
-	return jobName(instance.Name, KindCleanup, attempt, instance.Namespace, restore)
+func CleanupJobName(instance *odoov1.OdooDeployment, restore *odoov1.OdooRestore, attempt int32) string {
+	return jobName(instance.Name, KindCleanup, attempt, instance.Namespace, restore.Name, string(restore.UID))
 }
 
 // CleanupJob renders the Job that deletes what restore left behind.
@@ -758,7 +884,7 @@ func CleanupJob(p Params, restore *odoov1.OdooRestore, suffix string, attempt in
 		{Name: volTmp, MountPath: tmpDir},
 	}
 	spec := p.podSpec(command, baseEnv(), volumes, mounts)
-	return p.job(CleanupJobName(od, restore.Name, attempt), KindCleanup, map[string]string{LabelRestore: restore.Name},
+	return p.job(CleanupJobName(od, restore, attempt), KindCleanup, map[string]string{LabelRestore: restore.Name},
 		spec, cleanupBackoff, cleanupDeadline)
 }
 
@@ -778,8 +904,11 @@ func ProbeJob(image string, store *odoov1.OdooBackupStore, hash string) (batchv1
 		Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("32Mi")},
 		Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("256Mi")},
 	}
-	return storeJob(image, store, ProbeJobName(store, hash), KindProbe, loc,
-		[]string{toolBinary, "probe", "--target", loc.ProbeTarget}, resources, probeDeadline, 3600), nil
+	command := []string{toolBinary, "probe", "--target", loc.ProbeTarget}
+	if store.Spec.ReadOnly {
+		command = append(command, "--read-only")
+	}
+	return storeJob(image, store, ProbeJobName(store, hash), KindProbe, loc, command, resources, probeDeadline, 3600), nil
 }
 
 // ReachJobName is the Job that checks the store before an offline backup

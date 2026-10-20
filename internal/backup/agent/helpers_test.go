@@ -771,6 +771,7 @@ case "$sub" in
   cat) [ -n "$FAIL_CAT" ] && { echo "read denied" >&2; exit 1; }
        if [ -n "$CORRUPT" ]; then echo corrupted; else cat "$file"; fi ;;
   deletefile) [ -n "$FAIL_DELETEFILE" ] && { echo "delete denied" >&2; exit 1; }; rm "$file" ;;
+  lsf) [ -n "$FAIL_LSF" ] && { echo "list denied" >&2; exit 1; }; ls ;;
   *) exit 9 ;;
 esac
 `
@@ -832,6 +833,28 @@ func TestProbe(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A read-only store is only listed, never written.
+func TestProbeReadOnly(t *testing.T) {
+	bin := hScript(t, hRclone)
+	for _, fail := range []bool{false, true} {
+		target := t.TempDir()
+		logFile := filepath.Join(t.TempDir(), "log")
+		t.Setenv("RCLONE_LOG", logFile)
+		t.Setenv("FAIL_LSF", map[bool]string{true: "1"}[fail])
+		res := Probe(context.Background(), ProbeOptions{Rclone: bin, Target: target + "/", ReadOnly: true})
+		if fail != !res.OK || (fail && !strings.Contains(res.Error, "cannot list the store")) {
+			t.Fatalf("probe (list fails: %v) = %+v", fail, res)
+		}
+		data, _ := os.ReadFile(logFile)
+		if calls := strings.Split(strings.TrimSpace(string(data)), "\n"); len(calls) != 1 || !strings.Contains(calls[0], " lsf ") {
+			t.Fatalf("calls = %q", calls)
+		}
+		if entries, _ := os.ReadDir(target); len(entries) != 0 {
+			t.Fatalf("probe wrote %v", entries)
+		}
 	}
 }
 

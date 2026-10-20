@@ -131,6 +131,23 @@ func (c Clients) Pick(serverMajor int) (string, error) {
 	return "", fmt.Errorf("no PostgreSQL client for server version %d (installed: %v)", serverMajor, installed)
 }
 
+// Newest is the folder of the newest installed client, for reading an archive
+// whatever pg_dump wrote it ("" = PATH).
+func (c Clients) Newest() (string, error) {
+	if c.BinDirTemplate == "" {
+		return "", nil
+	}
+	majors := append([]int(nil), c.Majors...)
+	sort.Sort(sort.Reverse(sort.IntSlice(majors)))
+	for _, m := range majors {
+		dir := fmt.Sprintf(c.BinDirTemplate, m)
+		if _, err := os.Stat(filepath.Join(dir, "pg_dump")); err == nil {
+			return dir, nil
+		}
+	}
+	return "", fmt.Errorf("no PostgreSQL client installed (looked for %v)", c.Majors)
+}
+
 // Major is the major of a server_version_num.
 func Major(serverVersionNum int) int {
 	return serverVersionNum / 10000

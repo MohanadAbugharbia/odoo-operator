@@ -17,7 +17,6 @@ limitations under the License.
 package agent
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,7 +29,6 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/layout"
-	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/manifest"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/pg"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/result"
 )
@@ -109,19 +107,11 @@ func drillLoad(ctx context.Context, e *Env, o DrillOptions) result.Result {
 		return result.Failed(result.StepConnect, err)
 	}
 
-	snap, err := e.Restic.Snapshot(ctx, o.Snapshot)
+	src, err := openResticSource(ctx, e, o.Snapshot, "", nil)
 	if err != nil {
 		return result.Failed(result.StepFetch, err)
 	}
-	if len(snap.Paths) != 1 {
-		return result.Failed(result.StepFetch, fmt.Errorf("snapshot %s holds %d paths; an Odoo backup holds one", o.Snapshot, len(snap.Paths)))
-	}
-	root := snap.Paths[0]
-	var mbuf bytes.Buffer
-	if err := e.Restic.Dump(ctx, snap.ID, filepath.Join(root, layout.ManifestFile), &mbuf); err != nil {
-		return result.Failed(result.StepFetch, fmt.Errorf("read manifest.json: %w", err))
-	}
-	m, err := manifest.Parse(mbuf.Bytes())
+	m, err := src.manifest(ctx)
 	if err != nil {
 		return result.Failed(result.StepFetch, err)
 	}
@@ -129,21 +119,32 @@ func drillLoad(ctx context.Context, e *Env, o DrillOptions) result.Result {
 	if err != nil {
 		return result.Failed(result.StepConnect, err)
 	}
-	e.logf("loading snapshot %s into scratch database %s", snap.ShortID, scratch)
+	e.logf("loading %s into scratch database %s", src.describe(), scratch)
 	if err := pg.CreateLike(ctx, r.maint, scratch, liveInfo); err != nil {
 		return result.Failed(result.StepLoad, err)
 	}
-	if err := r.loadDump(ctx, snap.ID, filepath.Join(root, layout.DumpFile), scratch, m); err != nil {
+	if err := src.loadDatabase(ctx, r, scratch, m); err != nil {
 		return result.Failed(result.StepLoad, err)
 	}
-	if err := r.loadFilestore(ctx, snap.ID, root, scratch); err != nil {
+	staging := filepath.Join(o.Root, layout.StagingDir(o.Suffix))
+	if err := os.MkdirAll(staging, 0o750); err != nil {
+		return result.Failed(result.StepLoad, err)
+	}
+	files, repaired, err := src.filestore(ctx, staging)
+	if err != nil {
+		return result.Failed(result.StepLoad, err)
+	}
+	if err := r.moveFilestore(files, repaired, scratch); err != nil {
+		return result.Failed(result.StepLoad, err)
+	}
+	if err := os.RemoveAll(staging); err != nil {
 		return result.Failed(result.StepLoad, err)
 	}
 	warnings, missing, err := r.check(ctx, scratch, m)
 	if err != nil {
 		return result.Failed(result.StepCheck, err)
 	}
-	e.logf("snapshot %s restored and checked", snap.ShortID)
+	e.logf("%s restored and checked", src.describe())
 	return result.Result{OK: true, OdooVersion: m.Series(), Warnings: warnings, MissingModules: missing}
 }
 

@@ -44,7 +44,7 @@ func newBackupHarness(mutators ...func(*odoov1.OdooDeployment)) *backupHarness {
 		ObjectMeta: metav1.ObjectMeta{Name: h.store, Namespace: ns},
 		Spec: odoov1.OdooBackupStoreSpec{
 			PVC: &odoov1.PVCStore{ClaimName: "backups"},
-			EncryptionKeySecret: corev1.SecretKeySelector{
+			EncryptionKeySecret: &corev1.SecretKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: key.Name}, Key: "password",
 			},
 		},
@@ -737,7 +737,7 @@ var _ = Describe("Backups and restores", func() {
 				ObjectMeta: metav1.ObjectMeta{Name: bh.store, Namespace: ns},
 				Spec: odoov1.OdooBackupStoreSpec{
 					PVC: &odoov1.PVCStore{ClaimName: "backups"},
-					EncryptionKeySecret: corev1.SecretKeySelector{
+					EncryptionKeySecret: &corev1.SecretKeySelector{
 						LocalObjectReference: corev1.LocalObjectReference{Name: key.Name}, Key: "password",
 					},
 				},

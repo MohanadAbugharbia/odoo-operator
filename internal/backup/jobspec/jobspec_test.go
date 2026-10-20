@@ -12,6 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 
 	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
@@ -23,8 +24,8 @@ const (
 	image    = "ghcr.io/x/odoo-operator-backup:1.2.3"
 )
 
-func passwordRef(key string) corev1.SecretKeySelector {
-	return corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "restic-pw"}, Key: key}
+func passwordRef(key string) *corev1.SecretKeySelector {
+	return &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "restic-pw"}, Key: key}
 }
 
 func s3Store() *odoov1.OdooBackupStore {
@@ -175,7 +176,7 @@ func checkPodWiring(t *testing.T, spec corev1.PodSpec) {
 				t.Errorf("container %s mounts Secret volume %s writable", c.Name, m.Name)
 			}
 		}
-		if c.Image != image {
+		if c.Image != image && c.Name != "odoo" {
 			t.Errorf("container %s runs %s", c.Name, c.Image)
 		}
 	}
@@ -504,7 +505,7 @@ func TestLocateInvalid(t *testing.T) {
 	if _, err := BackupJob(p, &odoov1.OdooBackup{ObjectMeta: metav1.ObjectMeta{Name: "b"}}, "manual", 0, false); err == nil {
 		t.Error("BackupJob with an empty store succeeded")
 	}
-	if _, err := RestoreJob(p, &odoov1.OdooRestore{ObjectMeta: metav1.ObjectMeta{Name: "r"}}, "s", "snap", "", nil, 0); err == nil {
+	if _, err := RestoreJob(p, &odoov1.OdooRestore{ObjectMeta: metav1.ObjectMeta{Name: "r"}}, "s", RestoreSource{Snapshot: "snap"}, nil, 0); err == nil {
 		t.Error("RestoreJob with an empty store succeeded")
 	}
 	if _, err := ProbeJob(image, store, "h"); err == nil {
@@ -540,12 +541,28 @@ func TestStoreSecrets(t *testing.T) {
 	}
 }
 
+func namedRestore(name, uid string) *odoov1.OdooRestore {
+	return &odoov1.OdooRestore{ObjectMeta: metav1.ObjectMeta{Name: name, UID: types.UID(uid)}}
+}
+
+// A restore made again under the same name gets other Jobs.
+func TestRestoreJobNamesFollowTheObject(t *testing.T) {
+	od := instance()
+	a, b := namedRestore("r", "uid-a"), namedRestore("r", "uid-b")
+	if RestoreJobName(od, a, 1) == RestoreJobName(od, b, 1) || CleanupJobName(od, a, 1) == CleanupJobName(od, b, 1) {
+		t.Error("two restores named r share a Job name")
+	}
+	if RestoreJobName(od, a, 1) != RestoreJobName(od, namedRestore("r", "uid-a"), 1) {
+		t.Error("the Job name of a restore is not stable")
+	}
+}
+
 func TestJobNames(t *testing.T) {
 	od := instance()
 	names := map[string]string{
 		"backup":  BackupJobName(od, "nightly", 0),
-		"restore": RestoreJobName(od, "nightly", 0),
-		"cleanup": CleanupJobName(od, "nightly", 0),
+		"restore": RestoreJobName(od, namedRestore("nightly", ""), 0),
+		"cleanup": CleanupJobName(od, namedRestore("nightly", ""), 0),
 		"probe":   ProbeJobName(s3Store(), "hash"),
 	}
 	seen := map[string]bool{}
@@ -593,7 +610,7 @@ func TestJobNamesLongAndOdd(t *testing.T) {
 		od.Name = name
 		for attempt := int32(0); attempt < 3; attempt++ {
 			for _, n := range []string{
-				BackupJobName(od, "b", attempt), RestoreJobName(od, "r", attempt), CleanupJobName(od, "r", attempt),
+				BackupJobName(od, "b", attempt), RestoreJobName(od, namedRestore("r", ""), attempt), CleanupJobName(od, namedRestore("r", ""), attempt),
 				BackupJobName(od, "b", 2147483647),
 			} {
 				checkJobName(t, n)
@@ -817,7 +834,7 @@ func TestRestoreJob(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			p := params(store)
 			rs := &odoov1.OdooRestore{ObjectMeta: metav1.ObjectMeta{Name: "rs1"}}
-			job, err := RestoreJob(p, rs, "20250101T000000", "abcd1234", "", []string{"sale", "stock"}, 1)
+			job, err := RestoreJob(p, rs, "20250101T000000", RestoreSource{Snapshot: "abcd1234"}, []string{"sale", "stock"}, 1)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -829,7 +846,7 @@ func TestRestoreJob(t *testing.T) {
 				flagValue(t, cmd, "--maintenance-db") != "maint" || slices.Contains(cmd, "--undo-suffix") {
 				t.Errorf("command = %q", cmd)
 			}
-			if job.Name != RestoreJobName(p.Instance, "rs1", 1) || job.Labels[LabelRestore] != "rs1" || job.Labels[odoov1.LabelJobKind] != KindRestore {
+			if job.Name != RestoreJobName(p.Instance, rs, 1) || job.Labels[LabelRestore] != "rs1" || job.Labels[odoov1.LabelJobKind] != KindRestore {
 				t.Errorf("job %s labels %v", job.Name, job.Labels)
 			}
 			if *job.Spec.BackoffLimit != 2 || *job.Spec.ActiveDeadlineSeconds != 21600 {
@@ -850,10 +867,133 @@ func TestRestoreJob(t *testing.T) {
 	}
 }
 
+// TestRestoreJobFromElsewhere: a restic repository of another instance, and
+// the Odoo step that reports the version and neutralizes.
+func TestRestoreJobFromElsewhere(t *testing.T) {
+	p := params(s3Store())
+	p.Instance.Spec.OdooCommand = []string{"odoo"}
+	p.Instance.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "pull"}}
+	rs := &odoov1.OdooRestore{ObjectMeta: metav1.ObjectMeta{Name: "rs1"}}
+	src := RestoreSource{Snapshot: "latest", Host: "old-host", Tags: []string{"a", "b"},
+		Repository: "other/odoo", OdooImage: "odoo:18.0", Neutralize: true}
+	job, err := RestoreJob(p, rs, "20250101T000000", src, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := job.Spec.Template.Spec
+	checkPodWiring(t, spec)
+	if len(spec.InitContainers) != 2 || spec.InitContainers[0].Name != "load" || spec.InitContainers[1].Name != "odoo" {
+		t.Fatalf("init containers = %+v", spec.InitContainers)
+	}
+	load, odoo, last := spec.InitContainers[0], spec.InitContainers[1], spec.Containers[0]
+	for _, c := range []corev1.Container{load, last} {
+		if c.Image != image || flagValue(t, c.Command, "--snapshot") != "latest" ||
+			flagValue(t, c.Command, "--host") != "old-host" || flagValue(t, c.Command, "--work-dir") != "/work" {
+			t.Errorf("%s command = %q", c.Name, c.Command)
+		}
+		if n := strings.Count(strings.Join(c.Command, " "), "--tag "); n != 2 {
+			t.Errorf("%s has %d --tag", c.Name, n)
+		}
+		mount(t, c, "/work")
+		loc, _ := Locate(s3Store(), "other/odoo")
+		if plain(t, c.Env, "RESTIC_REPOSITORY") != loc.Repository {
+			t.Errorf("%s RESTIC_REPOSITORY = %s", c.Name, plain(t, c.Env, "RESTIC_REPOSITORY"))
+		}
+	}
+	if !slices.Contains(load.Command, "--load-only") || slices.Contains(load.Command, "--neutralize") {
+		t.Errorf("load command = %q", load.Command)
+	}
+	if slices.Contains(last.Command, "--load-only") || !slices.Contains(last.Command, "--neutralize") {
+		t.Errorf("last command = %q", last.Command)
+	}
+	if load.TerminationMessagePath != "" || last.TerminationMessagePath == "" {
+		t.Error("only the last step reports")
+	}
+	checkOdooStep(t, odoo)
+	if len(spec.ImagePullSecrets) != 1 || spec.ImagePullSecrets[0].Name != "pull" {
+		t.Errorf("image pull secrets = %v", spec.ImagePullSecrets)
+	}
+
+	// Without neutralize the Odoo step only reports the version.
+	src.Neutralize = false
+	job, err = RestoreJob(p, rs, "20250101T000000", src, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec = job.Spec.Template.Spec
+	if _, ok := envMap(spec.InitContainers[1].Env)["NEUTRALIZE"]; ok || slices.Contains(spec.Containers[0].Command, "--neutralize") {
+		t.Error("neutralizes without spec.neutralize")
+	}
+}
+
+// checkOdooStep checks the Odoo step of a restore Job that neutralizes.
+func checkOdooStep(t *testing.T, odoo corev1.Container) {
+	t.Helper()
+	if odoo.Image != "odoo:18.0" || odoo.Command[0] != "sh" || odoo.Command[len(odoo.Command)-1] != "odoo" ||
+		plain(t, odoo.Env, "NEUTRALIZE") != "1" || plain(t, odoo.Env, "WORK") != "/work" ||
+		plain(t, odoo.Env, "ODOO_CONF") != odoov1.OdooConfigFile {
+		t.Errorf("odoo step = %+v", odoo)
+	}
+	mount(t, odoo, odoov1.OdooConfigMountPath)
+	mount(t, odoo, "/work")
+	for _, m := range odoo.VolumeMounts {
+		if m.Name != "work" && m.Name != "odoo-config" {
+			t.Errorf("the odoo step mounts %s", m.Name)
+		}
+	}
+}
+
+// TestRestoreJobFile: an Odoo backup file is fetched with rclone, and a
+// store without a key (readOnly) adds no restic password.
+func TestRestoreJobFile(t *testing.T) {
+	for name, store := range allStores() {
+		t.Run(name, func(t *testing.T) {
+			store.Spec.EncryptionKeySecret = nil
+			store.Spec.ReadOnly = true
+			rs := &odoov1.OdooRestore{ObjectMeta: metav1.ObjectMeta{Name: "rs1"}}
+			job, err := RestoreJob(params(store), rs, "20250101T000000",
+				RestoreSource{File: "exports/shop_*.zip", OdooImage: "odoo:18.0"}, nil, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			spec := job.Spec.Template.Spec
+			checkPodWiring(t, spec)
+			loc, _ := Locate(store, "")
+			for _, c := range []corev1.Container{spec.InitContainers[0], spec.Containers[0]} {
+				if flagValue(t, c.Command, "--file") != "exports/shop_*.zip" ||
+					flagValue(t, c.Command, "--store-target") != loc.ProbeTarget ||
+					slices.Contains(c.Command, "--snapshot") || !slices.Contains(c.Command, "--no-lock") {
+					t.Errorf("%s command = %q", c.Name, c.Command)
+				}
+				for _, e := range c.Env {
+					if strings.Contains(e.Name, "RESTIC_REPOSITORY") || strings.Contains(e.Name, "RESTIC_PASSWORD") {
+						t.Errorf("%s gets %s", c.Name, e.Name)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestProbeJobReadOnly(t *testing.T) {
+	store := s3Store()
+	store.Spec.ReadOnly = true
+	job, err := ProbeJob(image, store, "abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(command(job), "--read-only") {
+		t.Errorf("command = %q", command(job))
+	}
+	if job, _ := ProbeJob(image, s3Store(), "abc"); slices.Contains(command(job), "--read-only") {
+		t.Error("a writable store is probed read-only")
+	}
+}
+
 func TestRestoreJobUndo(t *testing.T) {
 	p := params(nil) // an undo needs no store
 	rs := &odoov1.OdooRestore{ObjectMeta: metav1.ObjectMeta{Name: "undo1"}}
-	job, err := RestoreJob(p, rs, "20250102T000000", "", "20250101T000000", nil, 0)
+	job, err := RestoreJob(p, rs, "20250102T000000", RestoreSource{UndoSuffix: "20250101T000000"}, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -890,7 +1030,7 @@ func TestCleanupJob(t *testing.T) {
 	if !slices.Equal(cmd, want) {
 		t.Errorf("command = %q", cmd)
 	}
-	if job.Name != CleanupJobName(p.Instance, "rs1", 3) || job.Labels[odoov1.LabelJobKind] != KindCleanup || job.Labels[LabelRestore] != "rs1" {
+	if job.Name != CleanupJobName(p.Instance, rs, 3) || job.Labels[odoov1.LabelJobKind] != KindCleanup || job.Labels[LabelRestore] != "rs1" {
 		t.Errorf("job %s labels %v", job.Name, job.Labels)
 	}
 	if *job.Spec.BackoffLimit != 2 || *job.Spec.ActiveDeadlineSeconds != 3600 {
@@ -1006,7 +1146,7 @@ func TestAllJobsInvariants(t *testing.T) {
 			jobs = append(jobs, j)
 		}
 		for _, undo := range []string{"", "20250101T000000"} {
-			j, err := RestoreJob(p, rs, "20250102T000000", "snap", undo, []string{"a"}, 0)
+			j, err := RestoreJob(p, rs, "20250102T000000", RestoreSource{Snapshot: "snap", UndoSuffix: undo}, []string{"a"}, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
