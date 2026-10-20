@@ -101,8 +101,9 @@ func (s *BackupSource) SnapshotValue() string {
 
 // OdooRestoreSpec says which backup replaces an instance's data.
 // +kubebuilder:validation:XValidation:rule="(has(self.backup) ? 1 : 0) + (has(self.snapshotID) ? 1 : 0) + (has(self.undo) ? 1 : 0) + (has(self.from) ? 1 : 0) == 1",message="set exactly one of backup, snapshotID, from, undo"
-// +kubebuilder:validation:XValidation:rule="(has(self.backup) == has(oldSelf.backup)) && (!has(self.backup) || self.backup == oldSelf.backup) && (has(self.snapshotID) == has(oldSelf.snapshotID)) && (!has(self.snapshotID) || self.snapshotID == oldSelf.snapshotID) && (has(self.undo) == has(oldSelf.undo)) && (!has(self.undo) || self.undo == oldSelf.undo) && (has(self.from) == has(oldSelf.from)) && (!has(self.from) || self.from == oldSelf.from) && (has(self.neutralize) ? self.neutralize : false) == (has(oldSelf.neutralize) ? oldSelf.neutralize : false)",message="backup, snapshotID, from, undo and neutralize are immutable"
+// +kubebuilder:validation:XValidation:rule="(has(self.backup) == has(oldSelf.backup)) && (!has(self.backup) || self.backup == oldSelf.backup) && (has(self.snapshotID) == has(oldSelf.snapshotID)) && (!has(self.snapshotID) || self.snapshotID == oldSelf.snapshotID) && (has(self.undo) == has(oldSelf.undo)) && (!has(self.undo) || self.undo == oldSelf.undo) && (has(self.from) == has(oldSelf.from)) && (!has(self.from) || self.from == oldSelf.from) && (has(self.neutralize) ? self.neutralize : false) == (has(oldSelf.neutralize) ? oldSelf.neutralize : false) && (has(self.upgrade) ? self.upgrade : false) == (has(oldSelf.upgrade) ? oldSelf.upgrade : false)",message="backup, snapshotID, from, undo, neutralize and upgrade are immutable"
 // +kubebuilder:validation:XValidation:rule="!has(self.neutralize) || !self.neutralize || !has(self.undo)",message="an undo puts the replaced data back as it was; neutralize cannot be set"
+// +kubebuilder:validation:XValidation:rule="!has(self.upgrade) || !self.upgrade || !has(self.undo)",message="an undo puts the replaced data back as it was; upgrade cannot be set"
 type OdooRestoreSpec struct {
 	// OdooDeployment whose database and filestore are replaced, in the same namespace.
 	// +kubebuilder:validation:MinLength=1
@@ -137,6 +138,15 @@ type OdooRestoreSpec struct {
 	// are turned off, so a copy of production cannot act as production.
 	// It runs with the instance's image.
 	Neutralize bool `json:"neutralize,omitempty"`
+
+	// Upgrade upgrades the restored database to the instance's spec.image
+	// before it is swapped in: Odoo runs -u with spec.upgrade.modules (all
+	// modules when that is empty), after neutralize. Set it when the backup
+	// was made by other code than the instance runs, such as a backup from
+	// another Odoo: a backup from elsewhere otherwise counts as already
+	// upgraded. The instance's Odoo must be the backup's series. A failed
+	// upgrade fails the restore and leaves the live data as it was.
+	Upgrade bool `json:"upgrade,omitempty"`
 
 	// KeepPrevious is how long the replaced database and files are kept
 	// for an undo. Overrides spec.backup.restore.keepPrevious.

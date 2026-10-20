@@ -160,6 +160,16 @@ spec:
                   instance since.
                 minLength: 1
                 type: string
+              upgrade:
+                description: |-
+                  Upgrade upgrades the restored database to the instance's spec.image
+                  before it is swapped in: Odoo runs -u with spec.upgrade.modules (all
+                  modules when that is empty), after neutralize. Set it when the backup
+                  was made by other code than the instance runs, such as a backup from
+                  another Odoo: a backup from elsewhere otherwise counts as already
+                  upgraded. The instance's Odoo must be the backup's series. A failed
+                  upgrade fails the restore and leaves the live data as it was.
+                type: boolean
             required:
             - odooDeployment
             type: object
@@ -167,17 +177,23 @@ spec:
             - message: set exactly one of backup, snapshotID, from, undo
               rule: '(has(self.backup) ? 1 : 0) + (has(self.snapshotID) ? 1 : 0) +
                 (has(self.undo) ? 1 : 0) + (has(self.from) ? 1 : 0) == 1'
-            - message: backup, snapshotID, from, undo and neutralize are immutable
+            - message: backup, snapshotID, from, undo, neutralize and upgrade are
+                immutable
               rule: '(has(self.backup) == has(oldSelf.backup)) && (!has(self.backup)
                 || self.backup == oldSelf.backup) && (has(self.snapshotID) == has(oldSelf.snapshotID))
                 && (!has(self.snapshotID) || self.snapshotID == oldSelf.snapshotID)
                 && (has(self.undo) == has(oldSelf.undo)) && (!has(self.undo) || self.undo
                 == oldSelf.undo) && (has(self.from) == has(oldSelf.from)) && (!has(self.from)
                 || self.from == oldSelf.from) && (has(self.neutralize) ? self.neutralize
-                : false) == (has(oldSelf.neutralize) ? oldSelf.neutralize : false)'
+                : false) == (has(oldSelf.neutralize) ? oldSelf.neutralize : false)
+                && (has(self.upgrade) ? self.upgrade : false) == (has(oldSelf.upgrade)
+                ? oldSelf.upgrade : false)'
             - message: an undo puts the replaced data back as it was; neutralize cannot
                 be set
               rule: '!has(self.neutralize) || !self.neutralize || !has(self.undo)'
+            - message: an undo puts the replaced data back as it was; upgrade cannot
+                be set
+              rule: '!has(self.upgrade) || !self.upgrade || !has(self.undo)'
           status:
             description: OdooRestoreStatus describes the restore.
             properties:

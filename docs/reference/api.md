@@ -150,6 +150,7 @@ _Appears in:_
 | `host` _string_ | Host picks latest among the snapshots of one restic --host, such as<br />&lt;namespace>/&lt;name> for the operator's own snapshots. |  | MaxLength: 253 <br /> |
 | `tags` _string array_ | Tags picks latest among the snapshots that have all these restic<br />tags, such as deployment=&lt;namespace>/&lt;name>. |  | MaxItems: 10 <br />items:MaxLength: 253 <br /> |
 | `neutralize` _boolean_ | Neutralize runs Odoo's neutralize on the restored database before<br />Odoo first starts on it, and gives it a new database.uuid (see<br />OdooRestore spec.neutralize). Set it for a copy of production. |  |  |
+| `upgrade` _boolean_ | Upgrade upgrades the restored database to spec.image before Odoo<br />first starts on it (see OdooRestore spec.upgrade). Set it when the<br />backup was made by other code than spec.image holds, such as a<br />production backup started on a newer version of its modules. |  |  |
 
 
 #### BootstrapStatus
@@ -846,6 +847,7 @@ _Appears in:_
 | `undo` _string_ | Undo reverses the OdooRestore of this name: the database and files it<br />replaced go back in place, and the ones it restored are kept as the<br />previous data of this restore. Refused once that data has been<br />removed (keepPrevious passed) or when another restore ran on the<br />instance since. |  | MinLength: 1 <br /> |
 | `from` _[BackupSource](#backupsource)_ | From is a backup in any store: an Odoo .zip or .dump file, or a<br />snapshot in another restic repository, such as another instance's<br />or another cluster's. |  | Optional: \{\} <br /> |
 | `neutralize` _boolean_ | Neutralize runs Odoo's neutralize on the restored database before it<br />is swapped in, and gives it a new database.uuid: scheduled actions,<br />outgoing mail servers, payment providers and similar integrations<br />are turned off, so a copy of production cannot act as production.<br />It runs with the instance's image. |  |  |
+| `upgrade` _boolean_ | Upgrade upgrades the restored database to the instance's spec.image<br />before it is swapped in: Odoo runs -u with spec.upgrade.modules (all<br />modules when that is empty), after neutralize. Set it when the backup<br />was made by other code than the instance runs, such as a backup from<br />another Odoo: a backup from elsewhere otherwise counts as already<br />upgraded. The instance's Odoo must be the backup's series. A failed<br />upgrade fails the restore and leaves the live data as it was. |  |  |
 | `keepPrevious` _[Duration](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#duration-v1-meta)_ | KeepPrevious is how long the replaced database and files are kept<br />for an undo. Overrides spec.backup.restore.keepPrevious. |  | Optional: \{\} <br /> |
 
 

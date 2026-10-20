@@ -1114,6 +1114,9 @@ var _ = Describe("Backup CRD admission", func() {
 			undo := newRestore(bwName("rs"), "od")
 			undo.Spec.Backup, undo.Spec.Undo, undo.Spec.Neutralize = "", "r1", true
 			expectInvalid(k8sClient.Create(ctx, undo), "neutralize cannot be set")
+			undo = newRestore(bwName("rs"), "od")
+			undo.Spec.Backup, undo.Spec.Undo, undo.Spec.Upgrade = "", "r1", true
+			expectInvalid(k8sClient.Create(ctx, undo), "upgrade cannot be set")
 
 			for _, src := range []odoov1.BackupSource{
 				{Store: "s", Path: "exports/shop_2026-*.zip"},
@@ -1124,6 +1127,9 @@ var _ = Describe("Backup CRD admission", func() {
 				t.create(rs)
 				cur := getRestore(rs.Name)
 				cur.Spec.Neutralize = false
+				expectInvalid(k8sClient.Update(ctx, cur), "immutable")
+				cur = getRestore(rs.Name)
+				cur.Spec.Upgrade = true
 				expectInvalid(k8sClient.Update(ctx, cur), "immutable")
 				cur = getRestore(rs.Name)
 				cur.Spec.From.Path = "elsewhere.zip"
@@ -1149,9 +1155,9 @@ var _ = Describe("Backup CRD admission", func() {
 				mutate(cur)
 				return k8sClient.Update(ctx, cur)
 			}
-			expectInvalid(update(func(r *odoov1.OdooRestore) { r.Spec.Backup = "another" }), "backup, snapshotID, from, undo and neutralize are immutable")
-			expectInvalid(update(func(r *odoov1.OdooRestore) { r.Spec.Backup, r.Spec.SnapshotID = "", "0123abcd" }), "backup, snapshotID, from, undo and neutralize are immutable")
-			expectInvalid(update(func(r *odoov1.OdooRestore) { r.Spec.Backup, r.Spec.Undo = "", "x" }), "backup, snapshotID, from, undo and neutralize are immutable")
+			expectInvalid(update(func(r *odoov1.OdooRestore) { r.Spec.Backup = "another" }), "backup, snapshotID, from, undo, neutralize and upgrade are immutable")
+			expectInvalid(update(func(r *odoov1.OdooRestore) { r.Spec.Backup, r.Spec.SnapshotID = "", "0123abcd" }), "backup, snapshotID, from, undo, neutralize and upgrade are immutable")
+			expectInvalid(update(func(r *odoov1.OdooRestore) { r.Spec.Backup, r.Spec.Undo = "", "x" }), "backup, snapshotID, from, undo, neutralize and upgrade are immutable")
 			expectInvalid(update(func(r *odoov1.OdooRestore) { r.Spec.OdooDeployment = "other" }), "spec.odooDeployment is immutable")
 			Expect(update(func(r *odoov1.OdooRestore) {
 				r.Spec.KeepPrevious = &metav1.Duration{Duration: time.Hour}
@@ -1162,14 +1168,14 @@ var _ = Describe("Backup CRD admission", func() {
 			t.create(snap)
 			cur := getRestore(snap.Name)
 			cur.Spec.SnapshotID = "0123abce"
-			expectInvalid(k8sClient.Update(ctx, cur), "backup, snapshotID, from, undo and neutralize are immutable")
+			expectInvalid(k8sClient.Update(ctx, cur), "backup, snapshotID, from, undo, neutralize and upgrade are immutable")
 
 			undo := newRestore(bwName("rs"), "od")
 			undo.Spec.Backup, undo.Spec.Undo = "", "r1"
 			t.create(undo)
 			cur = getRestore(undo.Name)
 			cur.Spec.Undo = "r2"
-			expectInvalid(k8sClient.Update(ctx, cur), "backup, snapshotID, from, undo and neutralize are immutable")
+			expectInvalid(k8sClient.Update(ctx, cur), "backup, snapshotID, from, undo, neutralize and upgrade are immutable")
 		})
 	})
 

@@ -643,9 +643,11 @@ type RestoreSource struct {
 	UndoSuffix string
 	// OdooImage, when set, adds the Odoo step: it reports the Odoo version
 	// the restored data will run on and, with Neutralize, neutralizes the
-	// loaded database before it is swapped in.
-	OdooImage  string
-	Neutralize bool
+	// loaded database before it is swapped in; with UpgradeModules it then
+	// upgrades them (-u) in the loaded database, on its filestore.
+	OdooImage      string
+	Neutralize     bool
+	UpgradeModules []string
 }
 
 // Paths of the restore Job's shared folder.
@@ -655,15 +657,21 @@ const (
 )
 
 // restoreOdooScript is the Odoo step of a restore Job: `odoo --version`
-// for the agent to compare with the backup's, and `odoo neutralize` of the
-// loaded database when the load step named it (agent.WorkSource). It exits 0
-// either way: the agent's last step judges. The file names are the agent's
-// (agent.WorkOdooVersion and the rest).
+// for the agent to compare with the backup's, `odoo neutralize` of the
+// loaded database when the load step named it (agent.WorkSource), and then
+// the upgrade (-u $UPGRADE) of that database unless neutralize failed. It
+// exits 0 either way: the agent's last step judges. The file names are the
+// agent's (agent.WorkOdooVersion and the rest).
 const restoreOdooScript = `"$@" --version >"$WORK/odoo-version" 2>&1 || true
 if [ -n "$NEUTRALIZE" ] && [ -f "$WORK/source" ]; then
   "$@" neutralize -c "$ODOO_CONF" -d "$(cat "$WORK/source")" >"$WORK/neutralize.log" 2>&1
   echo "$?" >"$WORK/neutralize.exit"
   cat "$WORK/neutralize.log"
+fi
+if [ -n "$UPGRADE" ] && [ -f "$WORK/source" ] && { [ -z "$NEUTRALIZE" ] || [ "$(cat "$WORK/neutralize.exit")" = 0 ]; }; then
+  "$@" -c "$ODOO_CONF" -d "$(cat "$WORK/source")" --stop-after-init --no-http -u "$UPGRADE" >"$WORK/upgrade.log" 2>&1
+  echo "$?" >"$WORK/upgrade.exit"
+  tail -n 200 "$WORK/upgrade.log"
 fi
 exit 0`
 
@@ -741,6 +749,9 @@ func RestoreJob(p Params, restore *odoov1.OdooRestore, suffix string, src Restor
 	if src.Neutralize {
 		last = append(last, "--neutralize")
 	}
+	if len(src.UpgradeModules) > 0 {
+		last = append(last, "--upgrade", strings.Join(src.UpgradeModules, ","), "--upgrade-image", src.OdooImage)
+	}
 	spec := p.podSpec(last, env, volumes, mounts)
 	loader := spec.Containers[0]
 	loader.Name = "load"
@@ -756,6 +767,18 @@ func RestoreJob(p Params, restore *odoov1.OdooRestore, suffix string, src Restor
 	if src.Neutralize {
 		odooEnv = append(odooEnv, plainEnv("NEUTRALIZE", "1"))
 	}
+	odooMounts := []corev1.VolumeMount{
+		{Name: volConfig, MountPath: odoov1.OdooConfigMountPath, ReadOnly: true},
+		{Name: volWork, MountPath: workMount},
+	}
+	if len(src.UpgradeModules) > 0 {
+		// The upgrade writes to the loaded database's filestore,
+		// <data_dir>/filestore/<loaded database>, as the instance mounts it.
+		odooEnv = append(odooEnv, plainEnv("UPGRADE", strings.Join(src.UpgradeModules, ",")))
+		odooMounts = append(odooMounts, corev1.VolumeMount{
+			Name: volData, MountPath: od.Spec.Config.DataDir + "/filestore", SubPath: "filestore",
+		})
+	}
 	odoo := corev1.Container{
 		Name:            "odoo",
 		Image:           src.OdooImage,
@@ -764,10 +787,7 @@ func RestoreJob(p Params, restore *odoov1.OdooRestore, suffix string, src Restor
 		Env:             odooEnv,
 		EnvFrom:         od.Spec.EnvFrom,
 		Resources:       *od.Spec.Resources.DeepCopy(),
-		VolumeMounts: []corev1.VolumeMount{
-			{Name: volConfig, MountPath: odoov1.OdooConfigMountPath, ReadOnly: true},
-			{Name: volWork, MountPath: workMount},
-		},
+		VolumeMounts:    odooMounts,
 	}
 	spec.InitContainers = []corev1.Container{loader, odoo}
 	spec.ImagePullSecrets = od.Spec.ImagePullSecrets

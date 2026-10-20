@@ -81,8 +81,10 @@ type journal struct {
 	// SnapshotID is the snapshot it read, when it read one.
 	SnapshotID string `json:"snapshotID,omitempty"`
 	File       string `json:"file,omitempty"`
-	// Neutralized is set once the database to swap in was neutralized.
+	// Neutralized is set once the database to swap in was neutralized,
+	// Upgraded once it was upgraded.
 	Neutralized bool `json:"neutralized,omitempty"`
+	Upgraded    bool `json:"upgraded,omitempty"`
 
 	// From the backup.
 	Image          string   `json:"image,omitempty"`
@@ -153,6 +155,12 @@ type RestoreOptions struct {
 	// database (WorkNeutralizeExit), and gives it a new database.uuid,
 	// before it is swapped in.
 	Neutralize bool
+	// UpgradeModules requires the Odoo step to have upgraded these modules
+	// in the loaded database (WorkUpgradeExit) before it is swapped in, with
+	// the instance's Odoo of the backup's series. The restored data then
+	// counts as running UpgradeImage.
+	UpgradeModules []string
+	UpgradeImage   string
 }
 
 // Files the steps of a restore Job share in RestoreOptions.WorkDir.
@@ -168,6 +176,10 @@ const (
 	// output of `odoo neutralize`.
 	WorkNeutralizeExit = "neutralize.exit"
 	WorkNeutralizeLog  = "neutralize.log"
+	// WorkUpgradeExit and WorkUpgradeLog are the exit code and the output
+	// of the upgrade (odoo -u).
+	WorkUpgradeExit = "upgrade.exit"
+	WorkUpgradeLog  = "upgrade.log"
 )
 
 // restoreRun is one restore attempt.
@@ -416,15 +428,18 @@ func (r *restoreRun) seriesOf(ctx context.Context, database string) (string, err
 
 // beforeSwap runs the checks a restore Job with an Odoo step adds, once the
 // backup is loaded: the instance's Odoo must be the backup's series when the
-// restored data will run on it, and a neutralized restore needs the Odoo
-// step to have neutralized the loaded database.
+// restored data will run on it, a neutralized restore needs the Odoo step to
+// have neutralized the loaded database, and an upgraded one to have upgraded
+// it.
 func (r *restoreRun) beforeSwap(ctx context.Context) (string, error) {
 	o, j := r.o, r.j
 	if o.WorkDir == "" || o.Mode != ModeRestore {
 		return "", nil
 	}
-	if j.Image == "" {
-		// The backup does not name an image: Odoo starts on the instance's.
+	upgrade := len(o.UpgradeModules) > 0
+	if j.Image == "" || (upgrade && !j.Upgraded) {
+		// The backup does not name an image, or is upgraded to the
+		// instance's: Odoo starts on the instance's.
 		data, err := os.ReadFile(filepath.Join(o.WorkDir, WorkOdooVersion))
 		if err != nil {
 			return result.StepCheck, fmt.Errorf("the Odoo step did not report the instance's Odoo version: %w", err)
@@ -453,6 +468,22 @@ func (r *restoreRun) beforeSwap(ctx context.Context) (string, error) {
 			return result.StepCheck, err
 		}
 		r.e.logf("database %s neutralized", j.Source)
+	}
+	if upgrade && !j.Upgraded {
+		code, _ := os.ReadFile(filepath.Join(o.WorkDir, WorkUpgradeExit))
+		if strings.TrimSpace(string(code)) != "0" {
+			out, _ := os.ReadFile(filepath.Join(o.WorkDir, WorkUpgradeLog))
+			return result.StepCheck, fmt.Errorf("the upgrade (odoo -u %s) did not succeed (exit %q): %s",
+				strings.Join(o.UpgradeModules, ","), strings.TrimSpace(string(code)), tail(string(out)))
+		}
+		j.Upgraded = true
+		j.Image = o.UpgradeImage
+		j.Warnings = append(j.Warnings, fmt.Sprintf("the restored database was upgraded (-u %s) on %s",
+			strings.Join(o.UpgradeModules, ","), o.UpgradeImage))
+		if err := j.save(r.path); err != nil {
+			return result.StepCheck, err
+		}
+		r.e.logf("database %s upgraded on %s", j.Source, o.UpgradeImage)
 	}
 	return "", nil
 }
@@ -506,6 +537,7 @@ func (r *restoreRun) discardSource(ctx context.Context) error {
 		// Load it again from the start.
 		r.j.Stage = stageNew
 		r.j.Neutralized = false
+		r.j.Upgraded = false
 		if err := r.j.save(r.path); err != nil {
 			return err
 		}

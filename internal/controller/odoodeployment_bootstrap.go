@@ -76,6 +76,7 @@ func (r *OdooDeploymentReconciler) bootstrap(ctx context.Context, s *reconcileSt
 				OdooDeployment: od.Name,
 				From:           from.BackupSource.DeepCopy(),
 				Neutralize:     from.Neutralize,
+				Upgrade:        from.Upgrade,
 			},
 		}
 		if err := r.Create(ctx, rs); err != nil {

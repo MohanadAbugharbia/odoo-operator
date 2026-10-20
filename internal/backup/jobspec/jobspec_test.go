@@ -926,6 +926,40 @@ func TestRestoreJobFromElsewhere(t *testing.T) {
 	}
 }
 
+// TestRestoreJobUpgrade: the Odoo step upgrades the loaded database on its
+// filestore, and the last step requires it.
+func TestRestoreJobUpgrade(t *testing.T) {
+	p := params(s3Store())
+	p.Instance.Spec.OdooCommand = []string{"odoo"}
+	p.Instance.Spec.Config.DataDir = "/var/lib/odoo"
+	rs := &odoov1.OdooRestore{ObjectMeta: metav1.ObjectMeta{Name: "rs1"}}
+	src := RestoreSource{File: "exports/shop_*.zip", OdooImage: "shop:2", Neutralize: true,
+		UpgradeModules: []string{"shop", "pos"}}
+	job, err := RestoreJob(p, rs, "20250101T000000", src, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := job.Spec.Template.Spec
+	load, odoo, last := spec.InitContainers[0], spec.InitContainers[1], spec.Containers[0]
+	if slices.Contains(load.Command, "--upgrade") {
+		t.Errorf("load command = %q", load.Command)
+	}
+	if flagValue(t, last.Command, "--upgrade") != "shop,pos" || flagValue(t, last.Command, "--upgrade-image") != "shop:2" {
+		t.Errorf("last command = %q", last.Command)
+	}
+	if odoo.Image != "shop:2" || plain(t, odoo.Env, "UPGRADE") != "shop,pos" || plain(t, odoo.Env, "NEUTRALIZE") != "1" {
+		t.Errorf("odoo step = %+v", odoo)
+	}
+	m := mount(t, odoo, "/var/lib/odoo/filestore")
+	if m.Name != "odoo-data" || m.SubPath != "filestore" || m.ReadOnly {
+		t.Errorf("filestore mount = %+v", m)
+	}
+	script := odoo.Command[2]
+	if !strings.Contains(script, `-u "$UPGRADE"`) || strings.Index(script, "neutralize -c") > strings.Index(script, `-u "$UPGRADE"`) {
+		t.Errorf("the script must neutralize, then upgrade:\n%s", script)
+	}
+}
+
 // checkOdooStep checks the Odoo step of a restore Job that neutralizes.
 func checkOdooStep(t *testing.T, odoo corev1.Container) {
 	t.Helper()
