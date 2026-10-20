@@ -87,9 +87,66 @@ hours by default) for its log.
 
 Each backup is copied (`restic copy`) to every store after the
 first in `spec.backup.stores`, in the same Job, and retention runs in each
-copy too. A store that is missing or whose Secret is incomplete is skipped; a
+copy too. A [zip store](backup-stores.md#zip-stores) gets the backup as an
+Odoo zip instead, and loses the zip when retention forgets the backup. A store that is missing or whose Secret is incomplete is skipped; a
 store that is not ready is still tried. A skipped store or a copy that fails leaves
 the backup `PartiallyCompleted` with `status.copies` saying why; the backup in
 the first store is still good. A restore (or drill) whose backup's store is
 not ready restores a copy from a ready store instead, with an event saying so.
 Stores may use different kinds and different encryption keys.
+
+## Export a backup as an Odoo zip
+
+`odoo-backup export` writes one backup as the zip Odoo's database manager
+makes, for a backup that is not in a [zip store](backup-stores.md#zip-stores):
+to hand to someone, or to load into an Odoo outside the cluster. Run it in a
+one-off Job with the backup image, the store mounted and the encryption key.
+For a PVC store:
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: export-my-odoo
+  namespace: shop
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: export
+          image: ghcr.io/mohanadabugharbia/odoo-operator-backup:0.6.0   # the operator's version
+          command:
+            - odoo-backup
+            - export
+            - --no-lock
+            - --host=shop/my-odoo        # <namespace>/<deployment>
+            - --tag=kind=manual          # optional: the newest manual backup
+            - --output=/exports/my-odoo.zip
+          env:
+            - { name: RESTIC_REPOSITORY, value: /store/shop/my-odoo }
+            - { name: RESTIC_PASSWORD_FILE, value: /key/password }
+          volumeMounts:
+            - { name: store, mountPath: /store, readOnly: true }
+            - { name: key, mountPath: /key, readOnly: true }
+            - { name: exports, mountPath: /exports }
+      volumes:
+        - name: store
+          persistentVolumeClaim: { claimName: backups, readOnly: true }
+        - name: key
+          secret: { secretName: backup-key }
+        - name: exports
+          persistentVolumeClaim: { claimName: exports }
+```
+
+- `--snapshot` picks a backup by its `status.snapshotID`; without it the
+  newest snapshot with `--host` and every `--tag` is exported.
+- `--output -` writes the zip to the Job's log stream instead of a file,
+  which is only useful when you run the command yourself
+  (`kubectl run`, `kubectl exec`).
+- `--target` uploads the zip with rclone instead (for example
+  `:sftp:/exports/`, with the `RCLONE_SFTP_*` settings in the environment). A
+  target ending in `/` names the zip as zip stores do.
+- The Job exits 0 when the zip is complete; a failed export leaves no file.
+

@@ -519,6 +519,17 @@ func (r *Restic) Dump(ctx context.Context, snapshot, file string, w io.Writer) e
 	return r.wrap(args, cmd.Run(), stderr.String())
 }
 
+// DumpTar writes folder of snapshot to w as a tar archive. Entry names are
+// the full paths in the snapshot, without the leading slash.
+func (r *Restic) DumpTar(ctx context.Context, snapshot, folder string, w io.Writer) error {
+	args := []string{"dump", "--archive", "tar", snapshot, folder}
+	cmd := r.command(ctx, args...)
+	cmd.Stdout = w
+	var stderr bytes.Buffer
+	cmd.Stderr = io.MultiWriter(&stderr, r.logWriter())
+	return r.wrap(args, cmd.Run(), stderr.String())
+}
+
 // Restore restores the paths listed in includeFile (one per line) from
 // snapshot under target, keeping their full paths.
 func (r *Restic) Restore(ctx context.Context, snapshot, target string, includes ...string) error {

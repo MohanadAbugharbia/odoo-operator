@@ -44,7 +44,8 @@ flowchart LR
 3. It writes `dump.sql`, `manifest.json` and `filestore/` as one restic
    snapshot to the first store, then applies retention there.
 4. It copies the snapshot to every other store listed, and applies retention
-   in each.
+   in each; a [zip store](../guides/backup-stores.md#zip-stores) gets it as an
+   Odoo zip instead.
 
 ## What a backup holds
 

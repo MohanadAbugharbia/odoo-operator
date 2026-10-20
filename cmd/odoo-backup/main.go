@@ -56,6 +56,7 @@ commands:
   drill-finish  drop the drill's scratch database and report the drill (step 3)
   check     check the store's repositories (restic check)
   prune     free the space of forgotten snapshots (restic prune)
+  export    write a snapshot as the zip Odoo's database manager makes
   version   print the version
 `
 
@@ -92,9 +93,12 @@ func (c *common) register(fs *flag.FlagSet) {
 }
 
 func (c *common) env() (*agent.Env, error) {
-	cfg, err := odooconf.Load(c.config)
-	if err != nil {
-		return nil, err
+	var cfg odooconf.Config
+	if c.config != "" {
+		var err error
+		if cfg, err = odooconf.Load(c.config); err != nil {
+			return nil, err
+		}
 	}
 	var majors []int
 	for _, m := range strings.Split(c.pgMajors, ",") {
@@ -176,6 +180,8 @@ func run(ctx context.Context, command string, args []string) int {
 			return 1
 		}
 		return 0
+	case "export":
+		return runExport(ctx, fs, &c, args)
 	case agent.TaskCheck, agent.TaskPrune:
 		return runStoreTask(ctx, fs, command, args)
 	case "probe":
@@ -391,6 +397,39 @@ func runCleanup(ctx context.Context, fs *flag.FlagSet, c *common, args []string)
 
 // finish writes the result and returns the exit code: 0 when it succeeded
 // (or was deferred), 1 when it failed, so the Job's backoff retries it.
+// runExport writes a snapshot as an Odoo zip. It needs only the repository
+// (RESTIC_REPOSITORY and its password, as restic reads them), not odoo.conf.
+func runExport(ctx context.Context, fs *flag.FlagSet, c *common, args []string) int {
+	c.register(fs)
+	_ = fs.Lookup("config").Value.Set("")
+	var o agent.ExportOptions
+	var tags stringList
+	fs.StringVar(&o.Snapshot, "snapshot", "latest", "snapshot to export: an ID, or latest")
+	fs.StringVar(&o.Host, "host", "", "with --snapshot latest: the snapshots' host (<namespace>/<name>)")
+	fs.Var(&tags, "tag", "with --snapshot latest: a tag the snapshot has (repeatable)")
+	fs.StringVar(&o.Output, "output", "", "file to write the zip to; - for stdout")
+	fs.StringVar(&o.Target, "target", "", "rclone path to upload the zip to; ending in / names the zip <db>_<time>.zip")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	o.Tags = tags
+	if (o.Output == "") == (o.Target == "") {
+		fmt.Fprintln(os.Stderr, "export: set one of --output and --target")
+		return 2
+	}
+	o.Stdout = os.Stdout
+	e, err := c.env()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "export:", err)
+		return 2
+	}
+	r := agent.Export(ctx, e, o)
+	if r.OK {
+		fmt.Fprintf(os.Stderr, "exported snapshot %s to %s\n", r.SnapshotID, r.File)
+	}
+	return finish(c.terminationLog, r)
+}
+
 func finish(terminationLog string, r result.Result) int {
 	if err := result.Write(terminationLog, r); err != nil {
 		fmt.Fprintln(os.Stderr, "could not write the result:", err)

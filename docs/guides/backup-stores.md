@@ -5,7 +5,8 @@ An `OdooBackupStore` says where backups go. Every store holds encrypted
 `<path>/<namespace>/<deployment>/`, encrypted with the key in
 `encryptionKeySecret`. A [read-only store](#read-only-stores) is where
 backups are only read from, such as Odoo backup files to start an instance
-from.
+from. A [zip store](#zip-stores) takes copies of backups as Odoo's own zip
+files.
 
 !!! warning "Keep the encryption key"
     Keep a copy of the key in `encryptionKeySecret` outside the cluster:
@@ -81,6 +82,47 @@ spec:
   refused.
 - It cannot be in `spec.backup.stores` (backups to it fail), and it is never
   [checked or pruned](store-check-prune.md).
+
+## Zip stores
+
+`format: zip` makes a store that keeps each backup as the zip Odoo's database
+manager makes (`dump.sql`, `filestore/`, `manifest.json`), which any Odoo
+loads with its database manager or `odoo db load`. Put it after the first
+store in `spec.backup.stores` and every backup is [copied](backups.md#copies)
+into it as a zip:
+
+```yaml
+apiVersion: odoo.abugharbia.com/v1
+kind: OdooBackupStore
+metadata:
+  name: zips
+  namespace: shop
+spec:
+  sftp:
+    host: backup.example.com
+    user: odoo
+    path: /exports
+    sshSecret: { name: my-odoo-sftp }
+  format: zip
+```
+
+- The zips are at `<path>/<namespace>/<deployment>/<database>_<YYYY-MM-DD_HH-MM-SS>.zip`,
+  named after the backup's time in UTC, and the backup's `status.copies`
+  names its zip.
+- A zip is written under a temporary name (`.<name>.partial`) and renamed when
+  complete, so the store never shows a zip cut short.
+- When retention forgets a backup, its zip is deleted. Only the names the
+  instance's own backups get are ever deleted: other files in the folder stay.
+- A zip holds every file again, so each copy costs the full database and
+  filestore; with restic, a backup costs only what changed. Keep the first
+  store a restic store and use a zip store for what needs plain Odoo files.
+- Zips are not encrypted: the store's own access control is all that guards
+  them. `encryptionKeySecret` is not needed.
+- A zip store cannot be the first store (backups are taken into restic
+  stores only), and it is never [checked or pruned](store-check-prune.md).
+  Its `format` cannot change once it is created.
+- A restore whose backup's own store is not ready restores the zip instead;
+  a [drill](drills.md) only uses restic copies.
 
 ## Probes
 

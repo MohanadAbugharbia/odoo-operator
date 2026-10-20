@@ -33,6 +33,20 @@ func (h *backupHarness) secondStore() string {
 	return name
 }
 
+// zipStore adds a PVC store of format zip and returns its name.
+func (h *backupHarness) zipStore() string {
+	name := h.name + "-zips"
+	store := &odoov1.OdooBackupStore{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec: odoov1.OdooBackupStoreSpec{
+			PVC:    &odoov1.PVCStore{ClaimName: "zips"},
+			Format: odoov1.BackupStoreFormatZip,
+		},
+	}
+	h.track(store)
+	return name
+}
+
 func (h *backupHarness) setStoreReady(name string, ready bool) {
 	store := &odoov1.OdooBackupStore{}
 	Expect(k8sClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, store)).To(Succeed())
@@ -143,5 +157,63 @@ var _ = Describe("Copies to other stores", func() {
 		_, od := h.reconcile()
 		Expect(jobArgs(h.job(od.Status.CurrentOperation.Job))).To(ContainSubstring("--snapshot aaaa1111"))
 		Expect(h.restore("r").Status.Store).To(Equal(h.store))
+	})
+
+	It("writes a zip into a zip store and records its file", func() {
+		h = newBackupHarness()
+		zips := h.zipStore()
+		h.setBackupSpec(func(b *odoov1.OdooBackupConfig) { b.Stores = []string{h.store, zips} })
+		h.newBackup("one")
+		_, od := h.reconcile()
+		job := h.job(od.Status.CurrentOperation.Job)
+		Expect(jobArgs(job)).To(ContainSubstring("--copy " + zips))
+		env := envNames(job.Spec.Template.Spec.Containers[0].Env)
+		Expect(env).To(ContainElement("COPY1_ZIP_TARGET"))
+		Expect(env).NotTo(ContainElements("COPY1_RESTIC_REPOSITORY", "COPY1_RESTIC_PASSWORD_FILE"))
+
+		file := ns + "/" + h.name + "/prod_2026-10-18_01-00-00.zip"
+		h.finishJob(od.Status.CurrentOperation.Job, &result.Result{
+			OK: true, SnapshotID: "aaaa1111", Copies: []result.Copy{{Store: zips, File: file}},
+		})
+		h.reconcile()
+		b := h.backup("one")
+		Expect(b.Status.Phase).To(Equal(odoov1.BackupPhaseCompleted))
+		Expect(b.Status.Copies).To(Equal([]odoov1.BackupCopy{{Store: zips, File: file}}))
+	})
+
+	It("refuses a zip store as the store backups are taken into", func() {
+		h = newBackupHarness()
+		zips := h.zipStore()
+		h.setStoreReady(zips, true)
+		h.setBackupSpec(func(b *odoov1.OdooBackupConfig) { b.Stores = []string{zips, h.store} })
+		h.newBackup("one")
+		_, od := h.reconcile()
+		Expect(od.Status.CurrentOperation.Kind).To(BeEmpty())
+		b := h.backup("one")
+		Expect(b.Status.Phase).To(Equal(odoov1.BackupPhaseFailed))
+		Expect(b.Status.Message).To(ContainSubstring("keeps zip files and only takes copies"))
+	})
+
+	It("restores the zip copy when the backup's own store is not ready", func() {
+		h = newBackupHarness()
+		zips := h.zipStore()
+		file := ns + "/" + h.name + "/prod_2026-10-18_01-00-00.zip"
+		b := h.newBackup("one")
+		b.Status = odoov1.OdooBackupStatus{
+			Phase: odoov1.BackupPhaseCompleted, Store: h.store, SnapshotID: "aaaa1111",
+			Copies: []odoov1.BackupCopy{{Store: zips, File: file}},
+		}
+		Expect(k8sClient.Status().Update(ctx, b)).To(Succeed())
+		h.setStoreReady(h.store, false)
+		h.setStoreReady(zips, true)
+
+		h.newRestore("r", func(s *odoov1.OdooRestoreSpec) { s.Backup = b.Name })
+		_, od := h.reconcile()
+		args := jobArgs(h.job(od.Status.CurrentOperation.Job))
+		Expect(args).To(ContainSubstring("--file " + file))
+		Expect(args).NotTo(ContainSubstring("--snapshot"))
+		r := h.restore("r")
+		Expect(r.Status.Store).To(Equal(zips))
+		Expect(r.Status.File).To(Equal(file))
 	})
 })

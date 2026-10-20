@@ -356,6 +356,20 @@ func (r *OdooDeploymentReconciler) getWritableStore(ctx context.Context, namespa
 	return store, nil
 }
 
+// getBackupStore is getWritableStore for the store a backup is taken into,
+// the first in spec.backup.stores: a zip store only takes copies.
+func (r *OdooDeploymentReconciler) getBackupStore(ctx context.Context, namespace, name string) (*odoov1.OdooBackupStore, error) {
+	store, err := r.getWritableStore(ctx, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	if store.Spec.Format == odoov1.BackupStoreFormatZip {
+		return nil, fmt.Errorf("OdooBackupStore %s keeps zip files and only takes copies; "+
+			"list a restic store first in spec.backup.stores", name)
+	}
+	return store, nil
+}
+
 // checkStoreSecrets checks the Secrets a store names.
 func checkStoreSecrets(ctx context.Context, c client.Reader, store *odoov1.OdooBackupStore) error {
 	for name, keys := range jobspec.StoreSecrets(store) {
@@ -700,7 +714,7 @@ func (r *OdooDeploymentReconciler) startBackup(ctx context.Context, s *reconcile
 	if len(od.Spec.Backup.Stores) == 0 {
 		return fail(fmt.Sprintf("OdooDeployment %s has no spec.backup.stores", od.Name))
 	}
-	if _, err := r.getWritableStore(ctx, od.Namespace, od.Spec.Backup.Stores[0]); err != nil {
+	if _, err := r.getBackupStore(ctx, od.Namespace, od.Spec.Backup.Stores[0]); err != nil {
 		if errors.Is(err, errStoreReadOnly) {
 			r.event(od, corev1.EventTypeWarning, odoov1.ReasonStoreReadOnly, err.Error())
 		}
@@ -757,7 +771,7 @@ func (r *OdooDeploymentReconciler) driveBackup(ctx context.Context, s *reconcile
 				return ctrl.Result{RequeueAfter: 10 * time.Second}, false, nil
 			}
 		}
-		store, err := r.getWritableStore(ctx, od.Namespace, od.Spec.Backup.Stores[0])
+		store, err := r.getBackupStore(ctx, od.Namespace, od.Spec.Backup.Stores[0])
 		if err != nil {
 			return r.finishBackupFailed(ctx, s, b, err.Error())
 		}
@@ -1061,7 +1075,7 @@ func (r *OdooDeploymentReconciler) resolveRestore(ctx context.Context, od *odoov
 		default:
 			return src, fmt.Sprintf("OdooBackup %q has not completed (phase %q)", b.Name, b.Status.Phase), nil
 		}
-		return r.backupSource(ctx, od, b, func(msg string) {
+		return r.backupSource(ctx, od, b, true, func(msg string) {
 			r.objectEvent(rs, corev1.EventTypeWarning, ReasonRestoreFromCopy, "Restoring the copy in store "+msg)
 		})
 	case spec.SnapshotID != "":
@@ -1123,9 +1137,10 @@ func (r *OdooDeploymentReconciler) fromSource(ctx context.Context, od *odoov1.Od
 
 // backupSource finds where a finished backup can be read from: the store it
 // was written to, or, when that store is gone or not ready, a copy in a
-// store that is (fromCopy is told which and why).
+// store that is (fromCopy is told which and why); a zip copy only when
+// zips is set.
 func (r *OdooDeploymentReconciler) backupSource(ctx context.Context, od *odoov1.OdooDeployment, b *odoov1.OdooBackup,
-	fromCopy func(msg string)) (src restoreSource, refusal string, err error) {
+	zips bool, fromCopy func(msg string)) (src restoreSource, refusal string, err error) {
 	if b.Status.SnapshotID == "" || b.Status.Store == "" {
 		return src, fmt.Sprintf("OdooBackup %q records no snapshot", b.Name), nil
 	}
@@ -1134,7 +1149,7 @@ func (r *OdooDeploymentReconciler) backupSource(ctx context.Context, od *odoov1.
 		return restoreSource{store: store, snapshot: b.Status.SnapshotID}, "", nil
 	}
 	for _, c := range b.Status.Copies {
-		if c.SnapshotID == "" {
+		if c.SnapshotID == "" && (c.File == "" || !zips) {
 			continue
 		}
 		if copyStore, copyErr := r.getStore(ctx, od.Namespace, c.Store); copyErr == nil && copyStore.Status.Ready {
@@ -1143,6 +1158,9 @@ func (r *OdooDeploymentReconciler) backupSource(ctx context.Context, od *odoov1.
 				why = "cannot be used: " + err.Error()
 			}
 			fromCopy(fmt.Sprintf("%s: store %s %s", c.Store, b.Status.Store, why))
+			if c.SnapshotID == "" {
+				return restoreSource{store: copyStore, file: c.File}, "", nil
+			}
 			return restoreSource{store: copyStore, snapshot: c.SnapshotID}, "", nil
 		}
 	}

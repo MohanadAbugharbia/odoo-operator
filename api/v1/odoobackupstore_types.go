@@ -22,13 +22,17 @@ import (
 )
 
 // BackupStoreFormat is how backups are kept in a store.
-// +kubebuilder:validation:Enum=restic
+// +kubebuilder:validation:Enum=restic;zip
 type BackupStoreFormat string
 
 const (
 	// BackupStoreFormatRestic keeps one encrypted, deduplicated restic
 	// repository per OdooDeployment.
 	BackupStoreFormatRestic BackupStoreFormat = "restic"
+	// BackupStoreFormatZip keeps every backup as the zip Odoo's database
+	// manager makes, unencrypted and not deduplicated, in one folder per
+	// OdooDeployment. A zip store only receives copies.
+	BackupStoreFormatZip BackupStoreFormat = "zip"
 )
 
 // Keys the operator reads from the Secrets an OdooBackupStore names.
@@ -123,11 +127,17 @@ type PVCStore struct {
 
 // OdooBackupStoreSpec is where backups are written to and read from.
 // +kubebuilder:validation:XValidation:rule="(has(self.s3) ? 1 : 0) + (has(self.sftp) ? 1 : 0) + (has(self.nfs) ? 1 : 0) + (has(self.pvc) ? 1 : 0) == 1",message="set exactly one of s3, sftp, nfs, pvc"
-// +kubebuilder:validation:XValidation:rule="has(self.encryptionKeySecret) || (has(self.readOnly) && self.readOnly)",message="encryptionKeySecret is required unless the store is readOnly"
+// +kubebuilder:validation:XValidation:rule="has(self.encryptionKeySecret) || (has(self.readOnly) && self.readOnly) || (has(self.format) && self.format == 'zip')",message="encryptionKeySecret is required unless the store is readOnly or of format zip"
 // +kubebuilder:validation:XValidation:rule="!has(self.readOnly) || !self.readOnly || ((!has(self.check) || !has(self.check.schedule) || size(self.check.schedule) == 0) && (!has(self.prune) || !has(self.prune.schedule) || size(self.prune.schedule) == 0))",message="a readOnly store is never checked or pruned"
+// +kubebuilder:validation:XValidation:rule="!has(self.format) || self.format != 'zip' || ((!has(self.check) || !has(self.check.schedule) || size(self.check.schedule) == 0) && (!has(self.prune) || !has(self.prune.schedule) || size(self.prune.schedule) == 0))",message="a zip store has no repositories to check or prune"
+// +kubebuilder:validation:XValidation:rule="(has(self.format) ? self.format : 'restic') == (has(oldSelf.format) ? oldSelf.format : 'restic')",message="format is immutable"
 type OdooBackupStoreSpec struct {
 	// Format is how backups are kept. restic: one encrypted, deduplicated
 	// repository per OdooDeployment at <path>/<namespace>/<deployment>/.
+	// zip: every backup as the zip Odoo's database manager makes, at
+	// <path>/<namespace>/<deployment>/<db>_<YYYY-MM-DD_HH-MM-SS>.zip (UTC),
+	// unencrypted; a zip store can only be a copy store (not the first in
+	// spec.backup.stores) and needs no encryptionKeySecret.
 	// +kubebuilder:default=restic
 	Format BackupStoreFormat `json:"format,omitempty"`
 
@@ -143,7 +153,7 @@ type OdooBackupStoreSpec struct {
 	// EncryptionKeySecret is the restic password that encrypts every
 	// backup in the store. Without it no backup can be read: keep a copy
 	// outside the cluster. A readOnly store that only holds Odoo zip or
-	// .dump files does not need one.
+	// .dump files, and a store of format zip, do not need one.
 	// +kubebuilder:validation:Optional
 	EncryptionKeySecret *corev1.SecretKeySelector `json:"encryptionKeySecret,omitempty"`
 
