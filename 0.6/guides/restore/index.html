@@ -765,6 +765,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#upgrade-the-restored-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Upgrade the restored data
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#what-a-restore-needs" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1515,6 +1526,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#upgrade-the-restored-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Upgrade the restored data
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#what-a-restore-needs" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1654,7 +1676,8 @@ operator's snapshots) and <code>tags</code> (all must match, such as <code>kind=
 checks it: before the swap, Odoo reports its version, and a backup of another
 Odoo series (17.0 on an 18.0 image) is refused with the live data untouched.
 Afterwards the instance counts as running <code>spec.image</code> and <code>spec.upgrade.token</code>,
-so no upgrade follows. A backup the operator made (a restic snapshot) still
+so no upgrade follows: set <a href="#upgrade-the-restored-data"><code>upgrade: true</code></a> when
+the backup was made by other code than <code>spec.image</code> holds. A backup the operator made (a restic snapshot) still
 records its image and token, and is handled like the instance's own backups.</p>
 <p>The checks use what the backup carries. Every attachment the restored
 database lists must be in the restored filestore, and a sample is compared
@@ -1669,6 +1692,33 @@ integrations each module marks, and the database gets a new <code>database.uuid<
 so it does not claim production's subscription or IAP credits. The restore
 fails, with the live data untouched, when Odoo cannot neutralize the database.
 Neutralize needs Odoo 16 or later, and cannot be set on an undo.</p>
+<h2 id="upgrade-the-restored-data">Upgrade the restored data<a class="headerlink" href="#upgrade-the-restored-data" title="Permanent link">&para;</a></h2>
+<p><code>upgrade: true</code> upgrades the restored database to <code>spec.image</code> before it is
+swapped in: the instance's Odoo runs <code>-u</code> with <code>spec.upgrade.modules</code> (all
+modules when that is empty) on the loaded database and its filestore, after
+neutralize when that is set too.</p>
+<div class="highlight"><pre><span></span><code><span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">odooDeployment</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">staging</span>
+<span class="w">  </span><span class="nt">from</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">store</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">production-files</span>
+<span class="w">    </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">shop_*.zip</span>
+<span class="w">  </span><span class="nt">neutralize</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">  </span><span class="nt">upgrade</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">                    </span><span class="c1"># the backup's modules are older than spec.image's</span>
+</code></pre></div>
+<p>Use it when the backup was made by other code than the instance runs: a
+production backup restored onto an instance that runs a newer version of the
+same modules, such as a staging or review copy of a branch. Without it, the
+database keeps the module versions of the backup until the next upgrade.</p>
+<ul>
+<li>The instance's Odoo must be the backup's series, as for any backup from
+  elsewhere; <code>upgrade</code> moves modules forward within a series, not across one.</li>
+<li>The restore fails, with the live data untouched, when the upgrade fails;
+  <code>status.message</code> ends with the end of Odoo's log.</li>
+<li>Afterwards the instance counts as running <code>spec.image</code> and
+  <code>spec.upgrade.token</code>, so no upgrade Job follows.</li>
+<li><code>upgrade</code> cannot be set on an undo. The upgrade runs inside the restore Job,
+  so the Job's deadline (<code>spec.backup.activeDeadlineSeconds</code>) covers it too.</li>
+</ul>
 <h2 id="what-a-restore-needs">What a restore needs<a class="headerlink" href="#what-a-restore-needs" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>Room:</strong> the restored files sit beside the live ones on the data volume
@@ -1690,10 +1740,10 @@ damaging it, and a Job that dies halfway finishes when it is retried:</p>
   load --&gt; check[Check row counts, attachments&lt;br/&gt;and a sample of checksums]
   load --&gt;|error| failed([Failed: live data untouched])
   check --&gt;|row counts differ or&lt;br/&gt;attachments missing| failed
-  check --&gt; odoo{"from or neutralize?"}
+  check --&gt; odoo{"from, neutralize&lt;br/&gt;or upgrade?"}
   odoo -- "no" --&gt; swap
-  odoo -- "yes" --&gt; step["The instance's Odoo reports its version&lt;br/&gt;and neutralizes the loaded database"]
-  step --&gt;|another series, or&lt;br/&gt;neutralize failed| failed
+  odoo -- "yes" --&gt; step["The instance's Odoo reports its version,&lt;br/&gt;neutralizes and upgrades the loaded database&lt;br/&gt;when asked"]
+  step --&gt;|another series, or&lt;br/&gt;neutralize or upgrade failed| failed
   step --&gt; swap["Swap: live becomes db_prev_suffix,&lt;br/&gt;restored becomes db"]
   swap --&gt;|Job dies| retry["Retried Job reads the journal&lt;br/&gt;and finishes the swap&lt;br/&gt;(Degraded: RestoreIncomplete meanwhile)"]
   retry --&gt; swap
