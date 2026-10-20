@@ -130,11 +130,15 @@ jobs:
 
   # The documentation of this release, as <major.minor> and "latest". A
   # release made with GITHUB_TOKEN triggers no workflow, so it is called here.
+  # A called workflow gets at most these permissions, and GitHub checks every
+  # job in it, even the ones that do not run: without pull-requests (the PR
+  # preview job's) the release never starts.
   docs:
     needs: [create-version, release]
     if: github.event.inputs.draft != 'true'
     permissions:
       contents: write
+      pull-requests: write
     uses: ./.github/workflows/docs.yml
     with:
       version: ${{ needs.create-version.outputs.next_version }}
