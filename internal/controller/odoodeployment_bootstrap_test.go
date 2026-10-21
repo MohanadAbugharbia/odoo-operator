@@ -13,6 +13,7 @@ import (
 
 	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/result"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/database"
 )
 
 // newBootstrapHarness is a new instance that starts from a backup file in a
@@ -159,6 +160,49 @@ var _ = Describe("Bootstrap from a backup", func() {
 		args := jobArgs(h.job(od.Status.CurrentOperation.Job))
 		Expect(args).To(ContainSubstring("--upgrade all"))
 		Expect(args).To(ContainSubstring("--neutralize"))
+	})
+
+	It("goes with its instance: the kept database is dropped and the bootstrap OdooRestore deleted", func() {
+		h = newBootstrapHarness(false)
+		h.reconcile()
+		rs := h.bootstrapRestore()
+		od := h.get()
+		Expect(rs.OwnerReferences).To(ContainElement(HaveField("UID", od.UID)), "owned, so it goes with the instance")
+		Expect(rs.OwnerReferences[0].Controller).To(BeNil(), "owned, not controlled")
+
+		_, od = h.reconcile()
+		h.finishJob(od.Status.CurrentOperation.Job, &result.Result{OK: true, LiveChanged: true, PreviousKept: true, File: "exports/shop.zip"})
+		h.reconcile()
+		rs = h.bootstrapRestore()
+		prev := rs.Status.Previous.Database
+		Expect(rs.Status.Previous.State).To(Equal(odoov1.PreviousKept))
+		Expect(prev).NotTo(BeEmpty())
+		tag := database.NewOwnerTag(ns, h.name)
+		h.fake.Seed(prev, tag)
+		other := h.name + "-other"
+		h.fake.Seed(other, "someone-else")
+		user := &odoov1.OdooRestore{
+			ObjectMeta: metav1.ObjectMeta{Name: h.name + "-user", Namespace: ns},
+			Spec:       odoov1.OdooRestoreSpec{OdooDeployment: h.name, From: &odoov1.BackupSource{Store: h.store, Path: "exports/shop.zip"}},
+		}
+		h.track(user)
+		user.Status.Phase = odoov1.RestorePhaseCompleted
+		user.Status.Previous = odoov1.RestorePrevious{State: odoov1.PreviousKept, Database: other}
+		Expect(k8sClient.Status().Update(ctx, user)).To(Succeed())
+
+		Expect(k8sClient.Delete(ctx, h.get())).To(Succeed())
+		for i := 0; i < 5 && h.get() != nil; i++ {
+			h.reconcile()
+		}
+		Expect(h.get()).To(BeNil())
+		Expect(h.fake.Has(h.dbName())).To(BeFalse())
+		Expect(h.fake.Has(prev)).To(BeFalse(), "the database the bootstrap kept goes with the instance")
+		Expect(h.fake.Has(other)).To(BeTrue(), "a database another owner tagged is never dropped")
+		if rs := h.bootstrapRestore(); rs != nil {
+			Expect(rs.DeletionTimestamp).NotTo(BeNil(), "the bootstrap OdooRestore is deleted with the instance")
+			Expect(rs.Status.Previous.State).To(Equal(odoov1.PreviousRemoved))
+		}
+		Expect(h.restore("user")).NotTo(BeNil(), "an OdooRestore someone created stays")
 	})
 
 	It("counts a restored database as initialized even when spec.modules is empty", func() {

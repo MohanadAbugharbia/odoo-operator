@@ -19,6 +19,8 @@ How the operator decides whether it owns an instance's database, and when it may
   `DROP DATABASE … WITH (FORCE)`, which needs PostgreSQL 13 or later. If the
   connection Secret is already gone (for example when the whole namespace is
   deleted) the database is left in place with a `DatabaseNotDropped` event.
+  With it go the databases the instance's restores kept for an undo
+  (`status.previous.database`), under the same tag check.
 - `spec.database.name` and the `nameFromSecret` selector are immutable so a
   rename can never orphan or drop the wrong database. Changing the value inside
   the Secret that `nameFromSecret` points at stops the instance instead: phase

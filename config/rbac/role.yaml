@@ -68,6 +68,7 @@ rules:
   resources:
   - odoobackups
   - odoodeployments
+  - odoorestores
   verbs:
   - create
   - delete
@@ -104,14 +105,3 @@ rules:
   - odoorestores/finalizers
   verbs:
   - update
-- apiGroups:
-  - odoo.abugharbia.com
-  resources:
-  - odoorestores
-  verbs:
-  - create
-  - get
-  - list
-  - patch
-  - update
-  - watch
