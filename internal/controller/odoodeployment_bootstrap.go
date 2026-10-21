@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -27,13 +28,17 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/layout"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/database"
 )
 
-// The bootstrap creates the instance's first OdooRestore.
-// +kubebuilder:rbac:groups=odoo.abugharbia.com,resources=odoorestores,verbs=create
+// The bootstrap creates the instance's first OdooRestore, and deletes it
+// with the instance.
+// +kubebuilder:rbac:groups=odoo.abugharbia.com,resources=odoorestores,verbs=create;delete
 
 // ReasonBootstrap: the OdooRestore of spec.bootstrap.fromBackup was created.
 const ReasonBootstrap = "Bootstrap"
@@ -79,6 +84,12 @@ func (r *OdooDeploymentReconciler) bootstrap(ctx context.Context, s *reconcileSt
 				Upgrade:        from.Upgrade,
 			},
 		}
+		// Garbage collected with the instance, so a new instance of the
+		// same name never finds this one's (failed) bootstrap.
+		if err := controllerutil.SetOwnerReference(od, rs, r.Scheme); err != nil {
+			res, err := s.fail(odoov1.ReasonReconcileFailed, err)
+			return res, false, err
+		}
 		if err := r.Create(ctx, rs); err != nil {
 			res, err := s.fail(odoov1.ReasonReconcileFailed, fmt.Errorf("create bootstrap OdooRestore %s: %w", name, err))
 			return res, false, err
@@ -117,4 +128,75 @@ func (r *OdooDeploymentReconciler) bootstrap(ctx context.Context, s *reconcileSt
 	od.Status.Phase = odoov1.PhaseInitializing
 	s.ready(metav1.ConditionFalse, ReasonWaitingForOperation, "waiting to restore the backup to start from")
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, false, nil
+}
+
+// deleteBootstrapRestore deletes the instance's bootstrap OdooRestore when
+// the instance is deleted. The owner reference does the same, but restores
+// created before it was set have none.
+func (r *OdooDeploymentReconciler) deleteBootstrapRestore(ctx context.Context, od *odoov1.OdooDeployment) error {
+	name := od.Status.Bootstrap.Restore
+	if name == "" {
+		name = bootstrapRestoreName(od.Name)
+	}
+	rs := &odoov1.OdooRestore{}
+	err := r.reader().Get(ctx, client.ObjectKey{Namespace: od.Namespace, Name: name}, rs)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("get bootstrap OdooRestore %s: %w", name, err)
+	}
+	if rs.Spec.OdooDeployment != od.Name || !rs.DeletionTimestamp.IsZero() {
+		return nil
+	}
+	if err := r.Delete(ctx, rs); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete bootstrap OdooRestore %s: %w", name, err)
+	}
+	log.FromContext(ctx).Info("Deleted bootstrap restore", "restore", name)
+	return nil
+}
+
+// dropRestoreLeftovers drops, before the instance's own database, what its
+// restores left on the server and have not cleaned up yet: the database a
+// restore replaced (kept for an undo) and a half-restored copy. Each is
+// dropped only when it carries this instance's owner tag; one that does not
+// is left in place with a warning, as for the live database. done is false
+// when a drop failed and the deletion has to wait.
+func (r *OdooDeploymentReconciler) dropRestoreLeftovers(ctx context.Context, s *reconcileState,
+	conn database.ConnInfo, live string) (done bool, err error) {
+	od := s.od
+	w, err := r.listWork(ctx, od)
+	if err != nil {
+		return false, err
+	}
+	tag := database.NewOwnerTag(od.Namespace, od.Name)
+	for _, rs := range w.restores {
+		st := rs.Status
+		if st.Suffix == "" || st.CleanedUp {
+			continue
+		}
+		names := []string{layout.PrevName(live, st.Suffix), layout.RestoreName(live, st.Suffix)}
+		if st.Previous.Database != "" && st.Previous.Database != names[0] {
+			names = append(names, st.Previous.Database)
+		}
+		for _, name := range names {
+			if name == live {
+				continue
+			}
+			err := r.DB.Drop(ctx, conn, name, tag)
+			switch {
+			case errors.Is(err, database.ErrNotOwned):
+				msg := fmt.Sprintf("refusing to drop database %q left by OdooRestore %s: %v", name, rs.Name, err)
+				log.FromContext(ctx).Info(msg)
+				r.event(od, corev1.EventTypeWarning, odoov1.ReasonDatabaseDropRefused, msg)
+			case err != nil:
+				msg := fmt.Sprintf("could not drop database %q left by OdooRestore %s: %v", name, rs.Name, err)
+				log.FromContext(ctx).Error(err, "database drop failed", "database", name)
+				s.degraded(odoov1.ReasonDatabaseDropFailed, msg)
+				r.event(od, corev1.EventTypeWarning, odoov1.ReasonDatabaseDropFailed, msg)
+				return false, nil
+			}
+		}
+	}
+	return true, nil
 }

@@ -12,7 +12,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/layout"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/result"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/database"
 )
 
 // newBootstrapHarness is a new instance that starts from a backup file in a
@@ -111,6 +113,35 @@ var _ = Describe("Bootstrap from a backup", func() {
 		Eventually(func() *odoov1.OdooRestore { return h.bootstrapRestore() }).Should(BeNil())
 		h.reconcile()
 		Expect(h.bootstrapRestore()).To(BeNil())
+	})
+
+	It("goes with its instance, and so does the database it replaced", func() {
+		h = newBootstrapHarness(false)
+		_, od := h.reconcile()
+		rs := h.bootstrapRestore()
+		Expect(rs.OwnerReferences).To(ConsistOf(HaveField("UID", od.UID)), "garbage collected with the instance")
+		_, od = h.reconcile()
+		h.finishJob(od.Status.CurrentOperation.Job, &result.Result{
+			OK: true, LiveChanged: true, PreviousKept: true, OdooVersion: "18.0", File: "exports/shop.zip",
+		})
+		_, od = h.reconcile()
+		rs = h.bootstrapRestore()
+		Expect(rs.Status.Phase).To(Equal(odoov1.RestorePhaseCompleted))
+		prev := rs.Status.Previous.Database
+		Expect(prev).NotTo(BeEmpty())
+		tag := database.NewOwnerTag(ns, h.name)
+		h.fake.Seed(prev, tag) // the database the restore replaced keeps the instance's tag
+		half := layout.RestoreName(od.Status.Database.Name, rs.Status.Suffix)
+		h.fake.Seed(half, "someone-else")
+
+		Expect(k8sClient.Delete(ctx, od)).To(Succeed())
+		_, od = h.reconcile()
+		Expect(od).To(BeNil(), "the finalizer is gone and the CR with it")
+		Expect(h.fake.Has(prev)).To(BeFalse(), "the replaced database is dropped")
+		Expect(h.fake.Has(half)).To(BeTrue(), "a database without the instance's tag is never dropped")
+		Expect(h.fake.Has(h.dbName())).To(BeFalse())
+		gone := h.bootstrapRestore()
+		Expect(gone == nil || !gone.DeletionTimestamp.IsZero()).To(BeTrue(), "the bootstrap restore is deleted")
 	})
 
 	It("upgrades the restored database to spec.image when asked, and then needs no upgrade Job", func() {

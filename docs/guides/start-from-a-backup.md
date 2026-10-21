@@ -100,6 +100,10 @@ removing `spec.bootstrap` afterwards changes nothing, and deleting the
 OdooRestore only deletes the empty database it replaced, once
 `keepPrevious` has passed. The read-only store can then go.
 
+The bootstrap OdooRestore belongs to its instance: deleting the
+OdooDeployment deletes it too, so a new instance of the same name starts
+its own bootstrap instead of finding the old one.
+
 ## Make a staging copy of production
 
 Start a second instance from production's own backups, neutralized so it

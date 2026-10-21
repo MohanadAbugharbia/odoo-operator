@@ -184,6 +184,10 @@ spec:
 Only the latest restore can be undone. Deleting an OdooRestore deletes the data
 it kept.
 
-!!! warning "Deleting the instance keeps the previous data"
-    Deleting an OdooDeployment does not delete the `<db>_prev_<suffix>`
-    databases and folders its restores kept; drop them by hand.
+!!! note "Deleting the instance"
+    When deleting an OdooDeployment drops its database (`deletionPolicy:
+    Delete` on a database the operator created), it first drops the
+    `<db>_prev_<suffix>` databases its restores still keep, and any
+    half-restored `<db>_restore_<suffix>`, each only when it carries the
+    instance's owner comment. Their folders are on the instance's filestore
+    volume. With `deletionPolicy: Retain` they stay, like the database.

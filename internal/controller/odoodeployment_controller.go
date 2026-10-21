@@ -984,6 +984,15 @@ func (r *OdooDeploymentReconciler) reconcileDelete(ctx context.Context, s *recon
 		od.Spec.Database.DeletionPolicyValue() == odoov1.DeletionPolicyDelete &&
 		db.ProvisionedBy == odoov1.DatabaseProvisionedByOperator &&
 		db.Name != "" && db.Name == conn.Name
+	if drop {
+		done, err := r.dropRestoreLeftovers(ctx, s, reconcileloops.ConnInfoFor(od, conn), db.Name)
+		if err != nil {
+			return s.fail(odoov1.ReasonDeleting, err)
+		}
+		if !done {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+	}
 	switch {
 	case drop:
 		tag := database.NewOwnerTag(od.Namespace, od.Name)
@@ -1013,6 +1022,9 @@ func (r *OdooDeploymentReconciler) reconcileDelete(ctx context.Context, s *recon
 		r.event(od, corev1.EventTypeWarning, odoov1.ReasonDatabaseNotDropped, msg)
 	}
 
+	if err := r.deleteBootstrapRestore(ctx, od); err != nil {
+		return s.fail(odoov1.ReasonDeleting, err)
+	}
 	return ctrl.Result{}, s.setFinalizer(ctx, false)
 }
 
