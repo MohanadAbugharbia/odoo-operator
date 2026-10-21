@@ -27,13 +27,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
 )
 
 // The bootstrap creates the instance's first OdooRestore.
-// +kubebuilder:rbac:groups=odoo.abugharbia.com,resources=odoorestores,verbs=create
+// +kubebuilder:rbac:groups=odoo.abugharbia.com,resources=odoorestores,verbs=create;delete
 
 // ReasonBootstrap: the OdooRestore of spec.bootstrap.fromBackup was created.
 const ReasonBootstrap = "Bootstrap"
@@ -78,6 +79,13 @@ func (r *OdooDeploymentReconciler) bootstrap(ctx context.Context, s *reconcileSt
 				Neutralize:     from.Neutralize,
 				Upgrade:        from.Upgrade,
 			},
+		}
+		// Owned, not controlled: it goes with the instance whatever its
+		// deletionPolicy, and the OdooRestore controller releases its
+		// finalizer once the instance is gone.
+		if err := controllerutil.SetOwnerReference(od, rs, r.Scheme); err != nil {
+			res, err := s.fail(odoov1.ReasonReconcileFailed, err)
+			return res, false, err
 		}
 		if err := r.Create(ctx, rs); err != nil {
 			res, err := s.fail(odoov1.ReasonReconcileFailed, fmt.Errorf("create bootstrap OdooRestore %s: %w", name, err))
