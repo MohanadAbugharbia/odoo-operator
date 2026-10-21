@@ -1436,7 +1436,9 @@
   database never drops it, whatever the policy says. Dropping uses
   <code>DROP DATABASE … WITH (FORCE)</code>, which needs PostgreSQL 13 or later. If the
   connection Secret is already gone (for example when the whole namespace is
-  deleted) the database is left in place with a <code>DatabaseNotDropped</code> event.</li>
+  deleted) the database is left in place with a <code>DatabaseNotDropped</code> event.
+  With it go the databases the instance's restores kept for an undo
+  (<code>status.previous.database</code>), under the same tag check.</li>
 <li><code>spec.database.name</code> and the <code>nameFromSecret</code> selector are immutable so a
   rename can never orphan or drop the wrong database. Changing the value inside
   the Secret that <code>nameFromSecret</code> points at stops the instance instead: phase
