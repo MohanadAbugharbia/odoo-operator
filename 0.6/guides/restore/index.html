@@ -1728,6 +1728,11 @@ database keeps the module versions of the backup until the next upgrade.</p>
 <li><strong>Database privileges:</strong> a restore always creates and renames databases,
   whatever <code>spec.database.createPolicy</code> says, so the database user needs
   <code>CREATEDB</code>.</li>
+<li><strong>Users:</strong> the restore Job's steps run with the instance's
+  <code>podSecurityContext</code>. Without <code>runAsUser</code> there, the operator's steps and
+  Odoo's run as their images' own users, so the restored filestore is made
+  writable by the pod's group: folders <code>2775</code>, files <code>0664</code>. Set <code>fsGroup</code>
+  (the default does) so that group is one Odoo is in.</li>
 <li><strong>Downtime:</strong> Odoo is stopped from the start of the restore to the end of
   the swap. With a <code>ReadWriteOncePod</code> data volume it is stopped again, briefly,
   when the kept data is deleted after <code>keepPrevious</code>.</li>

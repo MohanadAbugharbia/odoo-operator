@@ -2,118 +2,118 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/getting-started/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/concepts/backups/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/concepts/databases/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/concepts/lifecycle/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/contributing/ci/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/contributing/development/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/contributing/docs/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/guides/backup-stores/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/guides/backups/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/guides/disaster-recovery/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/guides/drills/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/guides/expose/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/guides/grafana-dashboard/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/guides/maintenance-page/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/guides/monitoring/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/guides/production-backups/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/guides/restore/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/guides/start-from-a-backup/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/guides/store-check-prune/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/guides/uninstall/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/guides/upgrades/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/operations/troubleshooting/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/operations/upgrading-the-operator/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/reference/api/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/reference/configuration/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/reference/glossary/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/reference/metrics/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
     <url>
          <loc>https://odoo-operator.abugharbia.com/0.6/reference/operator-flags/</loc>
-         <lastmod>2026-10-20</lastmod>
+         <lastmod>2026-10-21</lastmod>
     </url>
 </urlset>
