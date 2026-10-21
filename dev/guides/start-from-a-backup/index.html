@@ -1702,7 +1702,11 @@ the checks found.</p>
 <a href="../production-backups/">set up backups</a>. The bootstrap runs once: changing or
 removing <code>spec.bootstrap</code> afterwards changes nothing, and deleting the
 OdooRestore only deletes the empty database it replaced, once
-<code>keepPrevious</code> has passed. The read-only store can then go.</p>
+<code>keepPrevious</code> has passed. The read-only store can then go. The OdooRestore
+<code>&lt;name&gt;-bootstrap</code> belongs to the instance: deleting the instance deletes it,
+and drops the empty database it kept along with the instance's own (when
+<code>deletionPolicy</code> is <code>Delete</code>), so a new instance of the same name starts its
+own bootstrap.</p>
 <h2 id="make-a-staging-copy-of-production">Make a staging copy of production<a class="headerlink" href="#make-a-staging-copy-of-production" title="Permanent link">&para;</a></h2>
 <p>Start a second instance from production's own backups, neutralized so it
 sends no mail, runs no scheduled actions and takes no payments. Give the
