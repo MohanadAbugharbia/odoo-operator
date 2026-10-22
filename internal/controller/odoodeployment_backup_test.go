@@ -617,9 +617,12 @@ var _ = Describe("Backups and restores", func() {
 		for _, tc := range []struct {
 			name string
 			res  *result.Result
+			// journalSettles: the next attempt's result, read from the
+			// restore journal, may end the restore.
+			journalSettles bool
 		}{
-			{"after the swap started", &result.Result{OK: false, Step: result.StepSwap, Error: "rename failed", LiveChanged: true}},
-			{"without a result", nil},
+			{"after the swap started", &result.Result{OK: false, Step: result.StepSwap, Error: "rename failed", LiveChanged: true}, false},
+			{"without a result", nil, true},
 		} {
 			It("keeps Odoo stopped and retries when it fails "+tc.name, func() {
 				h = newBackupHarness()
@@ -632,6 +635,7 @@ var _ = Describe("Backups and restores", func() {
 				fresh := h.restore("r")
 				Expect(fresh.Status.Phase).To(Equal(odoov1.RestorePhaseRestoring))
 				Expect(fresh.Status.LiveChanged).To(BeTrue())
+				Expect(fresh.Status.LiveChangeUnconfirmed).To(Equal(tc.journalSettles))
 				Expect(fresh.Status.RetryAfter).NotTo(BeNil())
 				Expect(fresh.Status.Message).To(ContainSubstring("Odoo stays stopped"))
 				Expect(od.Status.Phase).To(Equal(odoov1.PhaseRestoring))
@@ -656,9 +660,19 @@ var _ = Describe("Backups and restores", func() {
 				Expect(jobArgs(h.job(second))).To(ContainSubstring("--suffix " + fresh.Status.Suffix))
 				Expect(h.restore("r").Status.Attempts).To(Equal(int32(2)))
 
-				By("even a refusal now cannot fail it: it must be finished")
-				h.finishJob(second, &result.Result{OK: false, Step: result.StepSwap, Error: "again", LiveChanged: false})
+				h.finishJob(second, &result.Result{OK: false, Step: result.StepCheck, Error: "again", LiveChanged: false})
 				h.reconcile()
+				if tc.journalSettles {
+					By("a result saying the swap never started ends a restore only an attempt without a result held")
+					fresh = h.restore("r")
+					Expect(fresh.Status.Phase).To(Equal(odoov1.RestorePhaseFailed))
+					Expect(fresh.Status.LiveChanged).To(BeFalse())
+					Expect(fresh.Status.LiveChangeUnconfirmed).To(BeFalse())
+					Expect(fresh.Status.Message).To(ContainSubstring("the restore journal shows the swap never started"))
+					Expect(fresh.Status.Message).To(ContainSubstring("the live data was not changed"))
+					return
+				}
+				By("even a refusal now cannot fail it: it must be finished")
 				Expect(h.restore("r").Status.Phase).To(Equal(odoov1.RestorePhaseRestoring))
 				Expect(restoreRetryDelay(2)).To(Equal(time.Minute))
 			})

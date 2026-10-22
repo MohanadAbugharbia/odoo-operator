@@ -224,6 +224,15 @@ spec:
                   Job is the Job running the restore. Attempts counts the Jobs that
                   ran it.
                 type: string
+              liveChangeUnconfirmed:
+                description: |-
+                  LiveChangeUnconfirmed is true while liveChanged rests only on
+                  attempts that ended without a result after their main container may
+                  have started (it ran, or the pods that would tell are gone).
+                  The next attempt reads the restore journal: when it reports that the
+                  swap never started, the restore fails with the live data unchanged
+                  instead of being retried.
+                type: boolean
               liveChanged:
                 description: |-
                   LiveChanged is true once the restore may have renamed the live

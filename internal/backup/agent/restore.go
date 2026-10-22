@@ -210,15 +210,19 @@ func Restore(ctx context.Context, e *Env, o RestoreOptions) result.Result {
 	r := &restoreRun{e: e, o: o, live: e.Config.Name, path: filepath.Join(o.DataRoot, layout.JournalFile(o.Suffix))}
 	j, err := readJournal(r.path)
 	if err != nil {
-		return result.Failed(result.StepConnect, err)
+		// The journal is what says whether the swap started; without it
+		// the live data may have changed.
+		res := result.Failed(result.StepConnect, err)
+		res.LiveChanged = true
+		return res
 	}
 	if j == nil {
 		j = &journal{Version: journalVersion, Mode: o.Mode, Suffix: o.Suffix}
 	}
-	if j.Mode != o.Mode {
-		return result.Failed(result.StepConnect, fmt.Errorf("restore journal is for a %s, not a %s", j.Mode, o.Mode))
-	}
 	r.j = j
+	if j.Mode != o.Mode {
+		return r.failed(result.StepConnect, fmt.Errorf("restore journal is for a %s, not a %s", j.Mode, o.Mode))
+	}
 	if j.Stage == stageNew && o.WorkDir != "" && !o.LoadOnly {
 		// The load step stopped before the backup was loaded: its result
 		// says why.

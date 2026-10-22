@@ -64,6 +64,15 @@ func (r *OdooDeploymentReconciler) bootstrap(ctx context.Context, s *reconcileSt
 	name := bootstrapRestoreName(od.Name)
 	rs := &odoov1.OdooRestore{}
 	err = r.Get(ctx, client.ObjectKey{Namespace: od.Namespace, Name: name}, rs)
+	if err != nil && !apierrors.IsNotFound(err) {
+		res, err := s.fail(odoov1.ReasonReconcileFailed, err)
+		return res, false, err
+	}
+	if od.Status.Database.ProvisionedBy != odoov1.DatabaseProvisionedByOperator &&
+		(err != nil || rs.Status.Phase != odoov1.RestorePhaseCompleted) {
+		res, err := r.refuseBootstrap(ctx, s, rs, err == nil)
+		return res, false, err
+	}
 	switch {
 	case apierrors.IsNotFound(err):
 		from := od.Spec.Bootstrap.FromBackup
@@ -96,9 +105,6 @@ func (r *OdooDeploymentReconciler) bootstrap(ctx context.Context, s *reconcileSt
 		r.event(od, corev1.EventTypeNormal, ReasonBootstrap, "Created OdooRestore "+name+" to start from the backup")
 		log.FromContext(ctx).Info("Created bootstrap restore", "restore", name)
 		return ctrl.Result{RequeueAfter: time.Second}, false, nil
-	case err != nil:
-		res, err := s.fail(odoov1.ReasonReconcileFailed, err)
-		return res, false, err
 	case rs.Spec.OdooDeployment != od.Name:
 		msg := fmt.Sprintf("OdooRestore %s restores %s, not %s; rename one of them", name, rs.Spec.OdooDeployment, od.Name)
 		s.degraded(odoov1.ReasonBootstrapFailed, msg)
@@ -125,4 +131,40 @@ func (r *OdooDeploymentReconciler) bootstrap(ctx context.Context, s *reconcileSt
 	od.Status.Phase = odoov1.PhaseInitializing
 	s.ready(metav1.ConditionFalse, ReasonWaitingForOperation, "waiting to restore the backup to start from")
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, false, nil
+}
+
+// refuseBootstrap stops the bootstrap of an instance whose database the
+// operator did not create: it existed before (status.database.provisionedBy
+// external), so it holds someone's data, and a bootstrap only ever fills a
+// new database. The instance waits, Odoo is neither started nor initialized
+// on it, until spec.bootstrap is removed (Odoo then runs the existing
+// database) or the database is replaced deliberately with an OdooRestore.
+// A bootstrap OdooRestore that exists but never ran is failed, so that it
+// does not run later as an ordinary restore. found says whether rs exists.
+func (r *OdooDeploymentReconciler) refuseBootstrap(ctx context.Context, s *reconcileState,
+	rs *odoov1.OdooRestore, found bool) (ctrl.Result, error) {
+	od := s.od
+	db := od.Status.Database.Name
+	msg := fmt.Sprintf("database %q already exists and the operator did not create it, so spec.bootstrap.fromBackup is not restored over it: "+
+		"a bootstrap only fills a new database. Remove spec.bootstrap to run Odoo on the existing database, "+
+		"or create an OdooRestore to replace its data deliberately", db)
+	if found && rs.Spec.OdooDeployment == od.Name && (rs.Status.Phase == "" || rs.Status.Phase == odoov1.RestorePhasePending) {
+		if err := r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) {
+			st.Phase = odoov1.RestorePhaseFailed
+			st.Message = msg
+			now := metav1.Now()
+			st.CompletedAt = &now
+			st.CleanedUp = true // nothing ran, nothing to clean
+		}); err != nil {
+			return s.fail(odoov1.ReasonReconcileFailed, err)
+		}
+	}
+	od.Status.Phase = odoov1.PhasePending
+	s.degraded(odoov1.ReasonBootstrapFailed, msg)
+	s.ready(metav1.ConditionFalse, odoov1.ReasonBootstrapFailed, "the database to start from a backup already exists")
+	if s.enteredDegraded(odoov1.ReasonBootstrapFailed) {
+		r.event(od, corev1.EventTypeWarning, odoov1.ReasonBootstrapFailed, msg)
+		log.FromContext(ctx).Info("Refused to bootstrap over an existing database", "database", db)
+	}
+	return ctrl.Result{RequeueAfter: time.Minute}, nil
 }

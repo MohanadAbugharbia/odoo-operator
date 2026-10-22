@@ -960,7 +960,8 @@ var _ = Describe("OdooBackup and OdooRestore reconcilers", func() {
 				setRestorePhase(name, phase)
 				rs := reconcileRestore(name)
 				Expect(rs.Status.Phase).To(Equal(odoov1.RestorePhaseFailed))
-				Expect(rs.Status.Message).To(Equal(fmt.Sprintf("OdooDeployment %s was deleted while the restore was running", h.name)))
+				Expect(rs.Status.Message).To(HavePrefix(fmt.Sprintf("OdooDeployment %s was deleted while the restore was running", h.name)))
+				Expect(rs.Status.Message).To(ContainSubstring("waited for job some-job to stop"))
 				Expect(rs.Status.Job).To(BeEmpty())
 			},
 			Entry("Stopping", odoov1.RestorePhaseStopping),

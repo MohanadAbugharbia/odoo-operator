@@ -514,6 +514,9 @@ func (r *OdooDeploymentReconciler) startOperationJob(ctx context.Context, s *rec
 		s.ready(metav1.ConditionFalse, ReasonWaitingForOperation, "waiting for job "+j.Name+" to finish")
 		return "", nil
 	}
+	if err := s.holdForJob(ctx); err != nil {
+		return "", err
+	}
 	if err := r.createJob(ctx, od, job); err != nil {
 		return "", err
 	}
@@ -543,10 +546,17 @@ type jobOutcome struct {
 	detail string
 	// pullMessage is set while the Job's pod cannot pull its image.
 	pullMessage string
+	// mainStarted is false only when no pod of the finished Job got as far
+	// as its main container (a step before it failed, or no pod ran at
+	// all), and every pod the Job counted is still there to show it.
+	mainStarted bool
 }
 
 // observeJob reads the state of a backup Job and, once it has finished, the
-// Result its last pod wrote.
+// Result its newest pod wrote. Only the newest pod speaks for the Job: an
+// older attempt's result is stale once another pod ran after it, so when the
+// newest pod's main container did not finish (it never started, still runs,
+// or the pod is gone) the outcome has no Result.
 func (r *OdooDeploymentReconciler) observeJob(ctx context.Context, namespace, name string) (jobOutcome, error) {
 	od := &odoov1.OdooDeployment{}
 	od.Namespace = namespace
@@ -567,30 +577,113 @@ func (r *OdooDeploymentReconciler) observeJob(ctx context.Context, namespace, na
 	if err := r.reader().List(ctx, pods, client.InNamespace(namespace), client.MatchingLabels{"job-name": name}); err != nil {
 		return out, fmt.Errorf("list pods of job %s: %w", name, err)
 	}
-	var latest *corev1.ContainerStateTerminated
+	out.mainStarted = obs.Job != nil && len(pods.Items) < int(obs.Job.Status.Failed+obs.Job.Status.Succeeded)
 	for i := range pods.Items {
-		for _, cs := range pods.Items[i].Status.ContainerStatuses {
-			if cs.Name != jobspec.ContainerName || cs.State.Terminated == nil {
-				continue
-			}
-			t := cs.State.Terminated
-			if latest == nil || t.FinishedAt.After(latest.FinishedAt.Time) {
-				latest = t
-			}
+		if mainMayHaveRun(&pods.Items[i]) {
+			out.mainStarted = true
 		}
 	}
-	if latest == nil {
+	newest := newestPod(pods.Items)
+	if newest == nil {
 		return out, nil
 	}
-	res, err := result.Decode(latest.Message)
+	var main *corev1.ContainerStateTerminated
+	for _, cs := range newest.Status.ContainerStatuses {
+		if cs.Name == jobspec.ContainerName {
+			main = cs.State.Terminated
+		}
+	}
+	if main == nil {
+		if why := podFailureText(newest); why != "" && out.detail != "" {
+			out.detail = why + "; " + out.detail
+		} else if why != "" {
+			out.detail = why
+		}
+		return out, nil
+	}
+	res, err := result.Decode(main.Message)
 	if err != nil {
 		if out.detail == "" {
-			out.detail = fmt.Sprintf("%s (exit code %d)", latest.Reason, latest.ExitCode)
+			out.detail = fmt.Sprintf("%s (exit code %d)", main.Reason, main.ExitCode)
 		}
 		return out, nil
 	}
 	out.result, out.decoded = res, true
 	return out, nil
+}
+
+// newestPod is the pod created last, the Job's latest attempt; pods created
+// in the same second are told apart by name, so the choice is stable.
+func newestPod(pods []corev1.Pod) *corev1.Pod {
+	var newest *corev1.Pod
+	for i := range pods {
+		p := &pods[i]
+		if newest == nil || newest.CreationTimestamp.Before(&p.CreationTimestamp) ||
+			(newest.CreationTimestamp.Equal(&p.CreationTimestamp) && p.Name > newest.Name) {
+			newest = p
+		}
+	}
+	return newest
+}
+
+// mainMayHaveRun reports whether the pod's main container may have started.
+// Only a pod that shows it never got that far says no: its main container
+// is waiting and never ran before, or it has no status for it while the pod
+// is pending or failed and did not get through its steps (init containers).
+func mainMayHaveRun(p *corev1.Pod) bool {
+	for _, cs := range p.Status.ContainerStatuses {
+		if cs.Name == jobspec.ContainerName {
+			return cs.State.Waiting == nil || cs.LastTerminationState.Terminated != nil || cs.LastTerminationState.Running != nil
+		}
+	}
+	if p.Status.Phase != corev1.PodPending && p.Status.Phase != corev1.PodFailed {
+		return true
+	}
+	if len(p.Status.InitContainerStatuses) < len(p.Spec.InitContainers) {
+		return false
+	}
+	for _, cs := range p.Status.InitContainerStatuses {
+		if t := cs.State.Terminated; t == nil || t.ExitCode != 0 {
+			return false
+		}
+	}
+	// Every step succeeded but the main container has no status yet.
+	return len(p.Spec.InitContainers) > 0
+}
+
+// podFailureText says why a pod's main container did not finish, from what
+// the kubelet reported: a step (init container) that failed or could not
+// start, a main container that could not start, or the pod's own reason
+// (evicted, deadline exceeded). It is "" when nothing says why.
+func podFailureText(p *corev1.Pod) string {
+	for _, cs := range p.Status.InitContainerStatuses {
+		if t := cs.State.Terminated; t != nil && t.ExitCode != 0 {
+			return fmt.Sprintf("failed in step %s: %s (exit code %d)", cs.Name, orDefault(t.Reason, "Error"), t.ExitCode)
+		}
+		if w := cs.State.Waiting; w != nil && w.Reason != "" && w.Reason != "PodInitializing" {
+			return joinDetail(fmt.Sprintf("step %s could not start: %s", cs.Name, w.Reason), w.Message)
+		}
+	}
+	for _, cs := range p.Status.ContainerStatuses {
+		if w := cs.State.Waiting; cs.Name == jobspec.ContainerName && w != nil && w.Reason != "" && w.Reason != "PodInitializing" {
+			return joinDetail(fmt.Sprintf("step %s could not start: %s", cs.Name, w.Reason), w.Message)
+		}
+	}
+	if p.Status.Reason != "" {
+		return joinDetail("pod "+p.Name+" "+p.Status.Reason, p.Status.Message)
+	}
+	return ""
+}
+
+// joinDetail joins two parts of a failure description, leaving out empty ones.
+func joinDetail(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	}
+	return a + ": " + b
 }
 
 // failureText describes a failed Job for a status message.
@@ -649,7 +742,11 @@ func (r *OdooDeploymentReconciler) abandonOperation(ctx context.Context, s *reco
 			s.ready(metav1.ConditionFalse, ReasonWaitingForOperation, why+"; waiting for job "+op.Job+" to finish")
 			return ctrl.Result{RequeueAfter: 15 * time.Second}, false, nil
 		}
-		if op.Kind == odoov1.OperationRestore && (!out.decoded || out.result.LiveChanged) && (!out.decoded || !out.result.OK) {
+		mayHaveChanged := out.result.LiveChanged && !out.result.OK
+		if !out.decoded {
+			mayHaveChanged = out.mainStarted
+		}
+		if op.Kind == odoov1.OperationRestore && mayHaveChanged {
 			// The restore may have renamed the live data and nobody can
 			// finish it any more: keep Odoo stopped for a person to look.
 			msg := fmt.Sprintf("%s while job %s had not finished the swap; Odoo stays stopped. "+
@@ -983,6 +1080,9 @@ func (r *OdooDeploymentReconciler) reachStore(ctx context.Context, s *reconcileS
 			return r.finishBackupFailed(ctx, s, b, err.Error())
 		}
 		if err := controllerutil.SetControllerReference(od, &job, r.Scheme); err != nil {
+			return ctrl.Result{}, false, err
+		}
+		if err := s.holdForJob(ctx); err != nil {
 			return ctrl.Result{}, false, err
 		}
 		if err := r.Create(ctx, &job); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -1373,8 +1473,21 @@ func (r *OdooDeploymentReconciler) driveRestore(ctx context.Context, s *reconcil
 	}
 
 	msg := fmt.Sprintf("job %s %s; inspect with: kubectl -n %s logs job/%s", op.Job, failureText(out), od.Namespace, op.Job)
-	liveChanged := rs.Status.LiveChanged || !out.decoded || out.result.LiveChanged
+	liveChanged, unconfirmed := liveChangeAfter(rs.Status, out)
 	if !liveChanged {
+		if !out.decoded {
+			msg += "; no pod of it got past the steps before the swap"
+		}
+		if rs.Status.LiveChanged {
+			// Only an earlier attempt without a result made it look started.
+			msg += "; the restore journal shows the swap never started"
+			if err := r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) {
+				st.LiveChanged = false
+				st.LiveChangeUnconfirmed = false
+			}); err != nil {
+				return ctrl.Result{}, false, err
+			}
+		}
 		return r.finishRestoreFailed(ctx, s, rs, msg)
 	}
 	// The swap may have started: the only safe way out is forward.
@@ -1385,6 +1498,7 @@ func (r *OdooDeploymentReconciler) driveRestore(ctx context.Context, s *reconcil
 	err = r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) {
 		st.Message = full
 		st.LiveChanged = true
+		st.LiveChangeUnconfirmed = unconfirmed
 		st.RetryAfter = &retry
 		st.Job = ""
 	})
@@ -1395,6 +1509,28 @@ func (r *OdooDeploymentReconciler) driveRestore(ctx context.Context, s *reconcil
 	r.objectEvent(rs, corev1.EventTypeWarning, ReasonRestoreIncomplete, full)
 	op.Job = ""
 	return ctrl.Result{RequeueAfter: delay}, false, nil
+}
+
+// liveChangeAfter decides, after a failed restore attempt, whether the
+// restore may have changed the live data, which only its main container
+// does (the swap), and whether that rests only on attempts that left no
+// result. The agent's result is read from the restore journal on the data
+// volume, so it speaks for every attempt before it: a result saying the swap
+// has not started clears a change that only an attempt without a result
+// suggested, never one a result reported. An attempt whose pods never
+// reached the main container changes nothing either way.
+func liveChangeAfter(st odoov1.OdooRestoreStatus, out jobOutcome) (changed, unconfirmed bool) {
+	confirmed := st.LiveChanged && !st.LiveChangeUnconfirmed
+	switch {
+	case out.decoded && out.result.LiveChanged:
+		return true, false
+	case out.decoded:
+		return confirmed, false
+	case out.mainStarted:
+		return true, !confirmed
+	default:
+		return st.LiveChanged, st.LiveChangeUnconfirmed
+	}
 }
 
 // restoreUpgradeModules are the modules an OdooRestore with spec.upgrade
@@ -1447,6 +1583,7 @@ func (r *OdooDeploymentReconciler) finishRestore(ctx context.Context, s *reconci
 		st.Image = image
 		st.OdooVersion = res.OdooVersion
 		st.LiveChanged = true
+		st.LiveChangeUnconfirmed = false
 		st.RetryAfter = nil
 		st.Warnings = res.Warnings
 		if res.SnapshotID != "" {
