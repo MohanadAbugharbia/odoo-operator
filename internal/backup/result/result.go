@@ -32,6 +32,20 @@ import (
 // MaxBytes is the most Kubernetes keeps of a termination message.
 const MaxBytes = 4096
 
+// Exit codes of the agent's commands. A Job's pod failure policy ends the
+// Job at once on ExitUsage and ExitFinal, which a retry cannot change; any
+// other failure (ExitFailed, a killed or evicted pod) is retried up to the
+// Job's backoff limit.
+const (
+	// ExitFailed: the Job failed in a way a retry may get past.
+	ExitFailed = 1
+	// ExitUsage: the command line is wrong (flags the agent does not know).
+	ExitUsage = 2
+	// ExitFinal: the Job failed in a way no retry can change (Result.Final),
+	// such as a backup that does not pass its checks.
+	ExitFinal = 3
+)
+
 // Steps a Job reports failing at.
 const (
 	StepConnect   = "connect"
@@ -59,6 +73,10 @@ type Result struct {
 	Step string `json:"step,omitempty"`
 	// Error says why it failed.
 	Error string `json:"error,omitempty"`
+	// Final: the failure is one a retry of the Job cannot change, such as a
+	// restore refused by its checks. The agent exits with ExitFinal, which
+	// ends the Job without its other attempts.
+	Final bool `json:"final,omitempty"`
 	// Deferred: the backup did not start because Odoo's filestore cleanup
 	// is running or about to; the operator retries.
 	Deferred bool `json:"deferred,omitempty"`
@@ -127,6 +145,19 @@ func Failed(step string, err error) Result {
 	return Result{Step: step, Error: err.Error()}
 }
 
+// ExitCode is the exit code of a command that ends with r: 0 when it
+// succeeded (or was deferred), ExitFinal for a final failure, ExitFailed
+// for any other.
+func ExitCode(r Result) int {
+	switch {
+	case r.OK:
+		return 0
+	case r.Final:
+		return ExitFinal
+	}
+	return ExitFailed
+}
+
 const (
 	moreWarnings = "(more warnings in the Job log)"
 	errorCut     = "… (see the Job log)"
@@ -176,7 +207,7 @@ func Encode(r Result) []byte {
 			// Nothing left to trim but the free-form fields. Each is bounded
 			// here, so this fits even when every byte is JSON-escaped.
 			b, err := json.Marshal(Result{OK: r.OK, Step: truncate(r.Step, 64), Error: truncate(r.Error, 256),
-				Deferred: r.Deferred, SnapshotID: truncate(r.SnapshotID, 128),
+				Final: r.Final, Deferred: r.Deferred, SnapshotID: truncate(r.SnapshotID, 128),
 				LiveChanged: r.LiveChanged, PreviousKept: r.PreviousKept, Forgotten: r.Forgotten,
 				RetentionError: truncate(r.RetentionError, 256), Copies: shortCopies(r.Copies),
 				Repositories: r.Repositories, StoredBytes: r.StoredBytes})

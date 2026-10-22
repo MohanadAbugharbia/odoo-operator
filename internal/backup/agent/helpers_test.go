@@ -513,8 +513,8 @@ func TestRestoreGuards(t *testing.T) {
 	}
 	for _, c := range cases {
 		res := Restore(ctx, hEnv(), c.o)
-		if res.OK || res.Step != result.StepConnect || !strings.Contains(res.Error, c.msg) || res.LiveChanged {
-			t.Errorf("%s: %+v", c.name, res)
+		if res.OK || res.Step != result.StepConnect || !strings.Contains(res.Error, c.msg) || res.LiveChanged || !res.Final {
+			t.Errorf("%s: %+v; a retry cannot change it", c.name, res)
 		}
 	}
 	entries, _ := os.ReadDir(data)
@@ -530,16 +530,37 @@ func TestRestoreJournalGuards(t *testing.T) {
 
 	hWrite(t, path, []byte("garbage"))
 	res := Restore(ctx, hEnv(), RestoreOptions{Mode: ModeRestore, Suffix: hSuffix, DataRoot: data})
-	if res.OK || !strings.Contains(res.Error, "unreadable") {
-		t.Fatalf("unreadable journal: %+v", res)
+	if res.OK || !strings.Contains(res.Error, "unreadable") || res.Final {
+		t.Fatalf("unreadable journal: %+v; the live data may have changed, so a retry must look again", res)
 	}
 
 	if err := (&journal{Version: 1, Mode: ModeUndo, Suffix: hSuffix}).save(path); err != nil {
 		t.Fatal(err)
 	}
 	res = Restore(ctx, hEnv(), RestoreOptions{Mode: ModeRestore, Suffix: hSuffix, DataRoot: data})
-	if res.OK || !strings.Contains(res.Error, "journal is for a undo, not a restore") {
+	if res.OK || !strings.Contains(res.Error, "journal is for a undo, not a restore") || !res.Final {
 		t.Fatalf("mode mismatch: %+v", res)
+	}
+}
+
+// A final error is reported final only while the live data is untouched:
+// once the swap has started, a retry is what finishes it.
+func TestFinalErrors(t *testing.T) {
+	err := final(fmt.Errorf("the restored database does not match the backup"))
+	if !isFinal(err) || !isFinal(fmt.Errorf("wrapped: %w", err)) || isFinal(errors.New("connection refused")) {
+		t.Fatal("isFinal")
+	}
+	if final(nil) != nil {
+		t.Fatal("final(nil)")
+	}
+	for stage, want := range map[string]bool{stageNew: true, stageRestored: true, stageSwapping: false, stageSwapped: false} {
+		r := &restoreRun{j: &journal{Stage: stage}}
+		if res := r.failed(result.StepCheck, err); res.Final != want || res.LiveChanged == want {
+			t.Errorf("stage %q: %+v", stage, res)
+		}
+		if res := r.failed(result.StepCheck, errors.New("connection refused")); res.Final {
+			t.Errorf("stage %q: an infrastructure failure is retried: %+v", stage, res)
+		}
 	}
 }
 
@@ -557,7 +578,7 @@ func TestRestoreConnectFailureReportsLiveState(t *testing.T) {
 			}
 		}
 		res := Restore(ctx, hEnv(), RestoreOptions{Mode: ModeRestore, Suffix: hSuffix, Snapshot: "x", DataRoot: data})
-		if res.OK || res.Step != result.StepConnect || res.LiveChanged != c.live {
+		if res.OK || res.Step != result.StepConnect || res.LiveChanged != c.live || res.Final {
 			t.Errorf("stage %q: %+v", c.stage, res)
 		}
 	}

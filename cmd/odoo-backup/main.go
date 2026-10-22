@@ -137,7 +137,7 @@ func envOr(key, fallback string) string {
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)
-		os.Exit(2)
+		os.Exit(result.ExitUsage)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
@@ -169,11 +169,11 @@ func run(ctx context.Context, command string, args []string) int {
 		dataRoot := fs.String("data", layout.DataMount, "root of the instance's data volume")
 		database := fs.String("database", "", "database name (the filestore folder)")
 		if err := fs.Parse(args); err != nil {
-			return 2
+			return result.ExitUsage
 		}
 		if *database == "" {
 			fmt.Fprintln(os.Stderr, "prepare: --database is required")
-			return 2
+			return result.ExitUsage
 		}
 		if err := agent.Prepare(*dataRoot, *database); err != nil {
 			fmt.Fprintln(os.Stderr, "prepare:", err)
@@ -189,12 +189,12 @@ func run(ctx context.Context, command string, args []string) int {
 		readOnly := fs.Bool("read-only", false, "only list the store (a read-only store)")
 		terminationLog := fs.String("termination-log", layout.TerminationLog, "where the result is written")
 		if err := fs.Parse(args); err != nil {
-			return 2
+			return result.ExitUsage
 		}
 		return finish(*terminationLog, agent.Probe(ctx, agent.ProbeOptions{Target: *target, ReadOnly: *readOnly}))
 	default:
 		fmt.Fprint(os.Stderr, usage)
-		return 2
+		return result.ExitUsage
 	}
 }
 
@@ -231,25 +231,25 @@ func runBackup(ctx context.Context, fs *flag.FlagSet, c *common, args []string) 
 	fs.Var(&protectBackups, "protect-backup", "OdooBackup never forgotten (repeatable)")
 	fs.Var(&protectSnapshots, "protect-snapshot", "snapshot ID never forgotten (repeatable)")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return result.ExitUsage
 	}
 	if withRetention {
 		loc, err := schedule.Location(timeZone)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "backup: --time-zone:", err)
-			return 2
+			return result.ExitUsage
 		}
 		ret.Policy.Location = loc
 		if err := ret.Policy.Validate(); err != nil {
 			fmt.Fprintln(os.Stderr, "backup:", err)
-			return 2
+			return result.ExitUsage
 		}
 		ret.ProtectBackups, ret.ProtectSnapshots = protectBackups, protectSnapshots
 		o.Retention = &ret
 	}
 	if o.Namespace == "" || o.Deployment == "" || o.Backup == "" {
 		fmt.Fprintln(os.Stderr, "backup: --namespace, --deployment and --backup are required")
-		return 2
+		return result.ExitUsage
 	}
 	o.Version = version
 	e, err := c.env()
@@ -258,7 +258,7 @@ func runBackup(ctx context.Context, fs *flag.FlagSet, c *common, args []string) 
 	}
 	if o.Copies, err = agent.CopyTargetsFromEnv(e.Restic, copies); err != nil {
 		fmt.Fprintln(os.Stderr, "backup:", err)
-		return 2
+		return result.ExitUsage
 	}
 	return finish(c.terminationLog, agent.Backup(ctx, e, o))
 }
@@ -292,7 +292,7 @@ func runRestore(ctx context.Context, fs *flag.FlagSet, c *common, command string
 	fs.StringVar(&modules, "expect-modules", "", "comma-separated modules the instance should have")
 	fs.IntVar(&o.CheckSample, "check-sample", 200, "restored files whose content is checked")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return result.ExitUsage
 	}
 	for _, m := range strings.Split(modules, ",") {
 		if m = strings.TrimSpace(m); m != "" {
@@ -306,20 +306,20 @@ func runRestore(ctx context.Context, fs *flag.FlagSet, c *common, command string
 	}
 	if len(o.UpgradeModules) > 0 && (o.UpgradeImage == "" || o.WorkDir == "") {
 		fmt.Fprintln(os.Stderr, "restore: --upgrade needs --upgrade-image and --work-dir")
-		return 2
+		return result.ExitUsage
 	}
 	o.Tags = tags
 	if o.File != "" && (!agent.IsBackupFile(o.File) || o.StoreTarget == "") {
 		fmt.Fprintln(os.Stderr, "restore: --file must end in .zip or .dump, and needs --store-target")
-		return 2
+		return result.ExitUsage
 	}
 	if o.LoadOnly && o.WorkDir == "" {
 		fmt.Fprintln(os.Stderr, "restore: --load-only needs --work-dir")
-		return 2
+		return result.ExitUsage
 	}
 	if o.FinishSwap && (o.LoadOnly || o.WorkDir != "") {
 		fmt.Fprintln(os.Stderr, "restore: --finish-swap runs alone, without --load-only or --work-dir")
-		return 2
+		return result.ExitUsage
 	}
 	var res result.Result
 	if e, err := c.env(); err != nil {
@@ -351,7 +351,7 @@ func runDrill(ctx context.Context, fs *flag.FlagSet, c *common, command string, 
 	fs.StringVar(&modules, "expect-modules", "", "comma-separated modules the instance should have")
 	fs.IntVar(&o.CheckSample, "check-sample", 200, "restored files whose content is checked")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return result.ExitUsage
 	}
 	for _, m := range strings.Split(modules, ",") {
 		if m = strings.TrimSpace(m); m != "" {
@@ -384,14 +384,14 @@ func runStoreTask(ctx context.Context, fs *flag.FlagSet, task string, args []str
 	fs.Var(&repos, "repository", "<namespace>/<deployment>=<restic repository> (repeatable)")
 	fs.Var(&options, "restic-option", "restic -o option (repeatable)")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return result.ExitUsage
 	}
 	o := agent.StoreTaskOptions{Task: task, ReadData: *readData}
 	for _, r := range repos {
 		name, url, ok := strings.Cut(r, "=")
 		if !ok || name == "" || url == "" {
 			fmt.Fprintf(os.Stderr, "%s: --repository %q is not <name>=<repository>\n", task, r)
-			return 2
+			return result.ExitUsage
 		}
 		o.Repositories = append(o.Repositories, agent.Repository{Name: name, URL: url})
 	}
@@ -404,7 +404,7 @@ func runCleanup(ctx context.Context, fs *flag.FlagSet, c *common, args []string)
 	suffix := fs.String("suffix", "", "suffix of the restore whose data is deleted")
 	dataRoot := fs.String("data", layout.DataMount, "root of the instance's data volume")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return result.ExitUsage
 	}
 	e, err := c.env()
 	if err != nil {
@@ -413,8 +413,6 @@ func runCleanup(ctx context.Context, fs *flag.FlagSet, c *common, args []string)
 	return finish(c.terminationLog, agent.Cleanup(ctx, e, *dataRoot, *suffix))
 }
 
-// finish writes the result and returns the exit code: 0 when it succeeded
-// (or was deferred), 1 when it failed, so the Job's backoff retries it.
 // runExport writes a snapshot as an Odoo zip. It needs only the repository
 // (RESTIC_REPOSITORY and its password, as restic reads them), not odoo.conf.
 func runExport(ctx context.Context, fs *flag.FlagSet, c *common, args []string) int {
@@ -428,18 +426,18 @@ func runExport(ctx context.Context, fs *flag.FlagSet, c *common, args []string) 
 	fs.StringVar(&o.Output, "output", "", "file to write the zip to; - for stdout")
 	fs.StringVar(&o.Target, "target", "", "rclone path to upload the zip to; ending in / names the zip <db>_<time>.zip")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return result.ExitUsage
 	}
 	o.Tags = tags
 	if (o.Output == "") == (o.Target == "") {
 		fmt.Fprintln(os.Stderr, "export: set one of --output and --target")
-		return 2
+		return result.ExitUsage
 	}
 	o.Stdout = os.Stdout
 	e, err := c.env()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "export:", err)
-		return 2
+		return result.ExitUsage
 	}
 	r := agent.Export(ctx, e, o)
 	if r.OK {
@@ -448,6 +446,10 @@ func runExport(ctx context.Context, fs *flag.FlagSet, c *common, args []string) 
 	return finish(c.terminationLog, r)
 }
 
+// finish writes the result and returns the exit code (result.ExitCode): 0
+// when it succeeded (or was deferred), result.ExitFailed when it failed, so
+// the Job's backoff retries it, and result.ExitFinal when no retry can change
+// the outcome, which the Job's pod failure policy ends at once.
 func finish(terminationLog string, r result.Result) int {
 	if err := result.Write(terminationLog, r); err != nil {
 		fmt.Fprintln(os.Stderr, "could not write the result:", err)
@@ -457,5 +459,8 @@ func finish(terminationLog string, r result.Result) int {
 		return 0
 	}
 	fmt.Fprintf(os.Stderr, "failed at step %s: %s\n", r.Step, r.Error)
-	return 1
+	if r.Final {
+		fmt.Fprintln(os.Stderr, "a retry cannot change this: the Job ends without its other attempts")
+	}
+	return result.ExitCode(r)
 }

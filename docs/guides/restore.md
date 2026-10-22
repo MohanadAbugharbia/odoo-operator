@@ -152,7 +152,24 @@ database keeps the module versions of the backup until the next upgrade.
 ## What happens if something goes wrong
 
 The live data is never edited in place, so a restore can fail without
-damaging it, and a Job that dies halfway finishes when it is retried:
+damaging it, and a Job that dies halfway finishes when it is retried.
+
+A restore Job runs up to three pods (`backoffLimit: 2`) for failures that a
+new pod may get past: a pod killed out of memory, evicted, or one that lost
+its connection to the database. A failure no new pod can change ends the Job
+at its first pod instead, through the Job's pod failure policy: the backup
+refused by its checks (another Odoo series, row counts or attachments that do
+not match, a file that is not an Odoo backup), `odoo neutralize` or the
+upgrade failing, or an undo whose previous data is gone. The agent reports
+such a failure with exit code 3 and `"final": true` in its result, and the
+restore fails with the live data untouched, instead of loading the backup
+twice more with Odoo stopped. On a cluster that has the Job pod failure policy
+turned off (it is on by default from Kubernetes 1.26), such a Job simply
+fails the same way three times. A new pod of the same Job does not run
+`neutralize` or the upgrade again when an earlier pod already did, as the
+restore journal records; should it run either again all the same, its
+outcome counts, and a database whose latest neutralize or upgrade failed is
+never swapped in.
 
 How the operator tells which side of the swap a failed Job ended on:
 

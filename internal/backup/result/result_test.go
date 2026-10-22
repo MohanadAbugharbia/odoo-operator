@@ -22,6 +22,26 @@ func TestFailed(t *testing.T) {
 	}
 }
 
+func TestExitCode(t *testing.T) {
+	cases := []struct {
+		r    Result
+		want int
+	}{
+		{Result{OK: true}, 0},
+		{Result{OK: true, Deferred: true}, 0},
+		{Result{Step: StepLoad, Error: "x"}, ExitFailed},
+		{Result{Step: StepCheck, Error: "x", Final: true}, ExitFinal},
+	}
+	for _, c := range cases {
+		if got := ExitCode(c.r); got != c.want {
+			t.Errorf("ExitCode(%+v) = %d, want %d", c.r, got, c.want)
+		}
+	}
+	if ExitFailed == ExitFinal || ExitUsage == ExitFinal || ExitUsage == ExitFailed {
+		t.Error("the exit codes must differ")
+	}
+}
+
 func TestEncodeSmallIsPlainJSON(t *testing.T) {
 	r := Result{
 		OK: true, SnapshotID: "abc123", OdooVersion: "18.0", PgServerVersion: "16.4",
@@ -78,7 +98,7 @@ func checkEncoded(t *testing.T, r Result) Result {
 		t.Fatalf("Decode(Encode(r)): %v", err)
 	}
 	if back.OK != r.OK || back.Deferred != r.Deferred || back.LiveChanged != r.LiveChanged ||
-		back.PreviousKept != r.PreviousKept {
+		back.PreviousKept != r.PreviousKept || back.Final != r.Final {
 		t.Fatalf("flags lost: got %+v from %+v", back, r)
 	}
 	return back
@@ -133,6 +153,7 @@ func TestEncodeTerminatesOnStubbornFields(t *testing.T) {
 		"two warnings, the first huge":      {Warnings: []string{strings.Repeat("w", 5000), "x"}},
 		"three warnings, the first huge":    {Warnings: []string{strings.Repeat("w", 5000), "x", "y"}},
 		"huge step":                         {Step: strings.Repeat("s", 5000)},
+		"final, huge error and step":        {Final: true, Step: strings.Repeat("s", 5000), Error: strings.Repeat("e", 9000)},
 		"huge snapshot id":                  {OK: true, SnapshotID: strings.Repeat("a", 5000)},
 		"huge image and token":              {OK: true, Image: strings.Repeat("i", 3000), UpgradeToken: strings.Repeat("u", 3000)},
 		"escaped characters everywhere":     {Step: strings.Repeat("<", 900), Error: strings.Repeat("&", 900), SnapshotID: strings.Repeat(">", 900)},
@@ -226,6 +247,7 @@ func TestEncodeProperty(t *testing.T) {
 			MissingModules:  randList(rng),
 			LiveChanged:     rng.Intn(2) == 0,
 			PreviousKept:    rng.Intn(2) == 0,
+			Final:           rng.Intn(2) == 0,
 		}
 		b := Encode(r)
 		if len(b) > MaxBytes || !json.Valid(b) {
@@ -235,7 +257,8 @@ func TestEncodeProperty(t *testing.T) {
 		if err != nil {
 			t.Fatalf("iteration %d: %v", i, err)
 		}
-		if back.OK != r.OK || back.LiveChanged != r.LiveChanged || back.PreviousKept != r.PreviousKept || back.Deferred != r.Deferred {
+		if back.OK != r.OK || back.LiveChanged != r.LiveChanged || back.PreviousKept != r.PreviousKept || back.Deferred != r.Deferred ||
+			back.Final != r.Final {
 			t.Fatalf("iteration %d: flags lost", i)
 		}
 		if full, _ := json.Marshal(r); len(full) <= MaxBytes && string(full) != string(b) {

@@ -117,6 +117,7 @@ example alerts, report failures.
 | `Failed`: "no file in … matches" | `from.path`'s pattern matched no file in the store. | Check the folder and pattern; a pattern is only allowed in the last segment. |
 | `Failed`: "has no encryptionKeySecret" | `from` names a restic repository in a store without a key. | Add the repository's key to the store, or point `from.path` at a `.zip` or `.dump` file. |
 | `Failed`: "neutralize" | Odoo could not neutralize the loaded database (Odoo before 16 has no `neutralize`). | Read the Job's `odoo` container log; restore without `neutralize` and neutralize by hand. |
+| `Failed` after one pod, the Job's condition `PodFailurePolicy` | The restore was refused by a check no new pod can change (the message names it), so the Job ended at its first pod (exit code 3). | Fix the cause the message names; create a new OdooRestore. |
 | `Restoring` for long, instance `Degraded` `RestoreIncomplete` | The Job failed after the swap may have started: its result said so, or its main container started and left no result (`status.liveChangeUnconfirmed`). It is retried, from 30 seconds up to every 15 minutes, until it finishes, or until an attempt reports from the restore journal that the swap never started. Odoo stays stopped meanwhile. A retry after the swap started only finishes it from the journal (`--finish-swap`), so it needs neither the backup nor the store. | Fix the cause (usually the database or the data volume); it carries on by itself. |
 | `Stopping` | Waiting for Odoo's pods to stop. | — |
 
@@ -194,3 +195,11 @@ result and the message is taken from the pod's statuses:
 kubectl -n <ns> get pods -l job-name=<job> --sort-by=.metadata.creationTimestamp \
   -o jsonpath='{.items[-1:].status.containerStatuses[?(@.name=="backup")].state.terminated.message}'
 ```
+
+The `backup` container exits 0 when the Job did what it was asked, 1 when it
+failed in a way a new pod may get past (the Job's `backoffLimit` retries
+it), 2 for a command line it does not take, and 3 for a failure no new pod
+can change (`"final": true` in the result, such as a restore whose backup
+does not pass its checks). The Job's pod failure policy ends the Job at once
+on 2 and 3, so the Job's condition then reads `PodFailurePolicy` instead of
+`BackoffLimitExceeded`.
