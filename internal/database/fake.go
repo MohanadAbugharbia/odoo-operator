@@ -16,9 +16,37 @@ type Fake struct {
 	calls []string
 
 	// Errors injected into the corresponding call when non-nil.
-	ExistsErr error
-	CreateErr error
-	DropErr   error
+	ExistsErr  error
+	CreateErr  error
+	DropErr    error
+	ModulesErr error
+
+	// modules are the installed Odoo modules of each database (SetModules).
+	modules map[string][]string
+}
+
+// SetModules records the Odoo modules installed in db, which
+// InstalledModules returns.
+func (f *Fake) SetModules(db string, modules ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.modules == nil {
+		f.modules = map[string][]string{}
+	}
+	f.modules[db] = append([]string(nil), modules...)
+}
+
+func (f *Fake) InstalledModules(_ context.Context, _ ConnInfo, db string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("InstalledModules", db)
+	if f.ModulesErr != nil {
+		return nil, f.ModulesErr
+	}
+	if _, ok := f.dbs[db]; !ok {
+		return nil, fmt.Errorf("%w: %q", ErrNotFound, db)
+	}
+	return append([]string(nil), f.modules[db]...), nil
 }
 
 // Names returns the databases in the fake.
@@ -69,7 +97,7 @@ func (f *Fake) Calls() []string {
 }
 
 // CallCount returns how many times op ("Exists", "Create", "Tag", "OwnerTag",
-// "Drop", "Databases", "DropCopy") was called.
+// "Drop", "Databases", "DropCopy", "InstalledModules") was called.
 func (f *Fake) CallCount(op string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

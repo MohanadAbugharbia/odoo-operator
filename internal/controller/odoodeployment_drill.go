@@ -164,8 +164,8 @@ func (r *OdooDeploymentReconciler) driveDrill(ctx context.Context, s *reconcileS
 		r.dropDrillScratch(ctx, s, layout.Suffix(started.Time))
 		return r.finishDrill(ctx, s, outcome)
 	case reconcileloops.JobStateActive:
-		if out.pullMessage != "" {
-			s.degraded(ReasonDrillRunning, "drill job "+op.Job+" cannot start: "+out.pullMessage)
+		if out.startMessage != "" {
+			s.degraded(ReasonDrillRunning, "drill job "+op.Job+" cannot start: "+out.startMessage)
 		}
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, false, nil
 	}
@@ -217,6 +217,9 @@ func drillSummary(b *odoov1.OdooBackup, snapshot string, res result.Result) stri
 	msg := fmt.Sprintf("backup %s(snapshot %s) restored, passed its checks and Odoo read it", name, short(snapshot))
 	if len(res.MissingModules) > 0 {
 		msg += "; it lacks modules " + strings.Join(res.MissingModules, ", ")
+	}
+	if res.MissingModulesUnknown {
+		msg += "; it lacks modules of spec.modules, too many to list in its result"
 	}
 	if len(res.Warnings) > 0 {
 		msg += "; " + strings.Join(res.Warnings, "; ")

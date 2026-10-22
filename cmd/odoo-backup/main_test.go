@@ -89,32 +89,40 @@ func TestRunWritesResultOnFailure(t *testing.T) {
 		name, cmd string
 		args      []string
 		step      string
+		// final: a failure no retry changes, which exits result.ExitFinal.
+		final bool
 	}{
-		{"backup, missing config", "backup", backup("--config", "/nonexistent/odoo.conf"), result.StepConnect},
-		{"backup, bad majors", "backup", backup("--config", conf, "--pg-majors", "16,x"), result.StepConnect},
-		{"backup, unreachable database", "backup", backup("--config", conf), result.StepConnect},
-		{"restore, missing config", "restore", []string{"--config", "/nonexistent", "--suffix", suffix}, result.StepConnect},
-		{"restore, invalid suffix", "restore", []string{"--config", conf, "--suffix", "bad"}, result.StepConnect},
+		{"backup, missing config", "backup", backup("--config", "/nonexistent/odoo.conf"), result.StepConnect, false},
+		{"backup, bad majors", "backup", backup("--config", conf, "--pg-majors", "16,x"), result.StepConnect, false},
+		{"backup, unreachable database", "backup", backup("--config", conf), result.StepConnect, false},
+		{"restore, missing config", "restore", []string{"--config", "/nonexistent", "--suffix", suffix},
+			result.StepConnect, false},
+		{"restore, invalid suffix", "restore", []string{"--config", conf, "--suffix", "bad"}, result.StepConnect, true},
 		{"restore, unreachable database", "restore",
 			[]string{"--config", conf, "--suffix", suffix, "--snapshot", "x", "--data", t.TempDir(),
-				"--expect-modules", " sale, ,stock "}, result.StepConnect},
+				"--expect-modules", " sale, ,stock "}, result.StepConnect, false},
 		{"undo, invalid undo suffix", "undo", []string{"--config", conf, "--suffix", suffix, "--undo-suffix", "x"},
-			result.StepConnect},
-		{"cleanup, missing config", "cleanup", []string{"--config", "/nonexistent", "--suffix", suffix}, result.StepConnect},
-		{"cleanup, invalid suffix", "cleanup", []string{"--config", conf, "--suffix", "../x"}, result.StepCleanup},
+			result.StepConnect, true},
+		{"cleanup, missing config", "cleanup", []string{"--config", "/nonexistent", "--suffix", suffix},
+			result.StepConnect, false},
+		{"cleanup, invalid suffix", "cleanup", []string{"--config", conf, "--suffix", "../x"}, result.StepCleanup, false},
 		{"cleanup, unreachable database", "cleanup",
-			[]string{"--config", conf, "--suffix", suffix, "--data", t.TempDir()}, result.StepConnect},
+			[]string{"--config", conf, "--suffix", suffix, "--data", t.TempDir()}, result.StepConnect, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			log := filepath.Join(t.TempDir(), "termination-log")
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			if code := run(ctx, c.cmd, append(c.args, "--termination-log", log)); code != 1 {
-				t.Fatalf("exit %d, want 1", code)
+			want := result.ExitFailed
+			if c.final {
+				want = result.ExitFinal
+			}
+			if code := run(ctx, c.cmd, append(c.args, "--termination-log", log)); code != want {
+				t.Fatalf("exit %d, want %d", code, want)
 			}
 			r := readResult(t, log)
-			if r.OK || r.Step != c.step || r.Error == "" {
+			if r.OK || r.Step != c.step || r.Error == "" || r.Final != c.final {
 				t.Fatalf("result = %+v", r)
 			}
 			if strings.Contains(r.Error, "pw") && strings.Contains(r.Error, "db_password") {

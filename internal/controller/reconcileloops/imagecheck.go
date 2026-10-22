@@ -33,17 +33,28 @@ var imagePullWaitingReasons = map[string]bool{
 // imagePullMessage returns "<reason>: <message>" for the first container of
 // one of the Job's pods that is waiting on an image pull, or "" (best effort).
 func imagePullMessage(ctx context.Context, reader client.Reader, job *batchv1.Job) string {
+	pods, _ := jobPods(ctx, reader, job)
+	return podsImagePullMessage(pods)
+}
+
+// jobPods lists the Job's pods; ok is false when they cannot be read.
+func jobPods(ctx context.Context, reader client.Reader, job *batchv1.Job) ([]corev1.Pod, bool) {
 	if reader == nil {
-		return ""
+		return nil, false
 	}
 	pods := &corev1.PodList{}
 	if err := reader.List(ctx, pods, client.InNamespace(job.Namespace), client.MatchingLabels{labelJobName: job.Name}); err != nil {
 		log.FromContext(ctx).V(1).Info("could not list pods for job", "job", job.Name, "error", err.Error())
-		return ""
+		return nil, false
 	}
-	for i := range pods.Items {
-		statuses := append([]corev1.ContainerStatus{}, pods.Items[i].Status.InitContainerStatuses...)
-		statuses = append(statuses, pods.Items[i].Status.ContainerStatuses...)
+	return pods.Items, true
+}
+
+// podsImagePullMessage is imagePullMessage for pods already listed.
+func podsImagePullMessage(pods []corev1.Pod) string {
+	for i := range pods {
+		statuses := append([]corev1.ContainerStatus{}, pods[i].Status.InitContainerStatuses...)
+		statuses = append(statuses, pods[i].Status.ContainerStatuses...)
 		for _, cs := range statuses {
 			if w := cs.State.Waiting; w != nil && imagePullWaitingReasons[w.Reason] {
 				return strings.TrimSpace(w.Reason + ": " + w.Message)

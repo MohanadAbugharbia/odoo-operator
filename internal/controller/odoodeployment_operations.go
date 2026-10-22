@@ -550,8 +550,11 @@ type jobOutcome struct {
 	decoded bool
 	// detail describes a Job that failed without a Result.
 	detail string
-	// pullMessage is set while the Job's pod cannot pull its image.
-	pullMessage string
+	// startMessage is set while the Job's pod cannot start: it cannot pull
+	// its image, a quota keeps it from being created, it cannot be
+	// scheduled, a container cannot be created, or it waits long for a
+	// volume.
+	startMessage string
 	// mainStarted is false only when no pod of the finished Job got as far
 	// as its main container (a step before it failed, or no pod ran at
 	// all), and every pod the Job counted is still there to show it.
@@ -571,10 +574,14 @@ func (r *OdooDeploymentReconciler) observeJob(ctx context.Context, namespace, na
 	if err != nil {
 		return jobOutcome{}, err
 	}
-	out := jobOutcome{state: obs.State, job: obs.Job, detail: obs.FailureMessage, pullMessage: obs.ImagePullMessage}
+	out := jobOutcome{state: obs.State, job: obs.Job, detail: obs.FailureMessage,
+		startMessage: orDefault(obs.ImagePullMessage, obs.StartMessage)}
 	if obs.QuotaMessage != "" {
 		out.detail = obs.QuotaMessage
-		out.pullMessage = obs.QuotaMessage
+		out.startMessage = obs.QuotaMessage
+	}
+	if obs.State == reconcileloops.JobStateActive && obs.NeverStarted && r.now().Sub(obs.StartedAt) > jobStartLimit {
+		return r.giveUpJob(ctx, out)
 	}
 	if obs.State != reconcileloops.JobStateSucceeded && obs.State != reconcileloops.JobStateFailed {
 		return out, nil
@@ -615,6 +622,42 @@ func (r *OdooDeploymentReconciler) observeJob(ctx context.Context, namespace, na
 		return out, nil
 	}
 	out.result, out.decoded = res, true
+	return out, nil
+}
+
+// jobStartLimit is how long an operation Job may go without any of its pods
+// starting a container before the operator deletes it and counts it failed.
+// Such a Job waits on something only a person fixes (a node that fits, a
+// missing Secret, a volume attached elsewhere, an image that cannot be
+// pulled), and a restore or an offline backup keeps Odoo stopped meanwhile.
+const jobStartLimit = 15 * time.Minute
+
+// giveUpJob deletes an operation Job none of whose pods ever started a
+// container in jobStartLimit, and reports it failed without a result and
+// without its main container having run: nothing of it ran, so it changed
+// nothing. The deletion is in the foreground, so the Job's pods are marked
+// for deletion before the Job goes and none of them starts a container
+// later: the kubelet does not start a pod being deleted.
+func (r *OdooDeploymentReconciler) giveUpJob(ctx context.Context, out jobOutcome) (jobOutcome, error) {
+	job := out.job
+	why := out.startMessage
+	if why == "" {
+		why = "its pods are pending; kubectl describe them to see why"
+	}
+	log.FromContext(ctx).Info("Deleting a job none of whose pods started", "job", job.Name, "limit", jobStartLimit, "why", why)
+	if job.DeletionTimestamp.IsZero() {
+		propagation := metav1.DeletePropagationForeground
+		err := r.Delete(ctx, job, &client.DeleteOptions{
+			PropagationPolicy: &propagation, Preconditions: &metav1.Preconditions{UID: &job.UID},
+		})
+		if err != nil && !apierrors.IsNotFound(err) {
+			return out, fmt.Errorf("delete job %s: %w", job.Name, err)
+		}
+	}
+	out.state = reconcileloops.JobStateFailed
+	out.mainStarted = false
+	out.startMessage = ""
+	out.detail = fmt.Sprintf("started no container within %s, so the operator deleted it (%s)", jobStartLimit, why)
 	return out, nil
 }
 
@@ -944,13 +987,14 @@ func (r *OdooDeploymentReconciler) driveBackup(ctx context.Context, s *reconcile
 		op.Job = ""
 		return ctrl.Result{RequeueAfter: time.Second}, false, nil
 	case reconcileloops.JobStateActive:
-		if out.pullMessage != "" {
-			_ = r.patchBackupStatus(ctx, b, func(st *odoov1.OdooBackupStatus) {
-				st.Message = "job " + op.Job + " cannot start: " + out.pullMessage
-			})
-		}
 		if op.StoppedOdoo {
 			s.ready(metav1.ConditionFalse, ReasonBackupRunning, "Odoo is stopped for backup "+b.Name)
+		}
+		if out.startMessage != "" {
+			msg := "job " + op.Job + " cannot start: " + out.startMessage
+			_ = r.patchBackupStatus(ctx, b, func(st *odoov1.OdooBackupStatus) { st.Message = msg })
+			s.degraded(odoov1.ReasonJobCannotStart, fmt.Sprintf("backup %s: %s; a Job none of whose pods starts a container "+
+				"within %s is given up", b.Name, msg, jobStartLimit))
 		}
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, false, nil
 	}
@@ -1098,8 +1142,8 @@ func (r *OdooDeploymentReconciler) reachStore(ctx context.Context, s *reconcileS
 		_ = r.patchBackupStatus(ctx, b, func(st *odoov1.OdooBackupStatus) { st.Message = waiting })
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, false, nil
 	case reconcileloops.JobStateActive:
-		if out.pullMessage != "" {
-			waiting = "job " + name + " cannot start: " + out.pullMessage
+		if out.startMessage != "" {
+			waiting = "job " + name + " cannot start: " + out.startMessage
 			_ = r.patchBackupStatus(ctx, b, func(st *odoov1.OdooBackupStatus) { st.Message = waiting })
 		}
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, false, nil
@@ -1435,9 +1479,13 @@ func (r *OdooDeploymentReconciler) driveRestore(ctx context.Context, s *reconcil
 				jobSrc.OdooImage = orDefault(od.Status.AppliedImage, od.Spec.Image)
 			}
 			if rs.Spec.Upgrade {
-				// The data is upgraded to the image the instance is to run.
+				// The data is upgraded to the image the instance is to run,
+				// for the upgrade token it has now; the agent reports both
+				// back from the attempt that upgraded, so a token changed
+				// later is still upgraded for.
 				jobSrc.OdooImage = od.Spec.Image
 				jobSrc.UpgradeModules = restoreUpgradeModules(od)
+				jobSrc.UpgradeToken = od.Spec.Upgrade.Token
 			}
 			build := r.restoreJob
 			if build == nil {
@@ -1499,10 +1547,11 @@ func (r *OdooDeploymentReconciler) driveRestore(ctx context.Context, s *reconcil
 		op.Job = ""
 		return ctrl.Result{RequeueAfter: time.Second}, false, nil
 	case reconcileloops.JobStateActive:
-		if out.pullMessage != "" {
-			_ = r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) {
-				st.Message = "job " + op.Job + " cannot start: " + out.pullMessage
-			})
+		if out.startMessage != "" {
+			msg := "job " + op.Job + " cannot start: " + out.startMessage
+			_ = r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) { st.Message = msg })
+			s.degraded(odoov1.ReasonJobCannotStart, fmt.Sprintf("OdooRestore %s: %s; Odoo is stopped meanwhile, "+
+				"and a Job none of whose pods starts a container within %s is given up", rs.Name, msg, jobStartLimit))
 		}
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, false, nil
 	}
@@ -1585,6 +1634,10 @@ func restoreUpgradeModules(od *odoov1.OdooDeployment) []string {
 func (r *OdooDeploymentReconciler) finishRestore(ctx context.Context, s *reconcileState, w instanceWork,
 	rs *odoov1.OdooRestore, res result.Result) (ctrl.Result, bool, error) {
 	od := s.od
+	missing, err := r.restoredMissingModules(ctx, od, res)
+	if err != nil {
+		return ctrl.Result{}, false, err
+	}
 	image, token := res.Image, res.UpgradeToken
 	if rs.Spec.Undo != "" {
 		if target := w.restore(rs.Spec.Undo); target != nil {
@@ -1600,6 +1653,14 @@ func (r *OdooDeploymentReconciler) finishRestore(ctx context.Context, s *reconci
 			}
 		}
 	}
+	// An upgraded restore counts as upgraded for the token its Job upgraded
+	// the data for (res.UpgradeToken), not the one spec.upgrade.token has
+	// now: a token changed while it ran still gets its upgrade.
+	if image == "" && rs.Spec.From != nil && !rs.Spec.Upgrade {
+		// A backup from elsewhere records neither: the data now runs on
+		// this instance's image and counts as upgraded for its token.
+		token = od.Spec.Upgrade.Token
+	}
 	keep := od.Spec.Backup.KeepPreviousValue()
 	if rs.Spec.KeepPrevious != nil {
 		keep = rs.Spec.KeepPrevious.Duration
@@ -1611,14 +1672,19 @@ func (r *OdooDeploymentReconciler) finishRestore(ctx context.Context, s *reconci
 		msg += fmt.Sprintf("; the replaced data is kept as %s until %s", layout.PrevName(db, rs.Status.Suffix),
 			now.Add(keep).UTC().Format(time.RFC3339))
 	}
-	if len(res.MissingModules) > 0 {
-		msg += fmt.Sprintf("; modules %s are installed again", strings.Join(res.MissingModules, ", "))
+	if len(missing) > 0 {
+		msg += fmt.Sprintf("; modules %s are installed again", strings.Join(missing, ", "))
 	}
-	err := r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) {
+	if rs.Spec.Upgrade && rs.Spec.Undo == "" && token != od.Spec.Upgrade.Token {
+		msg += fmt.Sprintf("; it was upgraded for upgrade token %q and spec.upgrade.token is now %q, "+
+			"which is applied next as any change of the token is", token, od.Spec.Upgrade.Token)
+	}
+	err = r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) {
 		st.Phase = odoov1.RestorePhaseCompleted
 		st.Message = msg
 		st.CompletedAt = &now
 		st.Image = image
+		st.UpgradeToken = token
 		st.OdooVersion = res.OdooVersion
 		st.LiveChanged = true
 		st.LiveChangeUnconfirmed = false
@@ -1646,14 +1712,8 @@ func (r *OdooDeploymentReconciler) finishRestore(ctx context.Context, s *reconci
 	if image != "" {
 		od.Status.AppliedImage = image
 	}
-	if (image == "" && rs.Spec.From != nil) || rs.Spec.Upgrade {
-		// A backup from elsewhere records neither, and an upgraded restore
-		// was upgraded to spec.image: the data now runs on this instance's
-		// image and counts as upgraded for its token.
-		token = od.Spec.Upgrade.Token
-	}
 	od.Status.AppliedUpgradeToken = token
-	installed := utils.Difference(od.Spec.Modules, res.MissingModules)
+	installed := utils.Difference(od.Spec.Modules, missing)
 	if len(installed) == 0 {
 		// The data is an initialized Odoo database whatever spec.modules
 		// lists, so the next reconcile must not take it for a first boot.
@@ -1669,6 +1729,29 @@ func (r *OdooDeploymentReconciler) finishRestore(ctx context.Context, s *reconci
 	metrics.RestoreFinished(restoreMode(rs), metrics.RestoreSucceeded)
 	s.healthy()
 	return ctrl.Result{RequeueAfter: time.Second}, true, nil
+}
+
+// restoredMissingModules are the modules of spec.modules the restored
+// database lacks, which are installed again. The agent's result lists them;
+// when the list did not fit in its termination message
+// (res.MissingModulesUnknown), they are read from the restored database,
+// rather than taken as installed (they would never be installed) or as all
+// missing (installing an installed module again reloads its data).
+func (r *OdooDeploymentReconciler) restoredMissingModules(ctx context.Context, od *odoov1.OdooDeployment,
+	res result.Result) ([]string, error) {
+	if !res.MissingModulesUnknown {
+		return res.MissingModules, nil
+	}
+	conn, err := od.Spec.Database.GetDbConnectionDetails(r.Client, ctx, od.Namespace)
+	if err != nil {
+		return nil, fmt.Errorf("read the modules of the restored database: %w", err)
+	}
+	installed, err := r.DB.InstalledModules(ctx, reconcileloops.ConnInfoFor(od, conn), od.Status.Database.Name)
+	if err != nil {
+		return nil, fmt.Errorf("the restore's result has no room for the modules the restored database lacks, "+
+			"and reading them from it failed: %w", err)
+	}
+	return utils.Difference(od.Spec.Modules, installed), nil
 }
 
 // finishRestoreFailed records a restore that failed before touching live data.
@@ -1758,6 +1841,10 @@ func (r *OdooDeploymentReconciler) driveCleanup(ctx context.Context, s *reconcil
 		op.Job = ""
 		return ctrl.Result{RequeueAfter: time.Second}, false, nil
 	case reconcileloops.JobStateActive:
+		if out.startMessage != "" {
+			s.degraded(odoov1.ReasonJobCannotStart, fmt.Sprintf("cleanup job %s of OdooRestore %s cannot start: %s",
+				op.Job, rs.Name, out.startMessage))
+		}
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, false, nil
 	}
 	od.Status.CurrentOperation = odoov1.OperationStatus{}

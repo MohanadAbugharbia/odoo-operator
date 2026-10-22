@@ -80,7 +80,7 @@ func openResticSource(ctx context.Context, e *Env, id, host string, tags []strin
 		return nil, err
 	}
 	if len(snap.Paths) != 1 {
-		return nil, fmt.Errorf("snapshot %s holds %d paths; an Odoo backup holds one", snap.ShortID, len(snap.Paths))
+		return nil, final(fmt.Errorf("snapshot %s holds %d paths; an Odoo backup holds one", snap.ShortID, len(snap.Paths)))
 	}
 	return &resticSource{e: e, snap: snap, root: snap.Paths[0]}, nil
 }
@@ -247,11 +247,11 @@ func zipPrefix(zr *zip.Reader) (string, error) {
 	}
 	switch len(found) {
 	case 0:
-		return "", errors.New("the zip holds no dump.sql at its top or one folder down; it is not an Odoo backup")
+		return "", final(errors.New("the zip holds no dump.sql at its top or one folder down; it is not an Odoo backup"))
 	case 1:
 		return found[0], nil
 	}
-	return "", fmt.Errorf("the zip holds %d dump.sql files; an Odoo backup holds one", len(found))
+	return "", final(fmt.Errorf("the zip holds %d dump.sql files; an Odoo backup holds one", len(found)))
 }
 
 func (s *fileSource) describe() string   { return "file " + s.name }
@@ -342,10 +342,10 @@ func (s *fileSource) filestore(_ context.Context, staging string) (string, strin
 			continue
 		}
 		if !f.Mode().IsRegular() {
-			return "", "", fmt.Errorf("the zip's filestore holds %s, which is not a regular file", f.Name)
+			return "", "", final(fmt.Errorf("the zip's filestore holds %s, which is not a regular file", f.Name))
 		}
 		if !safeStoreName(rel) {
-			return "", "", fmt.Errorf("the zip's filestore holds a file with an unsafe name: %q", f.Name)
+			return "", "", final(fmt.Errorf("the zip's filestore holds a file with an unsafe name: %q", f.Name))
 		}
 		if err := extract(f, filepath.Join(dst, filepath.FromSlash(rel))); err != nil {
 			return "", "", err

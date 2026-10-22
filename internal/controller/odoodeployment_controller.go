@@ -913,6 +913,11 @@ func (r *OdooDeploymentReconciler) observeCurrentJob(ctx context.Context, s *rec
 			od.Status.Phase = odoov1.PhasePending
 			s.degraded(odoov1.ReasonQuotaExceeded, obs.QuotaMessage)
 			s.ready(metav1.ConditionFalse, odoov1.ReasonQuotaExceeded, obs.QuotaMessage)
+		case obs.StartMessage != "":
+			msg := fmt.Sprintf("job %s cannot start: %s", current.Name, obs.StartMessage)
+			od.Status.Phase = runningPhase
+			s.degraded(odoov1.ReasonJobCannotStart, msg)
+			s.ready(metav1.ConditionFalse, odoov1.ReasonJobCannotStart, msg)
 		default:
 			od.Status.Phase = runningPhase
 			s.healthy()
@@ -1125,7 +1130,7 @@ func (r *OdooDeploymentReconciler) deleteJobsThatNeverRan(ctx context.Context, o
 		}
 		ran := false
 		for p := range pods.Items {
-			ran = ran || anyContainerStarted(&pods.Items[p])
+			ran = ran || reconcileloops.PodRanAnyContainer(&pods.Items[p])
 		}
 		if ran {
 			continue
@@ -1136,22 +1141,6 @@ func (r *OdooDeploymentReconciler) deleteJobsThatNeverRan(ctx context.Context, o
 		}
 	}
 	return nil
-}
-
-// anyContainerStarted reports whether any container of the pod, a step
-// (init container) or the main one, started or may have.
-func anyContainerStarted(p *corev1.Pod) bool {
-	if p.Status.Phase == corev1.PodRunning || p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodUnknown {
-		return true
-	}
-	for _, list := range [][]corev1.ContainerStatus{p.Status.InitContainerStatuses, p.Status.ContainerStatuses} {
-		for _, cs := range list {
-			if cs.State.Waiting == nil || cs.LastTerminationState.Terminated != nil || cs.LastTerminationState.Running != nil {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // jobDuration is how long a finished maintenance Job took, from its creation

@@ -129,17 +129,18 @@ var _ = Describe("Bootstrap from a backup", func() {
 		Expect(job).NotTo(BeNil())
 		args := jobArgs(job)
 		Expect(args).To(ContainSubstring("--upgrade shop,pos"))
-		Expect(args).To(ContainSubstring("--upgrade-image odoo:a"))
+		Expect(args).To(ContainSubstring("--upgrade-image odoo:a --upgrade-token t1"))
 		odooStep := job.Spec.Template.Spec.InitContainers[1]
 		Expect(odooStep.Image).To(Equal("odoo:a"))
 		Expect(odooStep.Env).To(ContainElement(corev1.EnvVar{Name: "UPGRADE", Value: "shop,pos"}))
 
 		h.finishJob(od.Status.CurrentOperation.Job, &result.Result{
 			OK: true, LiveChanged: true, PreviousKept: true, OdooVersion: "18.0", Image: "odoo:a",
-			File: "exports/shop_2026-02-01.zip",
+			UpgradeToken: "t1", File: "exports/shop_2026-02-01.zip",
 		})
 		_, od = h.reconcile()
 		Expect(h.bootstrapRestore().Status.Phase).To(Equal(odoov1.RestorePhaseCompleted))
+		Expect(h.bootstrapRestore().Status.UpgradeToken).To(Equal("t1"))
 		Expect(od.Status.AppliedImage).To(Equal("odoo:a"))
 		Expect(od.Status.AppliedUpgradeToken).To(Equal("t1"))
 		for i := 0; i < 3; i++ {
@@ -147,6 +148,40 @@ var _ = Describe("Bootstrap from a backup", func() {
 		}
 		Expect(h.job(od.MaintenanceJobName(nil, false))).To(BeNil(), "the restore already upgraded the data")
 		Expect(od.Status.Phase).To(Equal(odoov1.PhaseRunning), "status: %+v", od.Status)
+	})
+
+	It("upgrades again for a spec.upgrade.token changed while the upgraded restore ran", func() {
+		h = newBootstrapHarness(false)
+		od := h.get()
+		od.Spec.Bootstrap.FromBackup.Upgrade = true
+		od.Spec.Upgrade.Modules = []string{"shop"}
+		od.Spec.Upgrade.Token = "t1"
+		Expect(k8sClient.Update(ctx, od)).To(Succeed())
+		h.reconcile()
+		_, od = h.reconcile()
+		job := od.Status.CurrentOperation.Job
+		Expect(jobArgs(h.job(job))).To(ContainSubstring("--upgrade-token t1"))
+
+		By("the token changes while the Job upgrades the data for t1")
+		od = h.get()
+		od.Spec.Upgrade.Token = "t2"
+		Expect(k8sClient.Update(ctx, od)).To(Succeed())
+		h.finishJob(job, &result.Result{
+			OK: true, LiveChanged: true, OdooVersion: "18.0", Image: "odoo:a", UpgradeToken: "t1",
+		})
+		_, od = h.reconcile()
+		rs := h.bootstrapRestore()
+		Expect(rs.Status.Phase).To(Equal(odoov1.RestorePhaseCompleted))
+		Expect(rs.Status.UpgradeToken).To(Equal("t1"))
+		Expect(rs.Status.Message).To(ContainSubstring(`upgraded for upgrade token "t1" and spec.upgrade.token is now "t2"`))
+		Expect(od.Status.AppliedUpgradeToken).To(Equal("t1"), "only the token the data was upgraded for is applied")
+
+		for i := 0; i < 3 && od.Status.CurrentInitJob.Name == ""; i++ {
+			_, od = h.reconcile()
+		}
+		Expect(od.Status.CurrentInitJob.Kind).To(Equal(odoov1.JobKindUpgrade), "status: %+v", od.Status)
+		Expect(od.Status.CurrentInitJob.Token).To(Equal("t2"))
+		Expect(od.Status.CurrentInitJob.UpgradeModules).To(Equal([]string{"shop"}))
 	})
 
 	It("upgrades all modules when spec.upgrade.modules is empty", func() {
