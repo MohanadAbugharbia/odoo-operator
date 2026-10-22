@@ -88,7 +88,8 @@ func (r *OdooBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 // OdooRestoreReconciler marks new restores Pending, fails the ones whose
 // instance is gone and releases their finalizer: with the instance gone there
-// is nothing left to clean up.
+// is nothing left to clean up. While the instance is being deleted its
+// deletion releases them, once it has dropped what they made.
 type OdooRestoreReconciler struct {
 	client.Client
 }
