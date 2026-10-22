@@ -1045,6 +1045,9 @@ func (r *OdooDeploymentReconciler) reconcileDelete(ctx context.Context, s *recon
 		return s.fail(odoov1.ReasonDeleting, err)
 	}
 	if !dropping {
+		if err := r.releaseRestores(ctx, w); err != nil {
+			return s.fail(odoov1.ReasonDeleting, err)
+		}
 		return ctrl.Result{}, s.setFinalizers(ctx, false, false)
 	}
 
@@ -1086,6 +1089,9 @@ func (r *OdooDeploymentReconciler) reconcileDelete(ctx context.Context, s *recon
 		r.event(od, corev1.EventTypeWarning, odoov1.ReasonDatabaseNotDropped, msg)
 	}
 
+	if err := r.releaseRestores(ctx, w); err != nil {
+		return s.fail(odoov1.ReasonDeleting, err)
+	}
 	return ctrl.Result{}, s.setFinalizers(ctx, false, false)
 }
 

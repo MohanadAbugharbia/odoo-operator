@@ -41,7 +41,11 @@ How the operator decides whether it owns an instance's database, and when it may
   instance is gone. The deletion waits for a running backup Job, records its
   snapshot on the `OdooBackup` (or the reason it failed), and only then
   removes the instance; a backup still `Running` once the instance is gone
-  is marked `Failed`.
+  is marked `Failed`. The deletion also releases the finalizer of the
+  instance's `OdooRestore`s, after it dropped what they made, so restores
+  deleted together with their instance (`kubectl delete
+  odoorestore,odoodeployment --all`, or an Argo CD or Helm uninstall) take
+  their kept databases with them as well.
 - `spec.database.name` and the `nameFromSecret` selector are immutable so a
   rename can never orphan or drop the wrong database. Changing the value inside
   the Secret that `nameFromSecret` points at stops the instance instead: phase

@@ -160,3 +160,15 @@ func (r *OdooDeploymentReconciler) dropRestoreData(ctx context.Context, s *recon
 	}
 	return false, nil
 }
+
+// releaseRestores drops the finalizer of every restore of the instance once
+// its deletion has dealt with what they made: while the instance exists,
+// being deleted or not, only its own reconciler lets a restore go.
+func (r *OdooDeploymentReconciler) releaseRestores(ctx context.Context, w instanceWork) error {
+	for i := range w.restores {
+		if err := r.setRestoreFinalizer(ctx, &w.restores[i], false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
