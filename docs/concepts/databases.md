@@ -53,3 +53,17 @@ How the operator decides whether it owns an instance's database, and when it may
 - `spec.odooFilestore.deletionPolicy` works the same way for the filestore PVC
   (Retain by default). The PVC is created once: changing
   `spec.odooFilestore.size` or `storageClassName` later does not change it.
+  When the database is dropped but the PVC is retained, the deletion first
+  runs, one at a time, the cleanup Job of every restore that left something
+  on it: the `filestore/<db>_prev_<suffix>` and
+  `filestore/<db>_restore_<suffix>` folders, the staging folder
+  `.odoo-operator/staging-<suffix>` and the journal
+  `.odoo-operator/restore-<suffix>.json`, exactly what a cleanup after
+  `keepPrevious` deletes (the instance's own `filestore/<db>` stays, with
+  the volume). A cleanup Job that fails, or cannot start because the
+  namespace is being deleted, is not tried again and does not hold the
+  deletion: that restore keeps `status.cleanedUp: false` and
+  `status.previous.filestore`, and its annotation
+  `odoo.abugharbia.com/files-kept` (and a `RestoreFilesKept` event) names
+  the paths left on the volume. With the database retained, all of it stays
+  with the database.

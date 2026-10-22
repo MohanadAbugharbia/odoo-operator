@@ -493,9 +493,10 @@ k delete pod e2e-upload
 k delete configmap e2e-fixture-new e2e-fixture-old
 
 # The restore Jobs and their finished pods stay until their TTL; they must not
-# hold up deleting the instance.
+# hold up deleting the instance. Its filestore volume is retained, so the
+# deletion first runs the cleanup Job of each restore not yet cleaned up.
 log "deleting the OdooDeployment drops its database"
-k delete odoodeployment "$OD" --wait=true --timeout=3m || fail "the OdooDeployment was not deleted"
+k delete odoodeployment "$OD" --wait=true --timeout=10m || fail "the OdooDeployment was not deleted"
 [ "$(psql_q "SELECT count(*) FROM pg_database WHERE datname LIKE '${DB}%'" postgres)" = 0 ] ||
 	fail "databases of $OD left after deleting it"
 
