@@ -156,7 +156,10 @@ dropped afterwards. Otherwise (`Retain`, or a database the operator did not
 create) the finalizer `odoo.abugharbia.com/operations` holds it only while
 one of its Jobs runs, init and upgrade Jobs included, and is removed as soon
 as none does. A Job none of whose pods ever started a container (an image
-that cannot be pulled) is deleted rather than waited for. The `Ready`
+that cannot be pulled) is deleted rather than waited for, and so is the
+image check of a new `spec.image` (the Job `<name>-image-<hash>`, see
+[A new image is not rolled out](#a-new-image-is-not-rolled-out)), stuck
+pulling or not, since it mounts nothing and changes nothing. The `Ready`
 condition says how many pods are still awaited. A
 `DatabaseDropFailed` event means the drop keeps failing (retried every 30
 seconds): fix the database access, or set `deletionPolicy: Retain` to skip

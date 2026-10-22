@@ -1009,6 +1009,11 @@ func (r *OdooDeploymentReconciler) reconcileDelete(ctx context.Context, s *recon
 			return s.fail(odoov1.ReasonDeleting, err)
 		}
 	}
+	// An image check mounts nothing and changes nothing, so it is never
+	// waited for, whether its pod is stuck pulling or its container runs.
+	if err := reconcileloops.PruneImageCheckJobs(ctx, r.Client, od, ""); err != nil {
+		return s.fail(odoov1.ReasonDeleting, err)
+	}
 	if err := r.deleteJobsThatNeverRan(ctx, od); err != nil {
 		return s.fail(odoov1.ReasonDeleting, err)
 	}

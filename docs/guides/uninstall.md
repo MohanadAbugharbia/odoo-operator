@@ -21,8 +21,8 @@ What stays behind depends on each instance's policies:
   (`<db>_prev_<suffix>`) stay; drop them by hand.
 - Deleting an instance waits for all its pods to stop, including a running
   backup, restore, init or upgrade Job, whatever its deletion policies, so
-  that none is cut short. A Job that never started a container is deleted
-  instead.
+  that none is cut short. A Job that never started a container, and the
+  image check of a new image, are deleted instead.
 
 Then remove the operator, its CRDs and RBAC:
 
