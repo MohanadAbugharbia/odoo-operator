@@ -214,6 +214,23 @@ func (p *Pgx) Databases(ctx context.Context, c ConnInfo) ([]string, error) {
 	return names, nil
 }
 
+func (p *Pgx) InstalledModules(ctx context.Context, c ConnInfo, db string) ([]string, error) {
+	conn, err := p.connect(ctx, c, db)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	rows, err := conn.Query(ctx, "SELECT name FROM ir_module_module WHERE state = 'installed' ORDER BY name")
+	if err != nil {
+		return nil, fmt.Errorf("list the modules installed in %q: %w", db, err)
+	}
+	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("list the modules installed in %q: %w", db, err)
+	}
+	return names, nil
+}
+
 func (p *Pgx) DropCopy(ctx context.Context, c ConnInfo, db, name string, tag OwnerTag) error {
 	if err := CheckCopy(db, name); err != nil {
 		return err

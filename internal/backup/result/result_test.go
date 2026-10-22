@@ -101,7 +101,22 @@ func checkEncoded(t *testing.T, r Result) Result {
 		back.PreviousKept != r.PreviousKept || back.Final != r.Final {
 		t.Fatalf("flags lost: got %+v from %+v", back, r)
 	}
+	checkModules(t, r, back)
 	return back
+}
+
+// checkModules: the missing modules come back whole, or not at all and
+// marked unknown; never a part of them (or a shortened one).
+func checkModules(t *testing.T, r, back Result) {
+	t.Helper()
+	switch {
+	case len(back.MissingModules) == len(r.MissingModules) && !back.MissingModulesUnknown:
+		// Whole (entries with invalid UTF-8 come back with U+FFFD).
+	case len(r.MissingModules) > 0 && len(back.MissingModules) == 0 && back.MissingModulesUnknown:
+	default:
+		t.Fatalf("missing modules %d of %d (unknown %v): a part of the list was dropped",
+			len(back.MissingModules), len(r.MissingModules), back.MissingModulesUnknown)
+	}
 }
 
 func TestEncodeTrimsLongLists(t *testing.T) {
@@ -123,6 +138,52 @@ func TestEncodeTrimsLongLists(t *testing.T) {
 			}
 		})
 	}
+}
+
+// What the operator acts on after a restore survives a result too large to
+// keep whole: the missing modules whole before anything that only informs,
+// or marked unknown, and the image, token, series and file.
+func TestEncodeKeepsWhatARestoreActsOn(t *testing.T) {
+	restore := func(modules []string) Result {
+		return Result{OK: true, LiveChanged: true, PreviousKept: true, Image: "registry.example/shop:18.0-20261001",
+			UpgradeToken: "release-42", OdooVersion: "18.0", File: "exports/shop_2026-10-01.zip",
+			Warnings: names(400, "a warning that is long enough "), MissingModules: modules}
+	}
+	t.Run("modules that fit stay whole", func(t *testing.T) {
+		r := restore(names(60, "module_"))
+		back := checkEncoded(t, r)
+		if !reflect.DeepEqual(back.MissingModules, r.MissingModules) || back.MissingModulesUnknown {
+			t.Fatalf("missing modules = %d of %d, unknown %v", len(back.MissingModules), len(r.MissingModules), back.MissingModulesUnknown)
+		}
+	})
+	t.Run("modules that do not fit are marked unknown", func(t *testing.T) {
+		r := restore(names(1000, "module_"))
+		back := checkEncoded(t, r)
+		if len(back.MissingModules) != 0 || !back.MissingModulesUnknown {
+			t.Fatalf("missing modules = %d, unknown %v", len(back.MissingModules), back.MissingModulesUnknown)
+		}
+		if back.Image != r.Image || back.UpgradeToken != r.UpgradeToken || back.OdooVersion != r.OdooVersion || back.File != r.File {
+			t.Fatalf("lost what the restore ran: %+v", back)
+		}
+	})
+	t.Run("how many fit", func(t *testing.T) {
+		// Module names are [A-Za-z0-9_]+ (spec.modules), so none needs
+		// escaping: some 250 names of 12 characters fit beside the rest.
+		n := 0
+		for ; n < 2000; n++ {
+			mods := make([]string, n+1)
+			for i := range mods {
+				mods[i] = fmt.Sprintf("module_%05d", i)
+			}
+			if back := checkEncoded(t, restore(mods)); back.MissingModulesUnknown {
+				break
+			}
+		}
+		if n < 250 {
+			t.Fatalf("only %d missing modules of 12 characters fit", n)
+		}
+		t.Logf("%d missing modules of 12 characters fit", n)
+	})
 }
 
 func TestEncodeKeepsSnapshotIDWhenTrimming(t *testing.T) {
@@ -261,6 +322,7 @@ func TestEncodeProperty(t *testing.T) {
 			back.Final != r.Final {
 			t.Fatalf("iteration %d: flags lost", i)
 		}
+		checkModules(t, r, back)
 		if full, _ := json.Marshal(r); len(full) <= MaxBytes && string(full) != string(b) {
 			t.Fatalf("iteration %d: a result that fits was changed", i)
 		}

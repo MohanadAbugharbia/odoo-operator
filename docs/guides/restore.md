@@ -30,7 +30,11 @@ step's image could not be pulled) fails with the live data untouched and the
 step named in `status.message`. A restore takes precedence over everything else and
 replaces a failed init or upgrade Job, which makes it the way back from a
 failed upgrade. Modules in `spec.modules` that the backup lacks are installed
-again afterwards.
+again afterwards. The restore Job lists them in its result; when they are too
+many for it (Kubernetes keeps 4096 bytes of a Job's result, room for some 250
+module names), the result says so instead of listing part of them, and the
+operator reads the installed modules from the restored database itself, with
+the instance's database credentials, before Odoo starts on it.
 
 The instance then counts as running the backup's image and upgrade token. If
 `spec.image` differs from the backup's image, the usual upgrade follows when

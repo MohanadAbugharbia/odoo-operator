@@ -10,6 +10,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
@@ -390,6 +391,25 @@ var _ = Describe("Restore attempts", func() {
 		Expect(rs.Status.Phase).To(Equal(odoov1.RestorePhaseRestoring))
 		Expect(rs.Status.Message).To(ContainSubstring("CreateContainerConfigError"),
 			"the step that cannot start is reported while the Job waits")
+	})
+
+	It("reads the missing modules from the database when they did not fit in the result", func() {
+		job := startRestore()
+		Expect(h.get().Spec.Modules).To(ConsistOf("base", "web"))
+		h.fake.SetModules(h.dbName(), "base", "account")
+		h.fake.ModulesErr = errors.New("connection refused")
+		res := result.Result{OK: true, LiveChanged: true, Image: "odoo:a", MissingModulesUnknown: true}
+		h.finishJob(job, &res)
+		_, err := h.r.Reconcile(ctx, ctrl.Request{NamespacedName: h.key})
+		Expect(err).To(MatchError(ContainSubstring("reading them from it failed: connection refused")))
+		Expect(h.restore("r").Status.Phase).To(Equal(odoov1.RestorePhaseRestoring), "not finished while the modules are unknown")
+
+		h.fake.ModulesErr = nil
+		_, od := h.reconcile()
+		rs := h.restore("r")
+		Expect(rs.Status.Phase).To(Equal(odoov1.RestorePhaseCompleted), rs.Status.Message)
+		Expect(rs.Status.Message).To(ContainSubstring("modules web are installed again"))
+		Expect(od.Status.InitModulesInstalled).To(ConsistOf("base"), "web is installed again, base is not")
 	})
 
 	It("takes the result of the newest pod when it succeeded after a failed one", func() {
