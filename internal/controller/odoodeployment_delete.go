@@ -42,8 +42,9 @@ import (
 // Jobs, so it is the one that knows how they ended.
 
 // dropWorkData deletes, before the instance's database is dropped, what its
-// restores made: on a retained data volume their folders (through their
-// cleanup Jobs), then their databases. wait is how long to wait before
+// restores and drills made: on a retained data volume the restores' folders
+// (through their cleanup Jobs), then the restores' databases and the
+// drills' scratch databases. wait is how long to wait before
 // trying again when that is not done.
 func (r *OdooDeploymentReconciler) dropWorkData(ctx context.Context, s *reconcileState, w instanceWork,
 	conn database.ConnInfo, tag database.OwnerTag) (wait time.Duration, err error) {
@@ -60,7 +61,47 @@ func (r *OdooDeploymentReconciler) dropWorkData(ctx context.Context, s *reconcil
 	if retry, err := r.dropRestoreData(ctx, s, w, conn, tag, filesStay); err != nil || retry {
 		return 30 * time.Second, err
 	}
+	if retry := r.dropDrillDatabases(ctx, s, conn, tag); retry {
+		return 30 * time.Second, nil
+	}
 	return 0, nil
+}
+
+// dropDrillDatabases drops the scratch databases restore drills of the
+// instance left (<db>_drill_<suffix>, found by name, since they carry no
+// owner comment): a drill pod that died before its last step leaves one,
+// and only the instance's next drill would have dropped it. retry is set
+// when a drop failed and should be tried again.
+func (r *OdooDeploymentReconciler) dropDrillDatabases(ctx context.Context, s *reconcileState,
+	conn database.ConnInfo, tag database.OwnerTag) (retry bool) {
+	od := s.od
+	live := od.Status.Database.Name
+	names, err := r.DB.Databases(ctx, conn)
+	if err != nil {
+		msg := fmt.Sprintf("could not list the databases to drop the drills' scratch databases: %v", err)
+		s.degraded(odoov1.ReasonDatabaseDropFailed, msg)
+		r.event(od, corev1.EventTypeWarning, odoov1.ReasonDatabaseDropFailed, msg)
+		return true
+	}
+	for _, name := range names {
+		if layout.DrillSuffix(name, live) == "" {
+			continue
+		}
+		err := r.DB.DropCopy(ctx, conn, live, name, tag)
+		switch {
+		case errors.Is(err, database.ErrNotOwned), errors.Is(err, database.ErrNotCopy):
+			r.event(od, corev1.EventTypeWarning, odoov1.ReasonDatabaseDropRefused,
+				fmt.Sprintf("refusing to drop drill database %q: %v", name, err))
+		case err != nil:
+			msg := fmt.Sprintf("could not drop drill database %q: %v", name, err)
+			s.degraded(odoov1.ReasonDatabaseDropFailed, msg)
+			r.event(od, corev1.EventTypeWarning, odoov1.ReasonDatabaseDropFailed, msg)
+			return true
+		default:
+			r.event(od, corev1.EventTypeNormal, odoov1.ReasonDatabaseDropped, fmt.Sprintf("dropped drill database %q", name))
+		}
+	}
+	return false
 }
 
 // settleBackupOnDelete records the outcome of the backup the instance was

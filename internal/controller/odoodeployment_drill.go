@@ -35,6 +35,7 @@ import (
 	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/layout"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/result"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/controller/reconcileloops"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/database"
 )
 
 // Reasons of restore drill events.
@@ -160,6 +161,7 @@ func (r *OdooDeploymentReconciler) driveDrill(ctx context.Context, s *reconcileS
 			return ctrl.Result{}, false, err
 		}
 		outcome.Message = "job " + op.Job + " was deleted before it finished"
+		r.dropDrillScratch(ctx, s, layout.Suffix(started.Time))
 		return r.finishDrill(ctx, s, outcome)
 	case reconcileloops.JobStateActive:
 		if out.pullMessage != "" {
@@ -178,8 +180,32 @@ func (r *OdooDeploymentReconciler) driveDrill(ctx context.Context, s *reconcileS
 		outcome.Job = op.Job
 		outcome.Message = fmt.Sprintf("job %s %s; inspect with: kubectl -n %s logs job/%s --all-containers",
 			op.Job, failureText(out), od.Namespace, op.Job)
+		// Its last step may not have run (a step killed, the deadline).
+		r.dropDrillScratch(ctx, s, layout.Suffix(started.Time))
 	}
 	return r.finishDrill(ctx, s, outcome)
+}
+
+// dropDrillScratch drops the scratch database of the drill with suffix,
+// which the drill's last step drops but a pod that died before it (out of
+// memory, evicted, past its deadline) leaves behind. It carries no owner
+// comment, so it is dropped by its exact name. Failing is only reported:
+// the next drill drops the leftovers of earlier ones before it starts, and
+// the instance's deletion drops them with its database.
+func (r *OdooDeploymentReconciler) dropDrillScratch(ctx context.Context, s *reconcileState, suffix string) {
+	od := s.od
+	scratch := layout.DrillName(od.Status.Database.Name, suffix)
+	conn, err := od.Spec.Database.GetDbConnectionDetails(r.Client, ctx, od.Namespace)
+	if err == nil {
+		err = r.DB.DropCopy(ctx, reconcileloops.ConnInfoFor(od, conn), od.Status.Database.Name, scratch,
+			database.NewOwnerTag(od.Namespace, od.Name))
+	}
+	if err != nil {
+		r.event(od, corev1.EventTypeWarning, ReasonDrillFailed,
+			fmt.Sprintf("could not drop the drill's scratch database %q (the next drill drops it): %v", scratch, err))
+		return
+	}
+	log.FromContext(ctx).Info("Dropped the scratch database of a failed drill", "database", scratch)
 }
 
 // drillSummary sums up a passed drill.
