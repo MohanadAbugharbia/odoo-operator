@@ -24,6 +24,8 @@ What stays behind depends on each instance's policies:
   are deleted from the volume first by a cleanup Job per restore; if one
   fails, the `odoo.abugharbia.com/files-kept` annotation of that
   `OdooRestore` names what stayed (see [Databases](../concepts/databases.md)).
+- Scratch databases of restore drills (`<db>_drill_<suffix>`) a drill pod
+  left when it died are dropped with the instance's database too.
 - Deleting an instance waits for all its pods to stop, including a running
   backup, restore, init or upgrade Job, whatever its deletion policies, so
   that none is cut short. A Job that never started a container, and the

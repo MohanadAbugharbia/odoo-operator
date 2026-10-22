@@ -36,6 +36,8 @@ How the operator decides whether it owns an instance's database, and when it may
   database carrying another owner's tag). That includes a restore the
   deletion cut short, whose Job may have swapped the data in after the
   restore stopped being followed: it is marked `Failed` and `cleanedUp`.
+  So do the scratch databases restore drills left (`<db>_drill_<suffix>`,
+  found by that exact name, see [Restore drills](../guides/drills.md)).
 - An instance being deleted settles its own backups and restores: the
   `OdooBackup` and `OdooRestore` reconcilers leave them alone until the
   instance is gone. The deletion waits for a running backup Job, records its

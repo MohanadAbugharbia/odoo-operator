@@ -158,8 +158,11 @@ var _ = Describe("Restore drills", func() {
 		h.completedBackup()
 		h.reconcile()
 		job := h.drillJobs()[0]
+		scratch := layout.DrillName(h.dbName(), layout.Suffix(clock))
+		h.fake.Seed(scratch, "")
 		h.finishJob(job.Name, &result.Result{OK: false, Step: result.StepOdoo, Error: "Odoo could not load the restored database (exit code 255)"})
 		_, od := h.reconcile()
+		Expect(h.fake.Has(scratch)).To(BeFalse(), "a pod killed before its last step leaves the scratch database")
 		d := od.Status.Backup.LastDrill
 		Expect(d.Succeeded).To(BeFalse())
 		Expect(d.Job).To(Equal(job.Name))
@@ -271,11 +274,38 @@ var _ = Describe("Restore drills", func() {
 		h.completedBackup()
 		h.reconcile()
 		job := h.drillJobs()[0]
+		scratch := layout.DrillName(h.dbName(), layout.Suffix(clock))
+		h.fake.Seed(scratch, "")
 		Expect(k8sClient.Delete(ctx, &job, client.PropagationPolicy(metav1.DeletePropagationBackground))).To(Succeed())
 		Eventually(func() *batchv1.Job { return h.job(job.Name) }).Should(BeNil())
 		_, od := h.reconcile()
+		Expect(h.fake.Has(scratch)).To(BeFalse())
 		Expect(od.Status.CurrentOperation.Kind).To(BeEmpty())
 		Expect(od.Status.Backup.LastDrill.Succeeded).To(BeFalse())
 		Expect(od.Status.Backup.LastDrill.Message).To(ContainSubstring("was deleted before it finished"))
+	})
+
+	It("leaves no scratch database behind when the instance is deleted", func() {
+		start()
+		live := h.dbName()
+		left := []string{layout.DrillName(live, "20260301T060000"), layout.DrillName(live, "20260302T060000")}
+		for _, name := range left {
+			h.fake.Seed(name, "")
+		}
+		foreign := layout.DrillName(live, "20260303T060000")
+		h.fake.Seed(foreign, "odoo-operator:elsewhere/odoo")
+		unrelated := live + "_drill_notes"
+		h.fake.Seed(unrelated, "")
+
+		Expect(k8sClient.Delete(ctx, h.get())).To(Succeed())
+		for i := 0; i < 3 && h.get() != nil; i++ {
+			h.reconcile()
+		}
+		Expect(h.get()).To(BeNil())
+		for _, name := range left {
+			Expect(h.fake.Has(name)).To(BeFalse(), name)
+		}
+		Expect(h.fake.Has(foreign)).To(BeTrue(), "a database another owner tagged stays")
+		Expect(h.fake.Has(unrelated)).To(BeTrue(), "only the names drills make are dropped")
 	})
 })

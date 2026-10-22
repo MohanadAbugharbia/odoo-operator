@@ -13,3 +13,13 @@ keeps serving throughout. The outcome is in `status.backup.lastDrill`
 for `spec.jobs.ttlSecondsAfterFinished`
 (`kubectl logs job/<name> --all-containers`). The scratch filestore needs node
 disk the size of the filestore; `drill.scratchSizeLimit` caps it.
+
+The scratch database is dropped by the drill's last step. A pod that dies
+before it (out of memory, evicted, past `spec.backup.activeDeadlineSeconds`)
+leaves the database behind, so the operator drops it by its exact name
+itself when a drill's Job fails or disappears, and every drill also drops
+the scratch databases of earlier ones before it starts. Turning drills off
+therefore leaves none behind, and deleting the instance with its database
+(`spec.database.deletionPolicy: Delete`) drops any `<db>_drill_<suffix>`
+that is left. A scratch database carries no owner comment; only names of
+that exact shape are dropped, never one carrying another owner's comment.
