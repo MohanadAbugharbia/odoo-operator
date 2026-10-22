@@ -1,6 +1,8 @@
 package database
 
 import (
+	"context"
+	"errors"
 	"net/url"
 	"strings"
 	"testing"
@@ -86,5 +88,47 @@ func TestQuoteLiteral(t *testing.T) {
 func TestNewOwnerTag(t *testing.T) {
 	if got := NewOwnerTag("ababiel-preview", "ababiel-pr-12"); got != "odoo-operator:ababiel-preview/ababiel-pr-12" {
 		t.Errorf("got %q", got)
+	}
+}
+
+func TestCheckCopy(t *testing.T) {
+	s := "20250102T030405"
+	for _, name := range []string{"shop_restore_" + s, "shop_drill_" + s} {
+		if err := CheckCopy("shop", name); err != nil {
+			t.Errorf("CheckCopy(%q) = %v", name, err)
+		}
+	}
+	for _, name := range []string{"shop", "shop_prev_" + s, "shop_restore_", "shop_restore_" + s + "_x", "other_restore_" + s, "shop_restore_latest"} {
+		if err := CheckCopy("shop", name); !errors.Is(err, ErrNotCopy) {
+			t.Errorf("CheckCopy(%q) = %v, want ErrNotCopy", name, err)
+		}
+	}
+	if err := CheckCopy("shop_restore_"+s, "shop_restore_"+s); err == nil {
+		t.Error("the live database is a copy")
+	}
+}
+
+func TestFakeDropCopy(t *testing.T) {
+	f := NewFake()
+	tag := NewOwnerTag("ns", "odoo")
+	f.Seed("shop", tag)
+	f.Seed("shop_restore_20250102T030405", "")
+	f.Seed("shop_drill_20250102T030405", tag)
+	f.Seed("shop_drill_20250102T030406", "odoo-operator:ns/other")
+	ctx := context.Background()
+	for _, name := range []string{"shop_restore_20250102T030405", "shop_drill_20250102T030405", "shop_drill_20250102T030407"} {
+		if err := f.DropCopy(ctx, ConnInfo{}, "shop", name, tag); err != nil {
+			t.Fatalf("DropCopy(%s): %v", name, err)
+		}
+	}
+	if err := f.DropCopy(ctx, ConnInfo{}, "shop", "shop_drill_20250102T030406", tag); !errors.Is(err, ErrNotOwned) {
+		t.Fatalf("foreign copy: %v", err)
+	}
+	if err := f.DropCopy(ctx, ConnInfo{}, "shop", "shop", tag); !errors.Is(err, ErrNotCopy) {
+		t.Fatalf("live: %v", err)
+	}
+	names, _ := f.Databases(ctx, ConnInfo{})
+	if strings.Join(names, ",") != "shop,shop_drill_20250102T030406" {
+		t.Fatalf("left %v", names)
 	}
 }

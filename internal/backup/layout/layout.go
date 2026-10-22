@@ -165,7 +165,17 @@ func DrillName(db, suffix string) string {
 // DrillSuffix returns the suffix of a drill's scratch database name, or ""
 // when name is not one for db.
 func DrillSuffix(name, db string) string {
-	prefix := base(db) + drillInfix
+	return suffixOf(name, db, drillInfix)
+}
+
+// RestoreSuffix returns the suffix of the database a restore loads into
+// (RestoreName), or "" when name is not one for db.
+func RestoreSuffix(name, db string) string {
+	return suffixOf(name, db, restoreInfix)
+}
+
+func suffixOf(name, db, infix string) string {
+	prefix := base(db) + infix
 	if name == db || !strings.HasPrefix(name, prefix) || !ValidSuffix(name[len(prefix):]) {
 		return ""
 	}
