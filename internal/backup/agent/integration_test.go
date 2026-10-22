@@ -879,8 +879,8 @@ func TestRestoreRefusesAnotherOdooSeries(t *testing.T) {
 	f.exec(f.db, "UPDATE ir_module_module SET latest_version = '19.0.1.3' WHERE name = 'base'")
 	live := f.state(f.db)
 	rr := f.restore(res.SnapshotID, f.nextSuffix())
-	if rr.OK || rr.LiveChanged || rr.Step != result.StepCheck || !strings.Contains(rr.Error, "18.0") {
-		t.Fatalf("expected the restore to refuse an 18.0 backup on a 19.0 database: %+v", rr)
+	if rr.OK || rr.LiveChanged || !rr.Final || rr.Step != result.StepCheck || !strings.Contains(rr.Error, "18.0") {
+		t.Fatalf("expected the restore to refuse an 18.0 backup on a 19.0 database, finally: %+v", rr)
 	}
 	f.assertState(f.db, live, "after the refused restore")
 	if got := f.databases(); strings.Join(got, ",") != f.db {
@@ -894,7 +894,7 @@ func TestRestoreUnknownSnapshot(t *testing.T) {
 	f.mustBackup("first")
 	live := f.state(f.db)
 	rr := f.restore("0123456789abcdef", f.nextSuffix())
-	if rr.OK || rr.LiveChanged || rr.Step != result.StepFetch {
+	if rr.OK || rr.LiveChanged || rr.Final || rr.Step != result.StepFetch {
 		t.Fatalf("restore of an unknown snapshot: %+v", rr)
 	}
 	f.assertState(f.db, live, "after the failed restore")
@@ -942,8 +942,8 @@ func TestRestoreChecksCatchDamage(t *testing.T) {
 				return nil
 			}
 			rr := f.restore(res.SnapshotID, suffix)
-			if rr.OK || rr.LiveChanged || rr.Step != result.StepCheck || !strings.Contains(rr.Error, tc.want) {
-				t.Fatalf("expected the check to fail with %q: %+v", tc.want, rr)
+			if rr.OK || rr.LiveChanged || !rr.Final || rr.Step != result.StepCheck || !strings.Contains(rr.Error, tc.want) {
+				t.Fatalf("expected the check to fail with %q, finally: %+v", tc.want, rr)
 			}
 			f.assertState(f.db, live, "live data after the failed check")
 			if got := f.databases(); strings.Join(got, ",") != f.db {
@@ -1217,7 +1217,7 @@ func TestFinishSwapNeedsNoSource(t *testing.T) {
 				}
 				fr := finish()
 				if !swapping {
-					if fr.OK || fr.LiveChanged || fr.Step != result.StepSwap || !strings.Contains(fr.Error, "swap has not started") {
+					if fr.OK || fr.LiveChanged || !fr.Final || fr.Step != result.StepSwap || !strings.Contains(fr.Error, "swap has not started") {
 						t.Fatalf("finishing a swap that never started: %+v", fr)
 					}
 					f.assertState(f.db, live, "live data after finishing refused")
@@ -1261,7 +1261,7 @@ func TestUndoRefusesWhenPreviousDataIsGone(t *testing.T) {
 	}
 	live := f.state(f.db)
 	ur := f.undo(s1, f.nextSuffix())
-	if ur.OK || ur.LiveChanged || !strings.Contains(ur.Error, "no longer exists") {
+	if ur.OK || ur.LiveChanged || !ur.Final || !strings.Contains(ur.Error, "no longer exists") {
 		t.Fatalf("undo after the cleanup: %+v", ur)
 	}
 	f.assertState(f.db, live, "after the refused undo")

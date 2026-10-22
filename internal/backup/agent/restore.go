@@ -187,7 +187,34 @@ const (
 	// of the upgrade (odoo -u).
 	WorkUpgradeExit = "upgrade.exit"
 	WorkUpgradeLog  = "upgrade.log"
+	// WorkNeutralized and WorkUpgraded are written by the load step of a
+	// retried pod when the restore journal shows that an earlier pod already
+	// neutralized or upgraded the loaded database: the Odoo step then leaves
+	// that step out instead of running it again.
+	WorkNeutralized = "neutralized"
+	WorkUpgraded    = "upgraded"
 )
+
+// finalError is a failure no retry of the Job can change: a backup refused
+// by its checks, or an Odoo step that could not neutralize or upgrade it.
+type finalError struct{ err error }
+
+func (e finalError) Error() string { return e.err.Error() }
+func (e finalError) Unwrap() error { return e.err }
+
+// final marks err as a failure a retry cannot change (result.Final).
+func final(err error) error {
+	if err == nil {
+		return nil
+	}
+	return finalError{err}
+}
+
+// isFinal reports whether err is marked final.
+func isFinal(err error) bool {
+	var f finalError
+	return errors.As(err, &f)
+}
 
 // restoreRun is one restore attempt.
 type restoreRun struct {
@@ -209,10 +236,14 @@ func (r *restoreRun) fs(name string) string {
 // retried Job) finishes it.
 func Restore(ctx context.Context, e *Env, o RestoreOptions) result.Result {
 	if !layout.ValidSuffix(o.Suffix) || (o.Mode == ModeUndo && !o.FinishSwap && !layout.ValidSuffix(o.UndoSuffix)) {
-		return result.Failed(result.StepConnect, errors.New("invalid restore suffix"))
+		res := result.Failed(result.StepConnect, errors.New("invalid restore suffix"))
+		res.Final = true
+		return res
 	}
 	if o.Mode != ModeRestore && o.Mode != ModeUndo {
-		return result.Failed(result.StepConnect, fmt.Errorf("unknown restore mode %q", o.Mode))
+		res := result.Failed(result.StepConnect, fmt.Errorf("unknown restore mode %q", o.Mode))
+		res.Final = true
+		return res
 	}
 	r := &restoreRun{e: e, o: o, live: e.Config.Name, path: filepath.Join(o.DataRoot, layout.JournalFile(o.Suffix))}
 	j, err := readJournal(r.path)
@@ -228,7 +259,7 @@ func Restore(ctx context.Context, e *Env, o RestoreOptions) result.Result {
 	}
 	r.j = j
 	if j.Mode != o.Mode {
-		return r.failed(result.StepConnect, fmt.Errorf("restore journal is for a %s, not a %s", j.Mode, o.Mode))
+		return r.failed(result.StepConnect, final(fmt.Errorf("restore journal is for a %s, not a %s", j.Mode, o.Mode)))
 	}
 	if o.FinishSwap {
 		if err := r.onlyFinish(); err != nil {
@@ -263,13 +294,7 @@ func Restore(ctx context.Context, e *Env, o RestoreOptions) result.Result {
 	}
 	if o.LoadOnly {
 		if j.Stage == stageRestored && o.WorkDir != "" {
-			// The Odoo step may neutralize this database. It may run as
-			// another user than this step, so the name is readable by all.
-			path := filepath.Join(o.WorkDir, WorkSource)
-			if err := writeFileAtomic(path, []byte(j.Source)); err != nil {
-				return r.failed(result.StepLoad, err)
-			}
-			if err := os.Chmod(path, 0o644); err != nil {
+			if err := r.shareWithOdooStep(); err != nil {
 				return r.failed(result.StepLoad, err)
 			}
 		}
@@ -301,6 +326,31 @@ func Restore(ctx context.Context, e *Env, o RestoreOptions) result.Result {
 	}
 }
 
+// shareWithOdooStep tells the Odoo step which database it may neutralize and
+// upgrade, and which of those an earlier pod of the Job already did (the
+// journal says), so that a retried pod does not run them again. The Odoo
+// step may run as another user than this step, so the files are readable by
+// all.
+func (r *restoreRun) shareWithOdooStep() error {
+	files := map[string]string{WorkSource: r.j.Source}
+	if r.j.Neutralized {
+		files[WorkNeutralized] = "1"
+	}
+	if r.j.Upgraded {
+		files[WorkUpgraded] = "1"
+	}
+	for name, content := range files {
+		path := filepath.Join(r.o.WorkDir, name)
+		if err := writeFileAtomic(path, []byte(content)); err != nil {
+			return err
+		}
+		if err := os.Chmod(path, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // onlyFinish prepares a run that only finishes a swap (FinishSwap): it
 // refuses unless the journal shows the swap has started, and leaves out the
 // steps before it.
@@ -310,16 +360,20 @@ func (r *restoreRun) onlyFinish() error {
 		if stage == stageNew {
 			stage = "none"
 		}
-		return fmt.Errorf("nothing to finish: the restore journal shows the swap has not started "+
-			"(stage %s), and carrying on from there needs the restore's source", stage)
+		return final(fmt.Errorf("nothing to finish: the restore journal shows the swap has not started "+
+			"(stage %s), and carrying on from there needs the restore's source", stage))
 	}
 	r.o.WorkDir, r.o.LoadOnly = "", false
 	return nil
 }
 
+// failed is the result of a run that failed at step. A final error (one a
+// retry cannot change) is reported as such only while the live data is
+// untouched: once the swap has started, a retry is what finishes it.
 func (r *restoreRun) failed(step string, err error) result.Result {
 	res := result.Failed(step, err)
 	res.LiveChanged = r.j != nil && (r.j.Stage == stageSwapping || r.j.Stage == stageSwapped)
+	res.Final = isFinal(err) && !res.LiveChanged
 	return res
 }
 
@@ -387,7 +441,7 @@ func (r *restoreRun) load(ctx context.Context) (string, error) {
 		}
 		if m.Series() != "" {
 			if err := manifest.CheckSeries(m.Series(), liveSeries); err != nil {
-				return result.StepCheck, err
+				return result.StepCheck, final(err)
 			}
 		}
 	}
@@ -409,10 +463,10 @@ func (r *restoreRun) load(ctx context.Context) (string, error) {
 			return result.StepCheck, err
 		}
 		if series == "" {
-			return result.StepCheck, fmt.Errorf("%s holds no Odoo database (no base module)", src.describe())
+			return result.StepCheck, final(fmt.Errorf("%s holds no Odoo database (no base module)", src.describe()))
 		}
 		if err := manifest.CheckSeries(series, liveSeries); err != nil {
-			return result.StepCheck, err
+			return result.StepCheck, final(err)
 		}
 	}
 	files, repaired, err := src.filestore(ctx, staging)
@@ -471,7 +525,10 @@ func (r *restoreRun) seriesOf(ctx context.Context, database string) (string, err
 // backup is loaded: the instance's Odoo must be the backup's series when the
 // restored data will run on it, a neutralized restore needs the Odoo step to
 // have neutralized the loaded database, and an upgraded one to have upgraded
-// it.
+// it. The journal records a neutralize or upgrade an earlier pod already
+// checked, which the Odoo step of a retried pod leaves out; when it ran one
+// again all the same, its outcome counts: a database whose latest neutralize
+// or upgrade failed is never swapped in.
 func (r *restoreRun) beforeSwap(ctx context.Context) (string, error) {
 	o, j := r.o, r.j
 	if o.WorkDir == "" || o.Mode != ModeRestore {
@@ -487,46 +544,57 @@ func (r *restoreRun) beforeSwap(ctx context.Context) (string, error) {
 		}
 		series := OdooVersionSeries(string(data))
 		if series == "" {
-			return result.StepCheck, fmt.Errorf("cannot read the instance's Odoo version from %q", tail(string(data)))
+			return result.StepCheck, final(fmt.Errorf("cannot read the instance's Odoo version from %q", tail(string(data))))
 		}
 		if err := manifest.CheckSeries(j.OdooVersion, series); err != nil {
-			return result.StepCheck, err
+			return result.StepCheck, final(err)
 		}
 	}
-	if o.Neutralize && !j.Neutralized {
-		code, _ := os.ReadFile(filepath.Join(o.WorkDir, WorkNeutralizeExit))
-		if strings.TrimSpace(string(code)) != "0" {
+	if code, ran := r.stepExit(WorkNeutralizeExit); o.Neutralize && (!j.Neutralized || ran) {
+		if code != "0" {
 			out, _ := os.ReadFile(filepath.Join(o.WorkDir, WorkNeutralizeLog))
-			return result.StepCheck, fmt.Errorf("odoo neutralize did not succeed (exit %q): %s",
-				strings.TrimSpace(string(code)), tail(string(out)))
+			return result.StepCheck, final(fmt.Errorf("odoo neutralize did not succeed (exit %q): %s", code, tail(string(out))))
 		}
-		if err := r.newDatabaseUUID(ctx, j.Source); err != nil {
-			return result.StepCheck, err
+		if !j.Neutralized {
+			if err := r.newDatabaseUUID(ctx, j.Source); err != nil {
+				return result.StepCheck, err
+			}
+			j.Neutralized = true
+			j.Warnings = append(j.Warnings, "the restored database was neutralized and has a new database.uuid")
+			if err := j.save(r.path); err != nil {
+				return result.StepCheck, err
+			}
+			r.e.logf("database %s neutralized", j.Source)
 		}
-		j.Neutralized = true
-		j.Warnings = append(j.Warnings, "the restored database was neutralized and has a new database.uuid")
-		if err := j.save(r.path); err != nil {
-			return result.StepCheck, err
-		}
-		r.e.logf("database %s neutralized", j.Source)
 	}
-	if upgrade && !j.Upgraded {
-		code, _ := os.ReadFile(filepath.Join(o.WorkDir, WorkUpgradeExit))
-		if strings.TrimSpace(string(code)) != "0" {
+	if code, ran := r.stepExit(WorkUpgradeExit); upgrade && (!j.Upgraded || ran) {
+		if code != "0" {
 			out, _ := os.ReadFile(filepath.Join(o.WorkDir, WorkUpgradeLog))
-			return result.StepCheck, fmt.Errorf("the upgrade (odoo -u %s) did not succeed (exit %q): %s",
-				strings.Join(o.UpgradeModules, ","), strings.TrimSpace(string(code)), tail(string(out)))
+			return result.StepCheck, final(fmt.Errorf("the upgrade (odoo -u %s) did not succeed (exit %q): %s",
+				strings.Join(o.UpgradeModules, ","), code, tail(string(out))))
+		}
+		if !j.Upgraded {
+			j.Warnings = append(j.Warnings, fmt.Sprintf("the restored database was upgraded (-u %s) on %s",
+				strings.Join(o.UpgradeModules, ","), o.UpgradeImage))
 		}
 		j.Upgraded = true
 		j.Image = o.UpgradeImage
-		j.Warnings = append(j.Warnings, fmt.Sprintf("the restored database was upgraded (-u %s) on %s",
-			strings.Join(o.UpgradeModules, ","), o.UpgradeImage))
 		if err := j.save(r.path); err != nil {
 			return result.StepCheck, err
 		}
 		r.e.logf("database %s upgraded on %s", j.Source, o.UpgradeImage)
 	}
 	return "", nil
+}
+
+// stepExit is the exit code the Odoo step recorded in file, and whether it
+// ran that step at all in this pod.
+func (r *restoreRun) stepExit(file string) (string, bool) {
+	code, err := os.ReadFile(filepath.Join(r.o.WorkDir, file))
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(string(code)), true
 }
 
 var odooVersionRE = regexp.MustCompile(`(saas~)?[0-9]+\.[0-9]+`)
@@ -741,7 +809,7 @@ func (r *restoreRun) check(ctx context.Context, database string, m manifest.Mani
 			return nil, nil, err
 		}
 		if diff := diffCounts(m.Operator.RowCounts, counts); len(diff) > 0 {
-			return nil, nil, fmt.Errorf("the restored database does not match the backup: %s", strings.Join(limit(diff, 10), "; "))
+			return nil, nil, final(fmt.Errorf("the restored database does not match the backup: %s", strings.Join(limit(diff, 10), "; ")))
 		}
 	} else {
 		warnings = append(warnings, "the backup has no row counts to check the restored database against")
@@ -783,8 +851,8 @@ func (r *restoreRun) check(ctx context.Context, database string, m manifest.Mani
 		}
 	}
 	if len(lost) > 0 && m.Operator != nil {
-		return nil, nil, fmt.Errorf("%d attachment(s) the backup holds are missing after the restore, e.g. %s",
-			len(lost), strings.Join(limit(lost, 5), ", "))
+		return nil, nil, final(fmt.Errorf("%d attachment(s) the backup holds are missing after the restore, e.g. %s",
+			len(lost), strings.Join(limit(lost, 5), ", ")))
 	}
 	if len(lost) > 0 {
 		warnings = append(warnings, fmt.Sprintf("%d attachment(s) are not in the backup, e.g. %s", len(lost), strings.Join(limit(lost, 5), ", ")))
@@ -851,7 +919,7 @@ func (r *restoreRun) prepareUndo(ctx context.Context) (string, error) {
 		return result.StepConnect, err
 	}
 	if !dbOK {
-		return result.StepCheck, fmt.Errorf("database %s, which the undone restore replaced, no longer exists", source)
+		return result.StepCheck, final(fmt.Errorf("database %s, which the undone restore replaced, no longer exists", source))
 	}
 	conn, err := pg.Connect(ctx, r.e.Config, source)
 	if err != nil {

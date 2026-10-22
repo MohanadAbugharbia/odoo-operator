@@ -35,6 +35,7 @@ import (
 
 	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/layout"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/result"
 )
 
 // Job kinds, in the LabelJobKind label.
@@ -493,6 +494,42 @@ func (p Params) podSpec(command []string, env []corev1.EnvVar, volumes []corev1.
 	}
 }
 
+// podFailurePolicy ends a Job at once when one of its agent containers
+// exits with a code no retry can change: result.ExitUsage (a command line
+// the agent does not take) in any of them, and result.ExitFinal (a check or
+// a refusal, result.Final) in the main container, which alone reports.
+// Every other failure, such as a pod killed out of memory, evicted or past
+// its deadline, counts against the Job's backoff limit as before. The Odoo
+// steps exit 0 whatever Odoo does (the agent judges), so only such failures
+// end them.
+func podFailurePolicy(spec corev1.PodSpec) *batchv1.PodFailurePolicy {
+	rule := func(container string, codes ...int32) batchv1.PodFailurePolicyRule {
+		return batchv1.PodFailurePolicyRule{
+			Action: batchv1.PodFailurePolicyActionFailJob,
+			OnExitCodes: &batchv1.PodFailurePolicyOnExitCodesRequirement{
+				ContainerName: ptr(container),
+				Operator:      batchv1.PodFailurePolicyOnExitCodesOpIn,
+				Values:        codes,
+			},
+		}
+	}
+	var rules []batchv1.PodFailurePolicyRule
+	for _, c := range spec.InitContainers {
+		if len(c.Command) > 0 && c.Command[0] == toolBinary {
+			rules = append(rules, rule(c.Name, result.ExitUsage))
+		}
+	}
+	for _, c := range spec.Containers {
+		if c.Name == ContainerName {
+			rules = append(rules, rule(c.Name, result.ExitUsage, result.ExitFinal))
+		}
+	}
+	if len(rules) == 0 {
+		return nil
+	}
+	return &batchv1.PodFailurePolicy{Rules: rules}
+}
+
 func (p Params) job(name, kind string, extraLabels map[string]string, spec corev1.PodSpec, backoff int32, deadline int64) batchv1.Job {
 	labels := p.labels(kind)
 	for k, v := range extraLabels {
@@ -508,6 +545,7 @@ func (p Params) job(name, kind string, extraLabels map[string]string, spec corev
 			Parallelism:             ptr(int32(1)),
 			Completions:             ptr(int32(1)),
 			BackoffLimit:            ptr(backoff),
+			PodFailurePolicy:        podFailurePolicy(spec),
 			ActiveDeadlineSeconds:   ptr(deadline),
 			TTLSecondsAfterFinished: p.ttl(),
 		},
@@ -665,16 +703,19 @@ const (
 // restoreOdooScript is the Odoo step of a restore Job: `odoo --version`
 // for the agent to compare with the backup's, `odoo neutralize` of the
 // loaded database when the load step named it (agent.WorkSource), and then
-// the upgrade (-u $UPGRADE) of that database unless neutralize failed. It
-// exits 0 either way: the agent's last step judges. The file names are the
-// agent's (agent.WorkOdooVersion and the rest).
+// the upgrade (-u $UPGRADE) of that database unless neutralize failed. A
+// retried pod leaves out what the load step says an earlier pod already did
+// (agent.WorkNeutralized, agent.WorkUpgraded), so neither runs twice on the
+// same database. It exits 0 either way: the agent's last step judges. The
+// file names are the agent's (agent.WorkOdooVersion and the rest).
 const restoreOdooScript = `"$@" --version >"$WORK/odoo-version" 2>&1 || true
-if [ -n "$NEUTRALIZE" ] && [ -f "$WORK/source" ]; then
+if [ -n "$NEUTRALIZE" ] && [ -f "$WORK/source" ] && [ ! -f "$WORK/neutralized" ]; then
   "$@" neutralize -c "$ODOO_CONF" -d "$(cat "$WORK/source")" >"$WORK/neutralize.log" 2>&1
   echo "$?" >"$WORK/neutralize.exit"
   cat "$WORK/neutralize.log"
 fi
-if [ -n "$UPGRADE" ] && [ -f "$WORK/source" ] && { [ -z "$NEUTRALIZE" ] || [ "$(cat "$WORK/neutralize.exit")" = 0 ]; }; then
+if [ -n "$UPGRADE" ] && [ -f "$WORK/source" ] && [ ! -f "$WORK/upgraded" ] &&
+  { [ -z "$NEUTRALIZE" ] || [ -f "$WORK/neutralized" ] || [ "$(cat "$WORK/neutralize.exit")" = 0 ]; }; then
   "$@" -c "$ODOO_CONF" -d "$(cat "$WORK/source")" --stop-after-init --no-http -u "$UPGRADE" >"$WORK/upgrade.log" 2>&1
   echo "$?" >"$WORK/upgrade.exit"
   tail -n 200 "$WORK/upgrade.log"

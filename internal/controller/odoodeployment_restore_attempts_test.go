@@ -282,6 +282,41 @@ var _ = Describe("Restore attempts", func() {
 		Expect(od.Status.CurrentOperation.Kind).To(BeEmpty())
 	})
 
+	It("ends the Job at its first refusal, which no retry changes, with the live data untouched", func() {
+		job := startRestore()
+		policy := h.job(job).Spec.PodFailurePolicy
+		Expect(policy).NotTo(BeNil(), "the Job ends at once on a final failure")
+		Expect(policy.Rules).To(ContainElement(HaveField("OnExitCodes.Values", ContainElement(int32(result.ExitFinal)))))
+
+		refused := mainResult(result.Result{OK: false, Step: result.StepCheck, Final: true,
+			Error: "the restored database does not match the backup: table x has 1 rows instead of 2"})
+		refused.State.Terminated.ExitCode = result.ExitFinal
+		h.attemptPod(job, "a", podStatus{
+			phase: corev1.PodFailed, steps: []corev1.ContainerStatus{stepDone("load"), stepDone("odoo")}, main: refused,
+		})
+		// The Job controller ends the Job on the pod failure policy rule.
+		j := h.job(job)
+		now := metav1.Now()
+		j.Status.StartTime = &now
+		j.Status.Failed = 1
+		j.Status.Conditions = []batchv1.JobCondition{
+			{Type: batchv1.JobFailureTarget, Status: corev1.ConditionTrue, Reason: batchv1.JobReasonPodFailurePolicy,
+				Message: "Container backup for pod x failed with exit code 3 matching FailJob rule at index 1", LastTransitionTime: now},
+			{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: batchv1.JobReasonPodFailurePolicy,
+				Message: "Container backup for pod x failed with exit code 3 matching FailJob rule at index 1", LastTransitionTime: now},
+		}
+		Expect(k8sClient.Status().Update(ctx, j)).To(Succeed())
+
+		_, od := h.reconcile()
+		rs := h.restore("r")
+		Expect(rs.Status.Phase).To(Equal(odoov1.RestorePhaseFailed), rs.Status.Message)
+		Expect(rs.Status.LiveChanged).To(BeFalse())
+		Expect(rs.Status.Attempts).To(Equal(int32(1)))
+		Expect(rs.Status.Message).To(ContainSubstring("failed at step check: the restored database does not match the backup"))
+		Expect(rs.Status.Message).To(ContainSubstring("the live data was not changed"))
+		Expect(od.Status.CurrentOperation.Kind).To(Equal(odoov1.OperationCleanup), "the loaded copy is dropped, then Odoo comes back")
+	})
+
 	It("takes the result of the newest pod when it succeeded after a failed one", func() {
 		job := startRestore()
 		h.attemptPod(job, "a", podStatus{

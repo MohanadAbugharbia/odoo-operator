@@ -2,6 +2,9 @@ package jobspec
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
@@ -16,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 
 	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/result"
 )
 
 const (
@@ -1284,4 +1288,142 @@ func TestBackupJobCopies(t *testing.T) {
 	if plain(t, env, "COPY2_RESTIC_REPOSITORY") == "" {
 		t.Error("the restic copy has no repository")
 	}
+}
+
+// TestPodFailurePolicy: a Job ends at once when an agent container exits
+// with a code no retry changes, and only then; the Odoo steps never match.
+func TestPodFailurePolicy(t *testing.T) {
+	p := params(s3Store())
+	p.Instance.Spec.OdooCommand = []string{"odoo"}
+	rs := &odoov1.OdooRestore{ObjectMeta: metav1.ObjectMeta{Name: "rs1"}}
+	b := &odoov1.OdooBackup{ObjectMeta: metav1.ObjectMeta{Name: "b"}}
+	must := func(j batchv1.Job, err error) batchv1.Job {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return j
+	}
+	type rule struct {
+		container string
+		codes     []int32
+	}
+	main := rule{ContainerName, []int32{result.ExitUsage, result.ExitFinal}}
+	cases := map[string]struct {
+		job  batchv1.Job
+		want []rule
+	}{
+		"restore": {must(RestoreJob(p, rs, "20250101T000000", RestoreSource{Snapshot: "s"}, nil, 1)), []rule{main}},
+		"restore with an Odoo step": {
+			must(RestoreJob(p, rs, "20250101T000000", RestoreSource{Snapshot: "s", OdooImage: "odoo:18.0", Neutralize: true,
+				UpgradeModules: []string{"all"}}, nil, 1)),
+			[]rule{{"load", []int32{result.ExitUsage}}, main},
+		},
+		"finish a swap": {FinishRestoreJob(p, rs, "20250101T000000", false, 1), []rule{main}},
+		"backup":        {must(BackupJob(p, b, "manual", 1, false)), []rule{{"prepare", []int32{result.ExitUsage}}, main}},
+		"cleanup":       {CleanupJob(p, rs, "20250101T000000", 1), []rule{main}},
+		"drill": {must(DrillJob(p, Drill{Suffix: "20250101T000000", Snapshot: "s", Backup: "b", OdooImage: "odoo:18.0"})),
+			[]rule{{"load", []int32{result.ExitUsage}}, main}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			pfp := tc.job.Spec.PodFailurePolicy
+			if pfp == nil {
+				t.Fatal("no pod failure policy")
+			}
+			if tc.job.Spec.Template.Spec.RestartPolicy != corev1.RestartPolicyNever {
+				t.Error("a pod failure policy needs restartPolicy Never")
+			}
+			got := make([]rule, 0, len(pfp.Rules))
+			for _, r := range pfp.Rules {
+				if r.Action != batchv1.PodFailurePolicyActionFailJob || r.OnExitCodes == nil || r.OnPodConditions != nil ||
+					r.OnExitCodes.Operator != batchv1.PodFailurePolicyOnExitCodesOpIn || r.OnExitCodes.ContainerName == nil {
+					t.Fatalf("rule = %+v", r)
+				}
+				got = append(got, rule{*r.OnExitCodes.ContainerName, r.OnExitCodes.Values})
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("rules = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRestoreOdooScript runs the Odoo step's script with a stand-in for
+// Odoo: it neutralizes, then upgrades, and a retried pod leaves out what the
+// load step says an earlier pod already did.
+func TestRestoreOdooScript(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh")
+	}
+	fake := filepath.Join(t.TempDir(), "odoo")
+	calls := filepath.Join(t.TempDir(), "calls")
+	// The stand-in records its arguments and fails a neutralize when asked.
+	script := "#!/bin/sh\necho \"$*\" >>" + calls + "\ncase \"$1\" in\n" +
+		"--version) echo 'Odoo Server 18.0-20260101' ;;\n" +
+		"neutralize) [ -z \"$FAIL_NEUTRALIZE\" ] || exit 1 ;;\nesac\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(t *testing.T, env []string, done ...string) (string, map[string]string) {
+		t.Helper()
+		work := t.TempDir()
+		_ = os.Remove(calls)
+		files := map[string]string{"source": "shop_restore_x"}
+		for _, d := range done {
+			files[d] = "1"
+		}
+		for name, content := range files {
+			if err := os.WriteFile(filepath.Join(work, name), []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cmd := exec.Command(sh, "-c", restoreOdooScript, "sh", fake)
+		cmd.Env = append([]string{"WORK=" + work, "ODOO_CONF=/etc/odoo/odoo.conf", "PATH=" + os.Getenv("PATH")}, env...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("script: %v: %s", err, out)
+		}
+		got, _ := os.ReadFile(calls)
+		exits := map[string]string{}
+		for _, f := range []string{"neutralize.exit", "upgrade.exit"} {
+			if b, err := os.ReadFile(filepath.Join(work, f)); err == nil {
+				exits[f] = strings.TrimSpace(string(b))
+			}
+		}
+		return string(got), exits
+	}
+	both := []string{"NEUTRALIZE=1", "UPGRADE=shop,pos"}
+
+	t.Run("first pod", func(t *testing.T) {
+		calls, exits := run(t, both)
+		if !strings.Contains(calls, "neutralize -c /etc/odoo/odoo.conf -d shop_restore_x") ||
+			!strings.Contains(calls, "-u shop,pos") || strings.Index(calls, "neutralize") > strings.Index(calls, "-u ") {
+			t.Errorf("calls:\n%s", calls)
+		}
+		if exits["neutralize.exit"] != "0" || exits["upgrade.exit"] != "0" {
+			t.Errorf("exits = %v", exits)
+		}
+	})
+	t.Run("neutralize failed", func(t *testing.T) {
+		calls, exits := run(t, append(both, "FAIL_NEUTRALIZE=1"))
+		if strings.Contains(calls, "-u ") || exits["neutralize.exit"] != "1" {
+			t.Errorf("an upgrade after a failed neutralize: %v\n%s", exits, calls)
+		}
+	})
+	t.Run("retried pod, already neutralized", func(t *testing.T) {
+		calls, exits := run(t, append(both, "FAIL_NEUTRALIZE=1"), "neutralized")
+		if strings.Contains(calls, "neutralize") || !strings.Contains(calls, "-u shop,pos") {
+			t.Errorf("calls:\n%s", calls)
+		}
+		if _, ok := exits["neutralize.exit"]; ok || exits["upgrade.exit"] != "0" {
+			t.Errorf("exits = %v", exits)
+		}
+	})
+	t.Run("retried pod, already neutralized and upgraded", func(t *testing.T) {
+		calls, exits := run(t, both, "neutralized", "upgraded")
+		if strings.TrimSpace(calls) != "--version" || len(exits) != 0 {
+			t.Errorf("only the version is reported again: %v\n%s", exits, calls)
+		}
+	})
 }
