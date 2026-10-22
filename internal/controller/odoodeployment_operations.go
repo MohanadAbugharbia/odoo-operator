@@ -1439,9 +1439,20 @@ func (r *OdooDeploymentReconciler) driveRestore(ctx context.Context, s *reconcil
 				jobSrc.OdooImage = od.Spec.Image
 				jobSrc.UpgradeModules = restoreUpgradeModules(od)
 			}
-			job, err = jobspec.RestoreJob(params, rs, rs.Status.Suffix, jobSrc, od.Spec.Modules, attempt)
-			if err != nil {
+			build := r.restoreJob
+			if build == nil {
+				build = jobspec.RestoreJob
+			}
+			job, err = build(params, rs, rs.Status.Suffix, jobSrc, od.Spec.Modules, attempt)
+			switch {
+			case err != nil && !rs.Status.LiveChanged:
 				return r.finishRestoreFailed(ctx, s, rs, err.Error())
+			case err != nil:
+				// The swap may have started, so the restore cannot fail
+				// here as one that left the live data alone: the journal
+				// tells, through the Job that only finishes the swap.
+				finishing, noSource = true, "cannot restore from the source again: "+err.Error()
+				job = jobspec.FinishRestoreJob(params, rs, rs.Status.Suffix, rs.Spec.Undo != "", attempt)
 			}
 		}
 		started, err := r.startOperationJob(ctx, s, &job)

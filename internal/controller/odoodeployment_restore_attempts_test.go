@@ -1,11 +1,13 @@
 package controller
 
 import (
+	"errors"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -473,6 +475,36 @@ var _ = Describe("Finishing an interrupted swap", func() {
 		Expect(rs.Status.Message).To(ContainSubstring("swap has not started"))
 		Expect(rs.Status.Message).To(ContainSubstring("the live data was not changed"))
 		Expect(od.Status.CurrentOperation.Kind).To(Equal(odoov1.OperationCleanup), "the loaded copy is cleaned up")
+	})
+
+	It("never says the live data was not changed when a retry's Job cannot be rendered", func() {
+		h = newBackupHarness()
+		h.completedBackup()
+		interrupted(fromBackup, nil)
+		h.r.restoreJob = func(jobspec.Params, *odoov1.OdooRestore, string, jobspec.RestoreSource, []string, int32) (batchv1.Job, error) {
+			return batchv1.Job{}, errors.New("store sets none of s3, sftp, nfs, pvc")
+		}
+		_, od := h.reconcile()
+		rs := h.restore("r")
+		Expect(rs.Status.Phase).To(Equal(odoov1.RestorePhaseRestoring), rs.Status.Message)
+		Expect(rs.Status.LiveChanged).To(BeTrue())
+		Expect(rs.Status.Message).NotTo(ContainSubstring("the live data was not changed"))
+		Expect(rs.Status.Message).To(ContainSubstring("cannot restore from the source again: store sets none"))
+		Expect(jobArgs(h.job(od.Status.CurrentOperation.Job))).To(ContainSubstring("--finish-swap"))
+		Expect(h.replicas()).To(BeZero())
+	})
+
+	It("fails a first attempt whose Job cannot be rendered, live data unchanged", func() {
+		h = newBackupHarness()
+		h.completedBackup()
+		h.r.restoreJob = func(jobspec.Params, *odoov1.OdooRestore, string, jobspec.RestoreSource, []string, int32) (batchv1.Job, error) {
+			return batchv1.Job{}, errors.New("store sets none of s3, sftp, nfs, pvc")
+		}
+		h.newRestore("r", fromBackup)
+		h.reconcile()
+		rs := h.restore("r")
+		Expect(rs.Status.Phase).To(Equal(odoov1.RestorePhaseFailed))
+		Expect(rs.Status.Message).To(ContainSubstring("the live data was not changed"))
 	})
 
 	It("keeps retrying a started swap when finishing reports the journal unchanged", func() {
