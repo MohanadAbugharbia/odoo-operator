@@ -257,6 +257,97 @@ var _ = Describe("Bootstrap from a backup", func() {
 		Expect(od.Status.CurrentOperation.Name).To(Equal(again.Name), "%+v %+v", od.Status.CurrentOperation, h.bootstrapRestore().Status)
 	})
 
+	It("never restores over a database it did not create", func() {
+		h = newBootstrapHarness(false)
+		h.fake.Seed(h.dbName(), "")
+		for i := 0; i < 3; i++ {
+			h.reconcile()
+		}
+		od := h.get()
+		Expect(od.Status.Database.ProvisionedBy).To(Equal(odoov1.DatabaseProvisionedByExternal))
+		Expect(h.bootstrapRestore()).To(BeNil(), "no restore is created")
+		Expect(od.Status.CurrentOperation.Kind).To(BeEmpty())
+		Expect(h.job(h.name+"-init")).To(BeNil(), "Odoo does not initialize over it either")
+		d := h.deployment()
+		Expect(d == nil || *d.Spec.Replicas == 0).To(BeTrue(), "Odoo does not start")
+		Expect(od.Status.Phase).To(Equal(odoov1.PhasePending))
+		cond := condition(od, odoov1.ConditionDegraded)
+		Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+		Expect(cond.Reason).To(Equal(odoov1.ReasonBootstrapFailed))
+		Expect(cond.Message).To(ContainSubstring(`database "` + h.dbName() + `" already exists`))
+		Expect(cond.Message).To(ContainSubstring("Remove spec.bootstrap"))
+		Expect(cond.Message).To(ContainSubstring("OdooRestore"))
+		Expect(condition(od, odoov1.ConditionReady).Reason).To(Equal(odoov1.ReasonBootstrapFailed))
+		Expect(h.fake.Has(h.dbName())).To(BeTrue())
+		Expect(h.fake.CallCount("Create")).To(BeZero())
+
+		By("without spec.bootstrap, Odoo runs the existing database")
+		od.Spec.Bootstrap = nil
+		Expect(k8sClient.Update(ctx, od)).To(Succeed())
+		_, od = h.reconcile()
+		Expect(od.Status.CurrentInitJob.Name).NotTo(BeEmpty(), "the usual init Job of an adopted database")
+		Expect(h.bootstrapRestore()).To(BeNil())
+	})
+
+	It("lets an OdooRestore replace the existing database once spec.bootstrap is removed", func() {
+		h = newBootstrapHarness(false)
+		h.fake.Seed(h.dbName(), "")
+		h.reconcile()
+		h.newRestore("replace", func(s *odoov1.OdooRestoreSpec) {
+			s.From = &odoov1.BackupSource{Store: h.store, Path: "exports/shop_*.zip"}
+		})
+		_, od := h.reconcile()
+		Expect(od.Status.CurrentOperation.Kind).To(BeEmpty(), "nothing runs while the bootstrap is refused")
+		od.Spec.Bootstrap = nil
+		Expect(k8sClient.Update(ctx, od)).To(Succeed())
+		_, od = h.reconcile()
+		Expect(od.Status.CurrentOperation.Kind).To(Equal(odoov1.OperationRestore))
+		Expect(od.Status.CurrentOperation.Name).To(Equal(h.name + "-replace"))
+		Expect(od.Status.CurrentInitJob.Name).To(BeEmpty(), "the restore goes before the init Job")
+	})
+
+	It("fails a bootstrap OdooRestore that never ran when the database turns out to exist", func() {
+		h = newBootstrapHarness(false)
+		h.fake.Seed(h.dbName(), "")
+		od := h.get()
+		rs := &odoov1.OdooRestore{
+			ObjectMeta: metav1.ObjectMeta{Name: bootstrapRestoreName(h.name), Namespace: ns},
+			Spec: odoov1.OdooRestoreSpec{
+				OdooDeployment: h.name, From: &odoov1.BackupSource{Store: h.store, Path: "exports/shop_*.zip"},
+			},
+		}
+		Expect(controllerutil.SetOwnerReference(od, rs, k8sClient.Scheme())).To(Succeed())
+		Expect(k8sClient.Create(ctx, rs)).To(Succeed())
+		for i := 0; i < 3; i++ {
+			_, od = h.reconcile()
+		}
+		Expect(od.Status.CurrentOperation.Kind).To(BeEmpty(), "the restore never starts")
+		rs = h.bootstrapRestore()
+		Expect(rs.Status.Phase).To(Equal(odoov1.RestorePhaseFailed))
+		Expect(rs.Status.Message).To(ContainSubstring("already exists"))
+		Expect(rs.Status.CleanedUp).To(BeTrue())
+
+		By("and it does not run later as an ordinary restore")
+		od.Spec.Bootstrap = nil
+		Expect(k8sClient.Update(ctx, od)).To(Succeed())
+		_, od = h.reconcile()
+		Expect(od.Status.CurrentOperation.Kind).To(BeEmpty())
+		Expect(h.bootstrapRestore().Status.Phase).To(Equal(odoov1.RestorePhaseFailed))
+	})
+
+	It("still bootstraps the empty database it created itself", func() {
+		h = newBootstrapHarness(false)
+		_, od := h.reconcile()
+		Expect(od.Status.Database.ProvisionedBy).To(Equal(odoov1.DatabaseProvisionedByOperator))
+		Expect(h.fake.Has(h.dbName())).To(BeTrue())
+		Expect(h.bootstrapRestore()).NotTo(BeNil())
+		_, od = h.reconcile()
+		Expect(od.Status.CurrentOperation.Kind).To(Equal(odoov1.OperationRestore))
+		if c := condition(od, odoov1.ConditionDegraded); c != nil {
+			Expect(c.Reason).NotTo(Equal(odoov1.ReasonBootstrapFailed))
+		}
+	})
+
 	It("refuses a store without a key for a restic repository", func() {
 		h = newBootstrapHarness(false)
 		od := h.get()

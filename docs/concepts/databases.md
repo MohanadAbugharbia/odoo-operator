@@ -9,6 +9,10 @@ How the operator decides whether it owns an instance's database, and when it may
   the same shape Odoo uses — and tags it with the comment
   `odoo-operator:<namespace>/<name>` (`provisionedBy: operator`). It also tries
   to add the `unaccent` and `pg_trgm` extensions, and carries on without them.
+  An adopted database is never replaced by `spec.bootstrap.fromBackup`: the
+  bootstrap only fills a database the operator created, and waits with
+  `Degraded` reason `BootstrapFailed` otherwise (see
+  [Start from a backup](../guides/start-from-a-backup.md#an-existing-database)).
   Restores and drills create databases (restores also rename them) whatever
   `createPolicy` says, so for those the database user needs `CREATEDB`.
 - `spec.database.deletionPolicy: Delete` adds the finalizer
