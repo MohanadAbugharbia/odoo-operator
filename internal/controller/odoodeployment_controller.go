@@ -1037,7 +1037,17 @@ func (r *OdooDeploymentReconciler) reconcileDelete(ctx context.Context, s *recon
 			fmt.Sprintf("OdooDeployment is being deleted; waiting for %d pod(s) to stop", appPods+ownedPods))
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
+	w, err := r.listWork(ctx, od)
+	if err != nil {
+		return s.fail(odoov1.ReasonDeleting, err)
+	}
+	if err := r.settleBackupOnDelete(ctx, s, w); err != nil {
+		return s.fail(odoov1.ReasonDeleting, err)
+	}
 	if !dropping {
+		if err := r.releaseRestores(ctx, w); err != nil {
+			return s.fail(odoov1.ReasonDeleting, err)
+		}
 		return ctrl.Result{}, s.setFinalizers(ctx, false, false)
 	}
 
@@ -1050,8 +1060,11 @@ func (r *OdooDeploymentReconciler) reconcileDelete(ctx context.Context, s *recon
 	switch {
 	case drop:
 		tag := database.NewOwnerTag(od.Namespace, od.Name)
-		if retry, err := r.dropKeptRestoreData(ctx, s, reconcileloops.ConnInfoFor(od, conn), tag); err != nil || retry {
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+		if wait, err := r.dropWorkData(ctx, s, w, reconcileloops.ConnInfoFor(od, conn), tag); err != nil || wait > 0 {
+			if err != nil {
+				return s.fail(odoov1.ReasonDeleting, err)
+			}
+			return ctrl.Result{RequeueAfter: wait}, nil
 		}
 		err := r.DB.Drop(ctx, reconcileloops.ConnInfoFor(od, conn), db.Name, tag)
 		switch {
@@ -1079,6 +1092,9 @@ func (r *OdooDeploymentReconciler) reconcileDelete(ctx context.Context, s *recon
 		r.event(od, corev1.EventTypeWarning, odoov1.ReasonDatabaseNotDropped, msg)
 	}
 
+	if err := r.releaseRestores(ctx, w); err != nil {
+		return s.fail(odoov1.ReasonDeleting, err)
+	}
 	return ctrl.Result{}, s.setFinalizers(ctx, false, false)
 }
 
@@ -1086,7 +1102,8 @@ func (r *OdooDeploymentReconciler) reconcileDelete(ctx context.Context, s *recon
 // pods ever started a container: nothing of them ran, so nothing is cut
 // short, and a Job stuck before its first container (an image that cannot
 // be pulled, a quota) would otherwise hold the deletion for ever. Jobs that
-// ran anything are left to finish.
+// ran anything are left to finish, and so are the cleanup Jobs the deletion
+// itself starts, which their deadline bounds.
 func (r *OdooDeploymentReconciler) deleteJobsThatNeverRan(ctx context.Context, od *odoov1.OdooDeployment) error {
 	jobs := &batchv1.JobList{}
 	if err := r.reader().List(ctx, jobs, client.InNamespace(od.Namespace),
@@ -1096,6 +1113,10 @@ func (r *OdooDeploymentReconciler) deleteJobsThatNeverRan(ctx context.Context, o
 	for i := range jobs.Items {
 		j := &jobs.Items[i]
 		if !metav1.IsControlledBy(j, od) || jobFinished(j) || j.Status.Failed+j.Status.Succeeded > 0 {
+			continue
+		}
+		if j.Annotations[annotationStartedByDeletion] != "" {
+			// The deletion's own cleanup Job, which its deadline bounds.
 			continue
 		}
 		pods := &corev1.PodList{}
@@ -1131,57 +1152,6 @@ func anyContainerStarted(p *corev1.Pod) bool {
 		}
 	}
 	return false
-}
-
-// dropKeptRestoreData drops, with the instance's database, the databases its
-// restores kept for an undo (a bootstrap's is the empty database it
-// replaced), which nothing would drop once the instance is gone, and deletes
-// the bootstrap OdooRestore, which would otherwise make a new instance of
-// the same name find its old, finished bootstrap. The kept filestores are on
-// the data volume, which goes with the instance. retry is set when a drop
-// failed and should be tried again.
-func (r *OdooDeploymentReconciler) dropKeptRestoreData(ctx context.Context, s *reconcileState,
-	conn database.ConnInfo, tag database.OwnerTag) (retry bool, err error) {
-	od := s.od
-	list := &odoov1.OdooRestoreList{}
-	if err := r.List(ctx, list, client.InNamespace(od.Namespace)); err != nil {
-		return false, err
-	}
-	for i := range list.Items {
-		rs := &list.Items[i]
-		if rs.Spec.OdooDeployment != od.Name {
-			continue
-		}
-		if prev := rs.Status.Previous; prev.State == odoov1.PreviousKept && prev.Database != "" {
-			err := r.DB.Drop(ctx, conn, prev.Database, tag)
-			switch {
-			case errors.Is(err, database.ErrNotOwned):
-				msg := fmt.Sprintf("refusing to drop database %q kept by OdooRestore %s: %v", prev.Database, rs.Name, err)
-				r.event(od, corev1.EventTypeWarning, odoov1.ReasonDatabaseDropRefused, msg)
-			case err != nil:
-				msg := fmt.Sprintf("could not drop database %q kept by OdooRestore %s: %v", prev.Database, rs.Name, err)
-				s.degraded(odoov1.ReasonDatabaseDropFailed, msg)
-				r.event(od, corev1.EventTypeWarning, odoov1.ReasonDatabaseDropFailed, msg)
-				return true, nil
-			default:
-				r.event(od, corev1.EventTypeNormal, odoov1.ReasonDatabaseDropped,
-					fmt.Sprintf("dropped database %q kept by OdooRestore %s", prev.Database, rs.Name))
-				if err := r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) {
-					st.Previous.State = odoov1.PreviousRemoved
-					st.Previous.Database, st.Previous.Filestore = "", ""
-					st.Previous.KeptUntil = nil
-				}); client.IgnoreNotFound(err) != nil {
-					return false, err
-				}
-			}
-		}
-		if rs.Name == bootstrapRestoreName(od.Name) {
-			if err := r.Delete(ctx, rs); client.IgnoreNotFound(err) != nil {
-				return false, err
-			}
-		}
-	}
-	return false, nil
 }
 
 // jobDuration is how long a finished maintenance Job took, from its creation

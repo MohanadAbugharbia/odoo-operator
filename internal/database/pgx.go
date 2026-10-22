@@ -196,3 +196,48 @@ func (p *Pgx) Drop(ctx context.Context, c ConnInfo, db string, tag OwnerTag) err
 	}
 	return nil
 }
+
+func (p *Pgx) Databases(ctx context.Context, c ConnInfo) ([]string, error) {
+	conn, err := p.connect(ctx, c, c.MaintenanceDB)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = conn.Close(ctx) }()
+	rows, err := conn.Query(ctx, "SELECT datname FROM pg_database WHERE NOT datistemplate ORDER BY datname")
+	if err != nil {
+		return nil, fmt.Errorf("list databases: %w", err)
+	}
+	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("list databases: %w", err)
+	}
+	return names, nil
+}
+
+func (p *Pgx) DropCopy(ctx context.Context, c ConnInfo, db, name string, tag OwnerTag) error {
+	if err := CheckCopy(db, name); err != nil {
+		return err
+	}
+	conn, err := p.connect(ctx, c, c.MaintenanceDB)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close(ctx) }()
+
+	current, err := ownerTag(ctx, conn, name)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := copyOwned(name, current, tag); err != nil {
+		return err
+	}
+	// A pod killed while it loaded the copy may leave its session behind.
+	stmt := fmt.Sprintf("DROP DATABASE IF EXISTS %s WITH (FORCE)", quoteIdentifier(name))
+	if _, err := conn.Exec(ctx, stmt); err != nil {
+		return fmt.Errorf("drop database %q: %w", name, err)
+	}
+	return nil
+}

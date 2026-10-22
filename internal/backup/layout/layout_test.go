@@ -291,3 +291,29 @@ func TestNamesMaxLengthPerInputLength(t *testing.T) {
 		t.Fatalf("restore name of a long db is %s bytes", got)
 	}
 }
+
+func TestCopySuffixes(t *testing.T) {
+	s := "20250102T030405"
+	long := strings.Repeat("é", 40)
+	for _, db := range []string{"shop", long} {
+		if got := RestoreSuffix(RestoreName(db, s), db); got != s {
+			t.Errorf("RestoreSuffix(RestoreName(%q)) = %q", db, got)
+		}
+		if got := DrillSuffix(DrillName(db, s), db); got != s {
+			t.Errorf("DrillSuffix(DrillName(%q)) = %q", db, got)
+		}
+		for _, name := range []string{db, PrevName(db, s), DrillName(db, s), RestoreName(db, "latest"), RestoreName(db, s) + "x", "other" + RestoreName(db, s)} {
+			if got := RestoreSuffix(name, db); got != "" {
+				t.Errorf("RestoreSuffix(%q, %q) = %q, want none", name, db, got)
+			}
+		}
+		if got := DrillSuffix(RestoreName(db, s), db); got != "" {
+			t.Errorf("DrillSuffix of a restore copy = %q", got)
+		}
+	}
+	// A live database named like a copy of another is not its own copy.
+	live := RestoreName("shop", s)
+	if got := RestoreSuffix(live, live); got != "" {
+		t.Errorf("RestoreSuffix of the live name = %q", got)
+	}
+}

@@ -34,7 +34,10 @@ import (
 // The OdooDeployment reconciler runs backups and restores. The two small
 // reconcilers here only give a new object a phase straight away and settle
 // the ones whose OdooDeployment does not exist, which no OdooDeployment
-// reconcile would ever see.
+// reconcile would ever see. An OdooDeployment that is being deleted still
+// exists: its deletion waits for its Jobs and settles its backups and
+// restores itself (dropping what they made with its database), so they are
+// left alone until it is gone.
 
 // OdooBackupReconciler marks new backups Pending and fails the ones whose
 // instance is gone.
@@ -85,7 +88,8 @@ func (r *OdooBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 // OdooRestoreReconciler marks new restores Pending, fails the ones whose
 // instance is gone and releases their finalizer: with the instance gone there
-// is nothing left to clean up.
+// is nothing left to clean up. While the instance is being deleted its
+// deletion releases them, once it has dropped what they made.
 type OdooRestoreReconciler struct {
 	client.Client
 }
@@ -189,15 +193,12 @@ func (r *OdooRestoreReconciler) restoresOf(ctx context.Context, obj client.Objec
 	return reqs
 }
 
-// odooDeploymentExists reports whether the instance exists and is not being deleted.
+// odooDeploymentExists reports whether the instance exists, being deleted or
+// not: until it is gone its own reconciler owns its backups and restores.
 func odooDeploymentExists(ctx context.Context, c client.Reader, namespace, name string) (bool, error) {
-	od := &odoov1.OdooDeployment{}
-	err := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, od)
+	err := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, &odoov1.OdooDeployment{})
 	if apierrors.IsNotFound(err) {
 		return false, nil
 	}
-	if err != nil {
-		return false, err
-	}
-	return od.DeletionTimestamp.IsZero(), nil
+	return err == nil, err
 }

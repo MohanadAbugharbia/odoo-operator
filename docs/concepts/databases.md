@@ -29,8 +29,25 @@ How the operator decides whether it owns an instance's database, and when it may
   `DROP DATABASE … WITH (FORCE)`, which needs PostgreSQL 13 or later. If the
   connection Secret is already gone (for example when the whole namespace is
   deleted) the database is left in place with a `DatabaseNotDropped` event.
-  With it go the databases the instance's restores kept for an undo
-  (`status.previous.database`), under the same tag check.
+  With it go the databases the instance's restores made: the data a restore
+  replaced and kept for an undo (`<db>_prev_<suffix>`, under the same tag
+  check) and the copy a restore loads into (`<db>_restore_<suffix>`, which
+  carries no comment and is dropped by that exact name only, never a
+  database carrying another owner's tag). That includes a restore the
+  deletion cut short, whose Job may have swapped the data in after the
+  restore stopped being followed: it is marked `Failed` and `cleanedUp`.
+  So do the scratch databases restore drills left (`<db>_drill_<suffix>`,
+  found by that exact name, see [Restore drills](../guides/drills.md)).
+- An instance being deleted settles its own backups and restores: the
+  `OdooBackup` and `OdooRestore` reconcilers leave them alone until the
+  instance is gone. The deletion waits for a running backup Job, records its
+  snapshot on the `OdooBackup` (or the reason it failed), and only then
+  removes the instance; a backup still `Running` once the instance is gone
+  is marked `Failed`. The deletion also releases the finalizer of the
+  instance's `OdooRestore`s, after it dropped what they made, so restores
+  deleted together with their instance (`kubectl delete
+  odoorestore,odoodeployment --all`, or an Argo CD or Helm uninstall) take
+  their kept databases with them as well.
 - `spec.database.name` and the `nameFromSecret` selector are immutable so a
   rename can never orphan or drop the wrong database. Changing the value inside
   the Secret that `nameFromSecret` points at stops the instance instead: phase
@@ -38,3 +55,17 @@ How the operator decides whether it owns an instance's database, and when it may
 - `spec.odooFilestore.deletionPolicy` works the same way for the filestore PVC
   (Retain by default). The PVC is created once: changing
   `spec.odooFilestore.size` or `storageClassName` later does not change it.
+  When the database is dropped but the PVC is retained, the deletion first
+  runs, one at a time, the cleanup Job of every restore that left something
+  on it: the `filestore/<db>_prev_<suffix>` and
+  `filestore/<db>_restore_<suffix>` folders, the staging folder
+  `.odoo-operator/staging-<suffix>` and the journal
+  `.odoo-operator/restore-<suffix>.json`, exactly what a cleanup after
+  `keepPrevious` deletes (the instance's own `filestore/<db>` stays, with
+  the volume). A cleanup Job that fails, or cannot start because the
+  namespace is being deleted, is not tried again and does not hold the
+  deletion: that restore keeps `status.cleanedUp: false` and
+  `status.previous.filestore`, and its annotation
+  `odoo.abugharbia.com/files-kept` (and a `RestoreFilesKept` event) names
+  the paths left on the volume. With the database retained, all of it stays
+  with the database.

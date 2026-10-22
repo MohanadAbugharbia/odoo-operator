@@ -120,8 +120,18 @@ func TestZipCopies(t *testing.T) {
 			// The zip is Odoo's own layout and the backup's contents.
 			checkZipLayout(t, joinTarget(je.probeTarget, c1.File), res1.FilestoreFiles)
 
+			// An upload killed mid-way left its temporary file, which no
+			// retry overwrites (a retry's zip has a new name).
+			partial := path.Join(folder, "."+ZipName(f.db, time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))+".partial")
+			if _, err := rcloneRun(context.Background(), "", "touch", joinTarget(je.probeTarget, partial)); err != nil {
+				t.Fatal(err)
+			}
+			if got := zipNames(t, je.probeTarget, folder); len(got) != 2 {
+				t.Fatalf("store holds %v, want the zip and the partial upload", got)
+			}
+
 			// A second backup in another second: retention forgets the first
-			// and its zip goes.
+			// and its zip goes, and so does the partial upload.
 			time.Sleep(1100 * time.Millisecond)
 			before := f.state(f.db)
 			res2 := f.mustBackup("two", withCopies)

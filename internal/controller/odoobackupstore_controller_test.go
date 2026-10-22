@@ -867,7 +867,7 @@ var _ = Describe("OdooBackup and OdooRestore reconcilers", func() {
 			Entry("WaitingForFilestoreCleanup", odoov1.BackupPhaseWaitingForFilestoreCleanup),
 		)
 
-		It("treats an OdooDeployment being deleted as gone", func() {
+		It("leaves the backup of an OdooDeployment being deleted to its deletion", func() {
 			od := h.create(func(od *odoov1.OdooDeployment) {
 				od.Finalizers = []string{"test.odoo.abugharbia.com/hold"}
 			})
@@ -881,7 +881,8 @@ var _ = Describe("OdooBackup and OdooRestore reconcilers", func() {
 			name := bwName("bk")
 			t.create(newBackup(name, h.name))
 			setBackupPhase(name, odoov1.BackupPhaseRunning)
-			Expect(reconcileBackup(name).Status.Phase).To(Equal(odoov1.BackupPhaseFailed))
+			Expect(reconcileBackup(name).Status.Phase).To(Equal(odoov1.BackupPhaseRunning),
+				"the deletion waits for its Job and records how it ended")
 		})
 
 		DescribeTable("leaves other backups untouched",
@@ -1012,6 +1013,34 @@ var _ = Describe("OdooBackup and OdooRestore reconcilers", func() {
 			Expect(got).NotTo(BeNil())
 			Expect(got.Finalizers).To(ContainElement(odoov1.RestoreFinalizer))
 			Expect(got.Status.Phase).To(Equal(odoov1.RestorePhaseRestoring), "the OdooDeployment reconciler finishes it")
+		})
+
+		It("leaves the restores of an OdooDeployment being deleted to its deletion", func() {
+			od := h.create(func(od *odoov1.OdooDeployment) {
+				od.Finalizers = []string{"test.odoo.abugharbia.com/hold"}
+			})
+			Expect(k8sClient.Delete(ctx, od)).To(Succeed())
+			DeferCleanup(func() {
+				if cur := h.get(); cur != nil {
+					cur.Finalizers = nil
+					_ = k8sClient.Update(ctx, cur)
+				}
+			})
+			running, deleted := bwName("rs"), bwName("rs")
+			for _, name := range []string{running, deleted} {
+				rs := newRestore(name, h.name)
+				rs.Finalizers = []string{odoov1.RestoreFinalizer}
+				t.create(rs)
+				setRestorePhase(name, odoov1.RestorePhaseRestoring)
+			}
+			Expect(k8sClient.Delete(ctx, getRestore(deleted))).To(Succeed())
+			for _, name := range []string{running, deleted} {
+				got := reconcileRestore(name)
+				Expect(got).NotTo(BeNil())
+				Expect(got.Status.Phase).To(Equal(odoov1.RestorePhaseRestoring))
+				Expect(got.Finalizers).To(ContainElement(odoov1.RestoreFinalizer),
+					"the deletion drops what the restore made before it lets it go")
+			}
 		})
 
 		It("releases the finalizer of a finished restore whose OdooDeployment is gone", func() {
