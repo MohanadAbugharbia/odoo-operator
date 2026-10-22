@@ -24,7 +24,10 @@ becomes `<db>_prev_<suffix>` and the restored data takes its place, and Odoo
 starts on the image recorded in the backup. A restore that fails before the
 swap leaves the live data untouched (`Failed`); one that fails during the swap
 is retried until it finishes, with Odoo stopped and the instance `Degraded`
-(`RestoreIncomplete`). A restore takes precedence over everything else and
+(`RestoreIncomplete`). Only the Job's main container swaps: a Job whose pods
+never got past the steps before it (the load step was OOMKilled, the Odoo
+step's image could not be pulled) fails with the live data untouched and the
+step named in `status.message`. A restore takes precedence over everything else and
 replaces a failed init or upgrade Job, which makes it the way back from a
 failed upgrade. Modules in `spec.modules` that the backup lacks are installed
 again afterwards.
@@ -151,6 +154,24 @@ database keeps the module versions of the backup until the next upgrade.
 The live data is never edited in place, so a restore can fail without
 damaging it, and a Job that dies halfway finishes when it is retried:
 
+How the operator tells which side of the swap a failed Job ended on:
+
+- It reads the result of the Job's newest pod only, its latest attempt. An
+  older attempt's result is stale once another pod ran after it.
+- When that pod left a result, the result says whether the swap had started
+  (the agent reads it from the restore journal on the data volume).
+- When it left none, and no pod of the Job got as far as the main container,
+  nothing was swapped: the restore fails, and the message names the step
+  that failed and why (for example `failed in step load: OOMKilled (exit
+  code 137)`).
+- When it left none after the main container started, or the pods that
+  would tell are gone, the swap may have started: Odoo stays stopped and the
+  restore is retried (`status.liveChanged`, `status.liveChangeUnconfirmed`).
+  If the next attempt reports, from the journal, that the swap never
+  started, the restore fails with the live data untouched instead of being
+  retried for ever. A swap that a result reported as started is always
+  finished.
+
 ```mermaid
 flowchart TD
   start([OdooRestore: Odoo is stopped]) --> load["Load the backup beside the live data:<br/>database db_restore_suffix, its filestore"]
@@ -164,6 +185,9 @@ flowchart TD
   step --> swap["Swap: live becomes db_prev_suffix,<br/>restored becomes db"]
   swap -->|Job dies| retry["Retried Job reads the journal<br/>and finishes the swap<br/>(Degraded: RestoreIncomplete meanwhile)"]
   retry --> swap
+  swap -->|"Job dies, no result"| unknown["Odoo stays stopped, retried;<br/>the next attempt's journal decides"]
+  unknown -->|journal: swap never started| failed
+  unknown -->|journal: swap started| swap
   swap --> run[Odoo starts on the backup's image]
   run --> kept["Previous data kept until<br/>status.previous.keptUntil"]
   kept -->|OdooRestore with undo| undo[Swap the previous data back]

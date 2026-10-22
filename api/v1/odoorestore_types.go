@@ -204,6 +204,13 @@ type OdooRestoreStatus struct {
 	// database or files; from then on it is finished by retrying, never
 	// abandoned.
 	LiveChanged bool `json:"liveChanged,omitempty"`
+	// LiveChangeUnconfirmed is true while liveChanged rests only on
+	// attempts that ended without a result after their main container may
+	// have started (it ran, or the pods that would tell are gone).
+	// The next attempt reads the restore journal: when it reports that the
+	// swap never started, the restore fails with the live data unchanged
+	// instead of being retried.
+	LiveChangeUnconfirmed bool `json:"liveChangeUnconfirmed,omitempty"`
 	// RetryAfter is when the next attempt (of the restore or its cleanup)
 	// starts after a failed one.
 	RetryAfter *metav1.Time `json:"retryAfter,omitempty"`

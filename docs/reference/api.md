@@ -875,6 +875,7 @@ _Appears in:_
 | `job` _string_ | Job is the Job running the restore. Attempts counts the Jobs that<br />ran it. |  |  |
 | `attempts` _integer_ |  |  |  |
 | `liveChanged` _boolean_ | LiveChanged is true once the restore may have renamed the live<br />database or files; from then on it is finished by retrying, never<br />abandoned. |  |  |
+| `liveChangeUnconfirmed` _boolean_ | LiveChangeUnconfirmed is true while liveChanged rests only on<br />attempts that ended without a result after their main container may<br />have started (it ran, or the pods that would tell are gone).<br />The next attempt reads the restore journal: when it reports that the<br />swap never started, the restore fails with the live data unchanged<br />instead of being retried. |  |  |
 | `retryAfter` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta)_ | RetryAfter is when the next attempt (of the restore or its cleanup)<br />starts after a failed one. |  |  |
 | `startedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta)_ |  |  |  |
 | `completedAt` _[Time](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta)_ |  |  |  |

@@ -543,6 +543,10 @@ type jobOutcome struct {
 	detail string
 	// pullMessage is set while the Job's pod cannot pull its image.
 	pullMessage string
+	// mainStarted is false only when no pod of the finished Job got as far
+	// as its main container (a step before it failed, or no pod ran at
+	// all), and every pod the Job counted is still there to show it.
+	mainStarted bool
 }
 
 // observeJob reads the state of a backup Job and, once it has finished, the
@@ -569,6 +573,12 @@ func (r *OdooDeploymentReconciler) observeJob(ctx context.Context, namespace, na
 	pods := &corev1.PodList{}
 	if err := r.reader().List(ctx, pods, client.InNamespace(namespace), client.MatchingLabels{"job-name": name}); err != nil {
 		return out, fmt.Errorf("list pods of job %s: %w", name, err)
+	}
+	out.mainStarted = obs.Job != nil && len(pods.Items) < int(obs.Job.Status.Failed+obs.Job.Status.Succeeded)
+	for i := range pods.Items {
+		if mainMayHaveRun(&pods.Items[i]) {
+			out.mainStarted = true
+		}
 	}
 	newest := newestPod(pods.Items)
 	if newest == nil {
@@ -611,6 +621,31 @@ func newestPod(pods []corev1.Pod) *corev1.Pod {
 		}
 	}
 	return newest
+}
+
+// mainMayHaveRun reports whether the pod's main container may have started.
+// Only a pod that shows it never got that far says no: its main container
+// is waiting and never ran before, or it has no status for it while the pod
+// is pending or failed and did not get through its steps (init containers).
+func mainMayHaveRun(p *corev1.Pod) bool {
+	for _, cs := range p.Status.ContainerStatuses {
+		if cs.Name == jobspec.ContainerName {
+			return cs.State.Waiting == nil || cs.LastTerminationState.Terminated != nil || cs.LastTerminationState.Running != nil
+		}
+	}
+	if p.Status.Phase != corev1.PodPending && p.Status.Phase != corev1.PodFailed {
+		return true
+	}
+	if len(p.Status.InitContainerStatuses) < len(p.Spec.InitContainers) {
+		return false
+	}
+	for _, cs := range p.Status.InitContainerStatuses {
+		if t := cs.State.Terminated; t == nil || t.ExitCode != 0 {
+			return false
+		}
+	}
+	// Every step succeeded but the main container has no status yet.
+	return len(p.Spec.InitContainers) > 0
 }
 
 // podFailureText says why a pod's main container did not finish, from what
@@ -704,7 +739,11 @@ func (r *OdooDeploymentReconciler) abandonOperation(ctx context.Context, s *reco
 			s.ready(metav1.ConditionFalse, ReasonWaitingForOperation, why+"; waiting for job "+op.Job+" to finish")
 			return ctrl.Result{RequeueAfter: 15 * time.Second}, false, nil
 		}
-		if op.Kind == odoov1.OperationRestore && (!out.decoded || out.result.LiveChanged) && (!out.decoded || !out.result.OK) {
+		mayHaveChanged := out.result.LiveChanged && !out.result.OK
+		if !out.decoded {
+			mayHaveChanged = out.mainStarted
+		}
+		if op.Kind == odoov1.OperationRestore && mayHaveChanged {
 			// The restore may have renamed the live data and nobody can
 			// finish it any more: keep Odoo stopped for a person to look.
 			msg := fmt.Sprintf("%s while job %s had not finished the swap; Odoo stays stopped. "+
@@ -1428,8 +1467,21 @@ func (r *OdooDeploymentReconciler) driveRestore(ctx context.Context, s *reconcil
 	}
 
 	msg := fmt.Sprintf("job %s %s; inspect with: kubectl -n %s logs job/%s", op.Job, failureText(out), od.Namespace, op.Job)
-	liveChanged := rs.Status.LiveChanged || !out.decoded || out.result.LiveChanged
+	liveChanged, unconfirmed := liveChangeAfter(rs.Status, out)
 	if !liveChanged {
+		if !out.decoded {
+			msg += "; no pod of it got past the steps before the swap"
+		}
+		if rs.Status.LiveChanged {
+			// Only an earlier attempt without a result made it look started.
+			msg += "; the restore journal shows the swap never started"
+			if err := r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) {
+				st.LiveChanged = false
+				st.LiveChangeUnconfirmed = false
+			}); err != nil {
+				return ctrl.Result{}, false, err
+			}
+		}
 		return r.finishRestoreFailed(ctx, s, rs, msg)
 	}
 	// The swap may have started: the only safe way out is forward.
@@ -1440,6 +1492,7 @@ func (r *OdooDeploymentReconciler) driveRestore(ctx context.Context, s *reconcil
 	err = r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) {
 		st.Message = full
 		st.LiveChanged = true
+		st.LiveChangeUnconfirmed = unconfirmed
 		st.RetryAfter = &retry
 		st.Job = ""
 	})
@@ -1450,6 +1503,28 @@ func (r *OdooDeploymentReconciler) driveRestore(ctx context.Context, s *reconcil
 	r.objectEvent(rs, corev1.EventTypeWarning, ReasonRestoreIncomplete, full)
 	op.Job = ""
 	return ctrl.Result{RequeueAfter: delay}, false, nil
+}
+
+// liveChangeAfter decides, after a failed restore attempt, whether the
+// restore may have changed the live data, which only its main container
+// does (the swap), and whether that rests only on attempts that left no
+// result. The agent's result is read from the restore journal on the data
+// volume, so it speaks for every attempt before it: a result saying the swap
+// has not started clears a change that only an attempt without a result
+// suggested, never one a result reported. An attempt whose pods never
+// reached the main container changes nothing either way.
+func liveChangeAfter(st odoov1.OdooRestoreStatus, out jobOutcome) (changed, unconfirmed bool) {
+	confirmed := st.LiveChanged && !st.LiveChangeUnconfirmed
+	switch {
+	case out.decoded && out.result.LiveChanged:
+		return true, false
+	case out.decoded:
+		return confirmed, false
+	case out.mainStarted:
+		return true, !confirmed
+	default:
+		return st.LiveChanged, st.LiveChangeUnconfirmed
+	}
 }
 
 // restoreUpgradeModules are the modules an OdooRestore with spec.upgrade
@@ -1502,6 +1577,7 @@ func (r *OdooDeploymentReconciler) finishRestore(ctx context.Context, s *reconci
 		st.Image = image
 		st.OdooVersion = res.OdooVersion
 		st.LiveChanged = true
+		st.LiveChangeUnconfirmed = false
 		st.RetryAfter = nil
 		st.Warnings = res.Warnings
 		if res.SnapshotID != "" {

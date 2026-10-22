@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/jobspec"
@@ -62,6 +63,23 @@ func stepDone(name string) corev1.ContainerStatus {
 	return corev1.ContainerStatus{Name: name, Image: "x", State: corev1.ContainerState{
 		Terminated: &corev1.ContainerStateTerminated{ExitCode: 0, Reason: "Completed", FinishedAt: metav1.Now()},
 	}}
+}
+
+func stepFailed(name, reason string, exit int32) corev1.ContainerStatus {
+	return corev1.ContainerStatus{Name: name, Image: "x", State: corev1.ContainerState{
+		Terminated: &corev1.ContainerStateTerminated{ExitCode: exit, Reason: reason, FinishedAt: metav1.Now()},
+	}}
+}
+
+func stepWaiting(name, reason, message string) corev1.ContainerStatus {
+	return corev1.ContainerStatus{Name: name, Image: "x", State: corev1.ContainerState{
+		Waiting: &corev1.ContainerStateWaiting{Reason: reason, Message: message},
+	}}
+}
+
+func mainWaiting() *corev1.ContainerStatus {
+	s := stepWaiting(jobspec.ContainerName, "PodInitializing", "")
+	return &s
 }
 
 func mainRunning() *corev1.ContainerStatus {
@@ -136,6 +154,130 @@ var _ = Describe("Restore attempts", func() {
 		Expect(rs.Status.LiveChanged).To(BeTrue())
 		Expect(rs.Status.Message).NotTo(ContainSubstring("table x"), "the older attempt's result is stale")
 		Expect(h.replicas()).To(BeZero())
+	})
+
+	It("fails cleanly when a step before the swap failed in every attempt", func() {
+		job := startRestore()
+		h.attemptPod(job, "a", podStatus{
+			phase: corev1.PodFailed, steps: []corev1.ContainerStatus{stepDone("load"), stepFailed("odoo", "Error", 1)},
+			main: mainWaiting(),
+		})
+		nextSecond()
+		h.attemptPod(job, "b", podStatus{
+			phase: corev1.PodFailed, steps: []corev1.ContainerStatus{stepFailed("load", "OOMKilled", 137), stepWaiting("odoo", "PodInitializing", "")},
+			main: mainWaiting(),
+		})
+		h.endJob(job, 2, false)
+		_, od := h.reconcile()
+		rs := h.restore("r")
+		Expect(rs.Status.Phase).To(Equal(odoov1.RestorePhaseFailed), rs.Status.Message)
+		Expect(rs.Status.LiveChanged).To(BeFalse())
+		Expect(rs.Status.RetryAfter).To(BeNil())
+		Expect(rs.Status.Message).To(ContainSubstring("failed in step load: OOMKilled (exit code 137)"), "the newest attempt's reason")
+		Expect(rs.Status.Message).NotTo(ContainSubstring("step odoo"))
+		Expect(rs.Status.Message).To(ContainSubstring("BackoffLimitExceeded"))
+		Expect(rs.Status.Message).To(ContainSubstring("no pod of it got past the steps before the swap"))
+		Expect(rs.Status.Message).To(ContainSubstring("the live data was not changed"))
+		Expect(condition(od, odoov1.ConditionDegraded).Reason).NotTo(Equal(ReasonRestoreIncomplete))
+
+		By("the half-restored copy is cleaned up and Odoo comes back")
+		Expect(od.Status.CurrentOperation.Kind).To(Equal(odoov1.OperationCleanup))
+		h.finishJob(od.Status.CurrentOperation.Job, &result.Result{OK: true})
+		_, od = h.reconcile()
+		Expect(od.Status.CurrentOperation.Kind).To(BeEmpty())
+		Expect(h.replicas()).To(Equal(int32(1)))
+		Expect(od.Status.Phase).To(Equal(odoov1.PhaseRunning))
+	})
+
+	It("fails cleanly when a step's image cannot be pulled before the deadline", func() {
+		job := startRestore()
+		h.attemptPod(job, "a", podStatus{
+			phase: corev1.PodPending,
+			steps: []corev1.ContainerStatus{stepDone("load"), stepWaiting("odoo", "ImagePullBackOff", `Back-off pulling image "odoo:gone"`)},
+			main:  mainWaiting(),
+		})
+		h.endJob(job, 1, false)
+		h.reconcile()
+		rs := h.restore("r")
+		Expect(rs.Status.Phase).To(Equal(odoov1.RestorePhaseFailed), rs.Status.Message)
+		Expect(rs.Status.Message).To(ContainSubstring(`step odoo could not start: ImagePullBackOff: Back-off pulling image "odoo:gone"`))
+		Expect(rs.Status.LiveChanged).To(BeFalse())
+	})
+
+	It("fails cleanly when the Job ended before any pod ran", func() {
+		job := startRestore()
+		h.endJob(job, 0, false)
+		h.reconcile()
+		Expect(h.restore("r").Status.Phase).To(Equal(odoov1.RestorePhaseFailed))
+	})
+
+	It("keeps going forward when an older attempt reached the swap step", func() {
+		job := startRestore()
+		killed := &corev1.ContainerStatus{Name: jobspec.ContainerName, Image: "x", State: corev1.ContainerState{
+			Terminated: &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "OOMKilled", FinishedAt: metav1.Now()},
+		}}
+		h.attemptPod(job, "a", podStatus{
+			phase: corev1.PodFailed, steps: []corev1.ContainerStatus{stepDone("load"), stepDone("odoo")}, main: killed,
+		})
+		nextSecond()
+		h.attemptPod(job, "b", podStatus{
+			phase: corev1.PodFailed, steps: []corev1.ContainerStatus{stepFailed("load", "Error", 1), stepWaiting("odoo", "PodInitializing", "")},
+			main: mainWaiting(),
+		})
+		h.endJob(job, 2, false)
+		h.reconcile()
+		rs := h.restore("r")
+		Expect(rs.Status.Phase).To(Equal(odoov1.RestorePhaseRestoring))
+		Expect(rs.Status.LiveChanged).To(BeTrue())
+		Expect(rs.Status.LiveChangeUnconfirmed).To(BeTrue())
+		Expect(rs.Status.Message).To(ContainSubstring("failed in step load: Error (exit code 1)"))
+		Expect(rs.Status.Message).To(ContainSubstring("Odoo stays stopped"))
+		Expect(h.replicas()).To(BeZero())
+
+		By("a next attempt that again stops before the swap step settles nothing")
+		past := metav1.NewTime(time.Now().Add(-time.Second))
+		rs.Status.RetryAfter = &past
+		Expect(k8sClient.Status().Update(ctx, rs)).To(Succeed())
+		_, od := h.reconcile()
+		second := od.Status.CurrentOperation.Job
+		Expect(second).NotTo(BeEmpty())
+		Expect(second).NotTo(Equal(job))
+		h.attemptPod(second, "a", podStatus{
+			phase: corev1.PodFailed, steps: []corev1.ContainerStatus{stepFailed("load", "OOMKilled", 137)}, main: mainWaiting(),
+		})
+		h.endJob(second, 1, false)
+		h.reconcile()
+		rs = h.restore("r")
+		Expect(rs.Status.Phase).To(Equal(odoov1.RestorePhaseRestoring))
+		Expect(rs.Status.LiveChanged).To(BeTrue())
+		Expect(rs.Status.LiveChangeUnconfirmed).To(BeTrue())
+	})
+
+	It("keeps going forward when pods the Job counted are gone", func() {
+		job := startRestore()
+		h.attemptPod(job, "b", podStatus{
+			phase: corev1.PodFailed, steps: []corev1.ContainerStatus{stepFailed("load", "OOMKilled", 137)}, main: mainWaiting(),
+		})
+		h.endJob(job, 3, false)
+		h.reconcile()
+		rs := h.restore("r")
+		Expect(rs.Status.Phase).To(Equal(odoov1.RestorePhaseRestoring), "two attempts left no pod to tell how far they got")
+		Expect(rs.Status.LiveChanged).To(BeTrue())
+	})
+
+	It("abandons a force-deleted restore whose pods never reached the swap step", func() {
+		job := startRestore()
+		fresh := h.restore("r")
+		controllerutil.RemoveFinalizer(fresh, odoov1.RestoreFinalizer)
+		Expect(k8sClient.Update(ctx, fresh)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, fresh)).To(Succeed())
+		h.attemptPod(job, "a", podStatus{
+			phase: corev1.PodFailed, steps: []corev1.ContainerStatus{stepFailed("load", "Error", 1)}, main: mainWaiting(),
+		})
+		h.endJob(job, 1, false)
+		_, od := h.reconcile()
+		Expect(od.Status.Phase).NotTo(Equal(odoov1.PhaseFailed))
+		Expect(od.Status.CurrentOperation.Kind).To(BeEmpty())
 	})
 
 	It("takes the result of the newest pod when it succeeded after a failed one", func() {

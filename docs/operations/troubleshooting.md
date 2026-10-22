@@ -111,12 +111,12 @@ example alerts, report failures.
 | What you see | Meaning | What to do |
 |---|---|---|
 | `Failed` with a `RestoreRefused` event | The restore was refused before it started: the backup does not exist, is of another instance, has not completed, the store is missing, the undo target is gone or not the latest. | Read `status.message`; create a corrected OdooRestore. |
-| `Failed`, "the live data was not changed" | The Job failed before the swap. | `kubectl -n <ns> logs job/<job>`; nothing to undo. |
+| `Failed`, "the live data was not changed" | The Job failed before the swap. "no pod of it got past the steps before the swap" means its pods stopped in the load or Odoo step; the message names the step and the reason (`OOMKilled`, `ImagePullBackOff`). "the restore journal shows the swap never started" ends a restore that an attempt without a result had kept going. | `kubectl -n <ns> logs job/<job> -c <step>`; give the Job more memory (`spec.backup.resources`) or fix the image; nothing to undo. |
 | `Failed`: "the backup was taken on Odoo … but the instance runs Odoo …" | A backup of another Odoo series than the instance's image (17.0 on 18.0). | Restore it on an image of its series, or upgrade it there first. |
 | `Failed`: "no file in … matches" | `from.path`'s pattern matched no file in the store. | Check the folder and pattern; a pattern is only allowed in the last segment. |
 | `Failed`: "has no encryptionKeySecret" | `from` names a restic repository in a store without a key. | Add the repository's key to the store, or point `from.path` at a `.zip` or `.dump` file. |
 | `Failed`: "neutralize" | Odoo could not neutralize the loaded database (Odoo before 16 has no `neutralize`). | Read the Job's `odoo` container log; restore without `neutralize` and neutralize by hand. |
-| `Restoring` for long, instance `Degraded` `RestoreIncomplete` | The Job failed after the swap may have started; it is retried, from 30 seconds up to every 15 minutes, until it finishes. Odoo stays stopped meanwhile. | Fix the cause (store, database); it carries on by itself. |
+| `Restoring` for long, instance `Degraded` `RestoreIncomplete` | The Job failed after the swap may have started: its result said so, or its main container started and left no result (`status.liveChangeUnconfirmed`). It is retried, from 30 seconds up to every 15 minutes, until it finishes, or until an attempt reports from the restore journal that the swap never started. Odoo stays stopped meanwhile. | Fix the cause (store, database); it carries on by itself. |
 | `Stopping` | Waiting for Odoo's pods to stop. | — |
 
 ## Backup stores
