@@ -218,6 +218,9 @@ func drillSummary(b *odoov1.OdooBackup, snapshot string, res result.Result) stri
 	if len(res.MissingModules) > 0 {
 		msg += "; it lacks modules " + strings.Join(res.MissingModules, ", ")
 	}
+	if res.MissingModulesUnknown {
+		msg += "; it lacks modules of spec.modules, too many to list in its result"
+	}
 	if len(res.Warnings) > 0 {
 		msg += "; " + strings.Join(res.Warnings, "; ")
 	}

@@ -18,7 +18,8 @@ limitations under the License.
 // back to the operator. The Job writes it as JSON to its termination message
 // (the Job pods have no Kubernetes credentials), and the operator reads it
 // from the pod's terminated state. Kubernetes keeps at most 4096 bytes of a
-// termination message, so Encode trims the lists until it fits.
+// termination message, so Encode trims what only informs until it fits, and
+// never silently drops what the operator acts on (see Encode).
 package result
 
 import (
@@ -120,8 +121,15 @@ type Result struct {
 	Image        string `json:"image,omitempty"`
 	UpgradeToken string `json:"upgradeToken,omitempty"`
 	// MissingModules are modules the operator expected (spec.modules) that
-	// the restored database does not have installed.
+	// the restored database does not have installed. The operator installs
+	// them, so Encode never shortens the list: when it does not fit, it
+	// drops it whole and sets MissingModulesUnknown.
 	MissingModules []string `json:"missingModules,omitempty"`
+	// MissingModulesUnknown is set by Encode when MissingModules did not fit
+	// in the termination message: which modules the restored database lacks
+	// is then not in the result, and the operator reads the installed
+	// modules from the database itself.
+	MissingModulesUnknown bool `json:"missingModulesUnknown,omitempty"`
 	// LiveChanged is true once the live database or filestore may have been
 	// renamed: from then on the restore is only ever finished, never
 	// abandoned.
@@ -163,8 +171,12 @@ const (
 	errorCut     = "… (see the Job log)"
 )
 
-// Encode returns r as JSON no longer than MaxBytes, dropping list entries
-// and shortening the error until it fits.
+// Encode returns r as JSON no longer than MaxBytes. It first drops list
+// entries and shortens the error, which only inform. If that is not enough it
+// drops the warnings, then MissingModules as a whole (setting
+// MissingModulesUnknown, never keeping part of the list), then shortens the
+// longest free-form field in turn. The flags (ok, final, deferred,
+// liveChanged, previousKept) always survive.
 func Encode(r Result) []byte {
 	for {
 		b, err := json.Marshal(r)
@@ -186,8 +198,6 @@ func Encode(r Result) []byte {
 			r.RepositoryErrors = []string{r.RepositoryErrors[0][:512-len(errorCut)] + errorCut}
 		case len(r.Warnings) > 2 || (len(r.Warnings) == 2 && r.Warnings[1] != moreWarnings):
 			r.Warnings = append(r.Warnings[:len(r.Warnings)/2:len(r.Warnings)/2], moreWarnings)
-		case len(r.MissingModules) > 0:
-			r.MissingModules = r.MissingModules[:len(r.MissingModules)/2]
 		case len(r.Error) > 512:
 			r.Error = r.Error[:512-len(errorCut)] + errorCut
 		case len(r.RetentionError) > 512:
@@ -204,19 +214,56 @@ func Encode(r Result) []byte {
 			// A new slice: r shares its backing array with the caller's.
 			r.Warnings = append([]string{r.Warnings[0][:512-len("…")] + "…"}, r.Warnings[1:]...)
 		default:
-			// Nothing left to trim but the free-form fields. Each is bounded
-			// here, so this fits even when every byte is JSON-escaped.
-			b, err := json.Marshal(Result{OK: r.OK, Step: truncate(r.Step, 64), Error: truncate(r.Error, 256),
-				Final: r.Final, Deferred: r.Deferred, SnapshotID: truncate(r.SnapshotID, 128),
-				LiveChanged: r.LiveChanged, PreviousKept: r.PreviousKept, Forgotten: r.Forgotten,
-				RetentionError: truncate(r.RetentionError, 256), Copies: shortCopies(r.Copies),
-				Repositories: r.Repositories, StoredBytes: r.StoredBytes})
-			if err != nil || len(b) > MaxBytes {
-				return []byte(`{"ok":false,"error":"could not encode the result"}`)
-			}
+			return encodeEssential(r)
+		}
+	}
+}
+
+// encodeEssential encodes a result that the list trims of Encode could not
+// make fit.
+func encodeEssential(r Result) []byte {
+	r.Warnings, r.MissingNames = nil, nil
+	if b, ok := fits(r); ok {
+		return b
+	}
+	if len(r.MissingModules) > 0 {
+		r.MissingModules, r.MissingModulesUnknown = nil, true
+		if b, ok := fits(r); ok {
 			return b
 		}
 	}
+	r.Copies, r.RepositoryErrors = shortCopies(r.Copies), nil
+	for {
+		if b, ok := fits(r); ok {
+			return b
+		}
+		// Halve the longest free-form field; each one is bounded only by
+		// what the Job was given, and every byte may be JSON-escaped.
+		fields := []*string{&r.Step, &r.Error, &r.SnapshotID, &r.OdooVersion, &r.PgServerVersion,
+			&r.Image, &r.UpgradeToken, &r.File, &r.RetentionError}
+		longest := fields[0]
+		for _, f := range fields[1:] {
+			if len(*f) > len(*longest) {
+				longest = f
+			}
+		}
+		switch {
+		case len(*longest) > 16:
+			*longest = truncate(*longest, len(*longest)/2)
+		case len(r.Copies) > 0:
+			r.Copies = nil
+		case len(r.Forgotten) > 0:
+			r.Forgotten = nil
+		default:
+			// Cannot happen: what is left is a few short strings and numbers.
+			return []byte(fmt.Sprintf(`{"ok":false,"liveChanged":%t,"error":"could not encode the result"}`, r.LiveChanged))
+		}
+	}
+}
+
+func fits(r Result) ([]byte, bool) {
+	b, err := json.Marshal(r)
+	return b, err == nil && len(b) <= MaxBytes
 }
 
 // Write writes r to path (the container's termination message file).

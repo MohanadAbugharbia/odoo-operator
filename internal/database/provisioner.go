@@ -66,6 +66,9 @@ type Provisioner interface {
 	// refused with ErrNotCopy, and so is a copy whose comment is set to
 	// anything but tag (ErrNotOwned). A copy that does not exist is no error.
 	DropCopy(ctx context.Context, c ConnInfo, db, name string, tag OwnerTag) error
+	// InstalledModules lists the Odoo modules installed in db (the rows of
+	// ir_module_module in state installed). It only reads.
+	InstalledModules(ctx context.Context, c ConnInfo, db string) ([]string, error)
 }
 
 // CheckCopy returns nil when name is a restore's or a drill's working copy

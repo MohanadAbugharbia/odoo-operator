@@ -395,3 +395,39 @@ func contains(list []string, s string) bool {
 	}
 	return false
 }
+
+func TestPgxInstalledModules(t *testing.T) {
+	conn := testConnInfo(t)
+	ctx := context.Background()
+	p := NewPgx()
+	db := uniqueDBName(t)
+	admin, err := pgx.Connect(ctx, DSN(conn, conn.MaintenanceDB))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = admin.Close(ctx) }()
+	t.Cleanup(func() { dropDatabase(ctx, t, conn, db) })
+	if _, err := admin.Exec(ctx, "CREATE DATABASE "+quoteIdentifier(db)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.InstalledModules(ctx, conn, db); err == nil {
+		t.Fatal("InstalledModules of a database without Odoo's tables succeeded")
+	}
+	odoo, err := pgx.Connect(ctx, DSN(conn, db))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = odoo.Close(ctx) }()
+	if _, err := odoo.Exec(ctx, `CREATE TABLE ir_module_module (id serial, name varchar, state varchar);
+		INSERT INTO ir_module_module (name, state) VALUES ('web', 'installed'), ('base', 'installed'),
+		('sale', 'uninstalled'), ('stock', 'to install')`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := p.InstalledModules(ctx, conn, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got, ",") != "base,web" {
+		t.Fatalf("InstalledModules = %v, want base and web", got)
+	}
+}

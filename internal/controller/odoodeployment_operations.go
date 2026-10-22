@@ -1634,6 +1634,10 @@ func restoreUpgradeModules(od *odoov1.OdooDeployment) []string {
 func (r *OdooDeploymentReconciler) finishRestore(ctx context.Context, s *reconcileState, w instanceWork,
 	rs *odoov1.OdooRestore, res result.Result) (ctrl.Result, bool, error) {
 	od := s.od
+	missing, err := r.restoredMissingModules(ctx, od, res)
+	if err != nil {
+		return ctrl.Result{}, false, err
+	}
 	image, token := res.Image, res.UpgradeToken
 	if rs.Spec.Undo != "" {
 		if target := w.restore(rs.Spec.Undo); target != nil {
@@ -1668,14 +1672,14 @@ func (r *OdooDeploymentReconciler) finishRestore(ctx context.Context, s *reconci
 		msg += fmt.Sprintf("; the replaced data is kept as %s until %s", layout.PrevName(db, rs.Status.Suffix),
 			now.Add(keep).UTC().Format(time.RFC3339))
 	}
-	if len(res.MissingModules) > 0 {
-		msg += fmt.Sprintf("; modules %s are installed again", strings.Join(res.MissingModules, ", "))
+	if len(missing) > 0 {
+		msg += fmt.Sprintf("; modules %s are installed again", strings.Join(missing, ", "))
 	}
 	if rs.Spec.Upgrade && rs.Spec.Undo == "" && token != od.Spec.Upgrade.Token {
 		msg += fmt.Sprintf("; it was upgraded for upgrade token %q and spec.upgrade.token is now %q, "+
 			"which is applied next as any change of the token is", token, od.Spec.Upgrade.Token)
 	}
-	err := r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) {
+	err = r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) {
 		st.Phase = odoov1.RestorePhaseCompleted
 		st.Message = msg
 		st.CompletedAt = &now
@@ -1709,7 +1713,7 @@ func (r *OdooDeploymentReconciler) finishRestore(ctx context.Context, s *reconci
 		od.Status.AppliedImage = image
 	}
 	od.Status.AppliedUpgradeToken = token
-	installed := utils.Difference(od.Spec.Modules, res.MissingModules)
+	installed := utils.Difference(od.Spec.Modules, missing)
 	if len(installed) == 0 {
 		// The data is an initialized Odoo database whatever spec.modules
 		// lists, so the next reconcile must not take it for a first boot.
@@ -1725,6 +1729,29 @@ func (r *OdooDeploymentReconciler) finishRestore(ctx context.Context, s *reconci
 	metrics.RestoreFinished(restoreMode(rs), metrics.RestoreSucceeded)
 	s.healthy()
 	return ctrl.Result{RequeueAfter: time.Second}, true, nil
+}
+
+// restoredMissingModules are the modules of spec.modules the restored
+// database lacks, which are installed again. The agent's result lists them;
+// when the list did not fit in its termination message
+// (res.MissingModulesUnknown), they are read from the restored database,
+// rather than taken as installed (they would never be installed) or as all
+// missing (installing an installed module again reloads its data).
+func (r *OdooDeploymentReconciler) restoredMissingModules(ctx context.Context, od *odoov1.OdooDeployment,
+	res result.Result) ([]string, error) {
+	if !res.MissingModulesUnknown {
+		return res.MissingModules, nil
+	}
+	conn, err := od.Spec.Database.GetDbConnectionDetails(r.Client, ctx, od.Namespace)
+	if err != nil {
+		return nil, fmt.Errorf("read the modules of the restored database: %w", err)
+	}
+	installed, err := r.DB.InstalledModules(ctx, reconcileloops.ConnInfoFor(od, conn), od.Status.Database.Name)
+	if err != nil {
+		return nil, fmt.Errorf("the restore's result has no room for the modules the restored database lacks, "+
+			"and reading them from it failed: %w", err)
+	}
+	return utils.Difference(od.Spec.Modules, installed), nil
 }
 
 // finishRestoreFailed records a restore that failed before touching live data.

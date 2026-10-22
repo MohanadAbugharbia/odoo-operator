@@ -208,3 +208,11 @@ can change (`"final": true` in the result, such as a restore whose backup
 does not pass its checks). The Job's pod failure policy ends the Job at once
 on 2 and 3, so the Job's condition then reads `PodFailurePolicy` instead of
 `BackoffLimitExceeded`.
+
+A result that does not fit in the 4096 bytes Kubernetes keeps loses its
+warnings and list entries first (they are also in the log). A restore's
+`missingModules` is never shortened: when it does not fit, the result has
+`"missingModulesUnknown": true` instead, and the operator reads the modules
+installed in the restored database itself. A restore that stays `Restoring`
+after its Job completed, with a reconcile error "reading them from it
+failed", is waiting for that database read.
