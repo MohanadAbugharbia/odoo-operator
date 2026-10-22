@@ -213,10 +213,17 @@ func TestDeleteZipsOnlyOwnNames(t *testing.T) {
 			n := ZipName("shop", s.Time)
 			others = append(others, n+".bak", "x"+n, strings.Replace(n, "shop", "other", 1), "sub/"+n)
 		}
-		others = append(others, "notes.txt", ".shop_2026-01-01_00-00-00.zip.partial")
+		others = append(others, "notes.txt", ".shop_2026-01-01_00-00-00.zip.partial.bak", ".shop_x.zip.partial",
+			".other_2026-01-01_00-00-00.zip.partial", "shop_2026-01-01_00-00-00.zip.partial", ".shop_2026-01-01_00-00.zip.partial")
 		for _, o := range others {
 			hWrite(t, filepath.Join(dir, o), []byte("other"))
 		}
+		// What killed uploads of this instance's zips left.
+		partials := []string{"." + ZipName("shop", base) + ".partial", "." + ZipName("shop", base.Add(time.Hour)) + ".partial"}
+		for _, p := range partials {
+			hWrite(t, filepath.Join(dir, p), []byte("cut short"))
+		}
+		hWrite(t, filepath.Join(root, "ns", "other", "."+ZipName("shop", base)+".partial"), []byte("other"))
 		hWrite(t, filepath.Join(root, "ns", "other", "shop_2026-01-01_00-00-00.zip"), []byte("other"))
 
 		e := &Env{Config: hUnreachable()}
@@ -229,19 +236,27 @@ func TestDeleteZipsOnlyOwnNames(t *testing.T) {
 				t.Fatalf("round %d: %s survived", round, ZipName("shop", s.Time))
 			}
 		}
+		for _, p := range partials {
+			if _, err := os.Stat(filepath.Join(dir, p)); !os.IsNotExist(err) {
+				t.Fatalf("round %d: the partial upload %s survived", round, p)
+			}
+		}
 		for _, n := range append(keep, others...) {
 			if _, err := os.Stat(filepath.Join(dir, n)); err != nil {
 				t.Fatalf("round %d: %s was deleted", round, n)
 			}
 		}
-		if _, err := os.Stat(filepath.Join(root, "ns", "other", "shop_2026-01-01_00-00-00.zip")); err != nil {
-			t.Fatal("another instance's zip was deleted")
+		for _, n := range []string{"shop_2026-01-01_00-00-00.zip", "." + ZipName("shop", base) + ".partial"} {
+			if _, err := os.Stat(filepath.Join(root, "ns", "other", n)); err != nil {
+				t.Fatalf("another instance's %s was deleted", n)
+			}
 		}
 	}
 }
 
+// With nothing forgotten deleteZips only looks for partial uploads, and
+// failing to list the folder is no error then.
 func TestDeleteZipsNothingForgotten(t *testing.T) {
-	// No rclone call at all when retention forgot nothing.
 	e := &Env{Config: hUnreachable()}
 	if err := deleteZips(context.Background(), e, CopyTarget{ZipTarget: "/nonexistent", Rclone: "/nonexistent/rclone"}, "ns/shop", nil, ""); err != nil {
 		t.Fatal(err)
@@ -251,6 +266,44 @@ func TestDeleteZipsNothingForgotten(t *testing.T) {
 	if err := deleteZips(context.Background(), e, CopyTarget{ZipTarget: "/nonexistent", Rclone: "/nonexistent/rclone"}, "ns/shop",
 		[]restic.Snapshot{{Time: at}}, ZipName(e.Config.Name, at)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Partial uploads go even when retention forgot nothing.
+func TestDeleteZipsPartialsOnly(t *testing.T) {
+	bin := hRealRclone(t)
+	root := t.TempDir()
+	dir := filepath.Join(root, "ns", "shop")
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	partial, kept := "."+ZipName("shop", at)+".partial", ZipName("shop", at.Add(time.Hour))
+	hWrite(t, filepath.Join(dir, partial), []byte("cut short"))
+	hWrite(t, filepath.Join(dir, kept), []byte("zip"))
+	e := &Env{Config: hUnreachable()}
+	e.Config.Name = "shop"
+	if err := deleteZips(context.Background(), e, CopyTarget{ZipTarget: root, Rclone: bin}, "ns/shop", nil, kept); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, partial)); !os.IsNotExist(err) {
+		t.Fatal("the partial upload survived")
+	}
+	if _, err := os.Stat(filepath.Join(dir, kept)); err != nil {
+		t.Fatal("the zip just written was deleted")
+	}
+}
+
+func TestIsPartialZip(t *testing.T) {
+	at := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	if !isPartialZip("shop", "."+ZipName("shop", at)+".partial") {
+		t.Fatal("a partial upload of shop is not recognised")
+	}
+	for _, name := range []string{
+		ZipName("shop", at), "." + ZipName("shop", at), ZipName("shop", at) + ".partial",
+		"." + ZipName("other", at) + ".partial", "." + ZipName("shop_x", at) + ".partial",
+		".shop_2026-03-04.zip.partial", ".shop_2026-03-04_05-06-07x.zip.partial", ".shop_.zip.partial", "",
+	} {
+		if isPartialZip("shop", name) {
+			t.Errorf("%q is taken for a partial upload of shop", name)
+		}
 	}
 }
 

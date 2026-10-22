@@ -110,9 +110,13 @@ spec:
   named after the backup's time in UTC, and the backup's `status.copies`
   names its zip.
 - A zip is written under a temporary name (`.<name>.partial`) and renamed when
-  complete, so the store never shows a zip cut short.
+  complete, so the store never shows a zip cut short. An upload whose pod was
+  killed leaves its `.<name>.partial` behind (a retry writes a zip of a new
+  name); the next copy to the store deletes the instance's leftover
+  `.<database>_<YYYY-MM-DD_HH-MM-SS>.zip.partial` files from its folder.
 - When retention forgets a backup, its zip is deleted. Only the names the
-  instance's own backups get are ever deleted: other files in the folder stay.
+  instance's own backups get (and their `.partial` upload names) are ever
+  deleted: other files in the folder stay.
 - A zip holds every file again, so each copy costs the full database and
   filestore; with restic, a backup costs only what changed. Keep the first
   store a restic store and use a zip store for what needs plain Odoo files.
