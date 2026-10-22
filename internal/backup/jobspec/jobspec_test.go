@@ -938,7 +938,7 @@ func TestRestoreJobUpgrade(t *testing.T) {
 	p.Instance.Spec.Config.DataDir = "/var/lib/odoo"
 	rs := &odoov1.OdooRestore{ObjectMeta: metav1.ObjectMeta{Name: "rs1"}}
 	src := RestoreSource{File: "exports/shop_*.zip", OdooImage: "shop:2", Neutralize: true,
-		UpgradeModules: []string{"shop", "pos"}}
+		UpgradeModules: []string{"shop", "pos"}, UpgradeToken: "release-7"}
 	job, err := RestoreJob(p, rs, "20250101T000000", src, nil, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -948,7 +948,8 @@ func TestRestoreJobUpgrade(t *testing.T) {
 	if slices.Contains(load.Command, "--upgrade") {
 		t.Errorf("load command = %q", load.Command)
 	}
-	if flagValue(t, last.Command, "--upgrade") != "shop,pos" || flagValue(t, last.Command, "--upgrade-image") != "shop:2" {
+	if flagValue(t, last.Command, "--upgrade") != "shop,pos" || flagValue(t, last.Command, "--upgrade-image") != "shop:2" ||
+		flagValue(t, last.Command, "--upgrade-token") != "release-7" {
 		t.Errorf("last command = %q", last.Command)
 	}
 	if odoo.Image != "shop:2" || plain(t, odoo.Env, "UPGRADE") != "shop,pos" || plain(t, odoo.Env, "NEUTRALIZE") != "1" {

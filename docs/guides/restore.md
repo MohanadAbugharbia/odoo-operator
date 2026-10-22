@@ -127,7 +127,11 @@ database keeps the module versions of the backup until the next upgrade.
 - The restore fails, with the live data untouched, when the upgrade fails;
   `status.message` ends with the end of Odoo's log.
 - Afterwards the instance counts as running `spec.image` and
-  `spec.upgrade.token`, so no upgrade Job follows.
+  `spec.upgrade.token` as they were when the restore Job was made, so no
+  upgrade Job follows. `status.upgradeToken` records that token; the agent
+  reports it from the pod that ran the upgrade. A token changed while the
+  restore ran (or `spec.image` changed, with `onImageChange`) is applied next,
+  by the usual upgrade, and `status.message` says so.
 - `upgrade` cannot be set on an undo. The upgrade runs inside the restore Job,
   so the Job's deadline (`spec.backup.activeDeadlineSeconds`) covers it too.
 

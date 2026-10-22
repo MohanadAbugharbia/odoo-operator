@@ -285,6 +285,8 @@ func runRestore(ctx context.Context, fs *flag.FlagSet, c *common, command string
 	fs.BoolVar(&o.Neutralize, "neutralize", false, "require the Odoo step to have neutralized the backup")
 	fs.StringVar(&upgrade, "upgrade", "", "comma-separated modules the Odoo step must have upgraded")
 	fs.StringVar(&o.UpgradeImage, "upgrade-image", "", "with --upgrade: the image the Odoo step upgraded on")
+	fs.StringVar(&o.UpgradeToken, "upgrade-token", "",
+		"with --upgrade: the upgrade token the upgraded data counts as upgraded for")
 	fs.StringVar(&o.UndoSuffix, "undo-suffix", "", "suffix of the restore to undo (undo)")
 	fs.BoolVar(&o.FinishSwap, "finish-swap", false, "only finish a swap that has started, from the restore journal; "+
 		"needs no source, and fails changing nothing when the swap has not started")
