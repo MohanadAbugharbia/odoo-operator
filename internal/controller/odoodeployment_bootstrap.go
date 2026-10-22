@@ -121,6 +121,21 @@ func (r *OdooDeploymentReconciler) bootstrap(ctx context.Context, s *reconcileSt
 		od.Status.Phase = odoov1.PhaseInitializing
 		s.degraded(odoov1.ReasonBootstrapFailed, msg)
 		s.ready(metav1.ConditionFalse, odoov1.ReasonBootstrapFailed, "the backup to start from was not restored")
+		// What it left behind (its half-loaded copy, its journal) is
+		// deleted now, as on a running instance, whose cleanups only start
+		// once the instance is initialized. The cleanup also releases the
+		// OdooRestore's finalizer, so that deleting it retries the
+		// bootstrap.
+		if fresh := w.restore(name); fresh != nil {
+			due, wait := restoreCleanupDue(fresh, time.Now())
+			if due {
+				res, err := r.startCleanup(ctx, s, fresh, configHash)
+				return res, false, err
+			}
+			if wait > 0 && wait < time.Minute {
+				return ctrl.Result{RequeueAfter: wait}, false, nil
+			}
+		}
 		return ctrl.Result{RequeueAfter: time.Minute}, false, nil
 	}
 	if next := w.restore(name); next != nil && w.nextRestore() == next {

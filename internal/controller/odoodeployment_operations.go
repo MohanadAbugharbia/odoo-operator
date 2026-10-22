@@ -192,37 +192,43 @@ func (w instanceWork) cleanupDue(now time.Time) (*odoov1.OdooRestore, time.Durat
 	var wait time.Duration
 	for i := range w.restores {
 		rs := &w.restores[i]
-		st := &rs.Status
-		if st.CleanedUp || st.Suffix == "" {
-			continue
-		}
-		if st.RetryAfter != nil && st.RetryAfter.After(now) {
-			if d := st.RetryAfter.Sub(now); wait == 0 || d < wait {
-				wait = d
-			}
-			continue
-		}
-		switch st.Phase {
-		case odoov1.RestorePhaseFailed:
-			if st.LiveChanged {
-				continue // never: a restore that changed live data is finished, not failed
-			}
+		due, d := restoreCleanupDue(rs, now)
+		if due {
 			return rs, 0
-		case odoov1.RestorePhaseCompleted:
-			if st.Previous.State != odoov1.PreviousKept || !rs.DeletionTimestamp.IsZero() {
-				return rs, 0
-			}
-			if st.Previous.KeptUntil != nil {
-				if !st.Previous.KeptUntil.After(now) {
-					return rs, 0
-				}
-				if d := st.Previous.KeptUntil.Sub(now); wait == 0 || d < wait {
-					wait = d
-				}
-			}
+		}
+		if d > 0 && (wait == 0 || d < wait) {
+			wait = d
 		}
 	}
 	return nil, wait
+}
+
+// restoreCleanupDue tells whether the leftovers of restore rs can be deleted
+// now, or else how long until they can (zero when never, or not yet known).
+func restoreCleanupDue(rs *odoov1.OdooRestore, now time.Time) (bool, time.Duration) {
+	st := &rs.Status
+	if st.CleanedUp || st.Suffix == "" {
+		return false, 0
+	}
+	if st.RetryAfter != nil && st.RetryAfter.After(now) {
+		return false, st.RetryAfter.Sub(now)
+	}
+	switch st.Phase {
+	case odoov1.RestorePhaseFailed:
+		// Never when it changed live data: such a restore is finished, not failed.
+		return !st.LiveChanged, 0
+	case odoov1.RestorePhaseCompleted:
+		if st.Previous.State != odoov1.PreviousKept || !rs.DeletionTimestamp.IsZero() {
+			return true, 0
+		}
+		if st.Previous.KeptUntil != nil {
+			if !st.Previous.KeptUntil.After(now) {
+				return true, 0
+			}
+			return false, st.Previous.KeptUntil.Sub(now)
+		}
+	}
+	return false, 0
 }
 
 // BackupImageLookup returns the backup image; the store reconciler uses it.

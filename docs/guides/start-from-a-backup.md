@@ -179,6 +179,13 @@ initializes an empty database in its place. Read the OdooRestore's
 store, the image's Odoo series), then delete the OdooRestore. The operator
 creates it again and retries.
 
+Meanwhile a cleanup Job deletes what the failed restore left behind (the
+half-loaded `<db>_restore_<suffix>` database and folders, its journal), as it
+does on a running instance. The OdooRestore's finalizer stays until that
+cleanup succeeded, so a deletion may wait for it: a cleanup that fails is
+retried after an hour (`kubectl -n shop get jobs -l
+odoo.abugharbia.com/job-kind=cleanup`).
+
 ```sh
 kubectl -n shop get odoorestore my-odoo-bootstrap -o jsonpath='{.status.message}'
 kubectl -n shop delete odoorestore my-odoo-bootstrap
