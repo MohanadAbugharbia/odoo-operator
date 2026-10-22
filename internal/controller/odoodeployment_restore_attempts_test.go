@@ -296,3 +296,48 @@ var _ = Describe("Restore attempts", func() {
 		Expect(h.restore("r").Status.Phase).To(Equal(odoov1.RestorePhaseCompleted))
 	})
 })
+
+var _ = Describe("Deleting an instance during a restore", func() {
+	var h *backupHarness
+
+	AfterEach(func() {
+		if h != nil {
+			h.cleanupAll()
+		}
+	})
+
+	It("waits for the restore Job's pod when the database is retained", func() {
+		h = newBackupHarness(func(od *odoov1.OdooDeployment) {
+			od.Spec.Database.DeletionPolicy = odoov1.DeletionPolicyRetain
+		})
+		h.completedBackup()
+		Expect(h.get().Finalizers).To(BeEmpty(), "nothing runs, nothing to hold")
+		h.newRestore("r", func(s *odoov1.OdooRestoreSpec) { s.Backup = h.name + "-one" })
+		_, od := h.reconcile()
+		job := od.Status.CurrentOperation.Job
+		Expect(job).NotTo(BeEmpty())
+		Expect(od.Finalizers).To(ConsistOf(odoov1.OperationsFinalizer))
+		pod := h.attemptPod(job, "a", podStatus{
+			phase: corev1.PodRunning, steps: []corev1.ContainerStatus{stepDone("load"), stepDone("odoo")}, main: mainRunning(),
+		})
+		pod.Labels[odoov1.LabelOdooDeployment] = h.name
+		Expect(k8sClient.Update(ctx, pod)).To(Succeed())
+
+		Expect(k8sClient.Delete(ctx, od)).To(Succeed())
+		for i := 0; i < 2; i++ {
+			_, od = h.reconcile()
+			Expect(od).NotTo(BeNil(), "the swap is not cut short")
+		}
+		Expect(h.job(job)).NotTo(BeNil())
+		Expect(h.fake.CallCount("Drop")).To(BeZero())
+
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(pod), pod)).To(Succeed())
+		pod.Status.Phase = corev1.PodSucceeded
+		pod.Status.ContainerStatuses = []corev1.ContainerStatus{*mainResult(result.Result{OK: true, LiveChanged: true})}
+		Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
+		_, od = h.reconcile()
+		Expect(od).To(BeNil())
+		Expect(h.fake.CallCount("Drop")).To(BeZero())
+		Expect(h.fake.Has(h.dbName())).To(BeTrue())
+	})
+})

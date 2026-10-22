@@ -146,9 +146,18 @@ kubectl -n <ns> logs job/<job> --all-containers
 
 ## Deleting an instance hangs
 
-With `spec.database.deletionPolicy: Delete`, deletion waits for the
-instance's pods to stop, including running backup, restore, drill and
-cleanup Jobs (up to their deadline), and then drops the database. A
+Deletion waits for the instance's pods to stop, including running backup,
+restore, drill and cleanup Jobs (up to their deadline), so that none is
+killed half way through: a restore cut short could leave the database
+swapped and the filestore not. With `spec.database.deletionPolicy: Delete`
+the finalizer `odoo.abugharbia.com/database` holds the instance, the init or
+upgrade Job is deleted (its database is dropped anyway) and the database is
+dropped afterwards. Otherwise (`Retain`, or a database the operator did not
+create) the finalizer `odoo.abugharbia.com/operations` holds it only while
+one of its Jobs runs, init and upgrade Jobs included, and is removed as soon
+as none does. A Job none of whose pods ever started a container (an image
+that cannot be pulled) is deleted rather than waited for. The `Ready`
+condition says how many pods are still awaited. A
 `DatabaseDropFailed` event means the drop keeps failing (retried every 30
 seconds): fix the database access, or set `deletionPolicy: Retain` to skip
 the drop. A database the operator did not create is never dropped. A
@@ -162,9 +171,12 @@ its instance is gone.
 ## Reading a Job's result
 
 Backup, restore, probe and store Jobs write their result as JSON into the
-termination message of their `backup` container, besides the log:
+termination message of their `backup` container, besides the log. The
+operator reads the newest pod of the Job only (a retried Job has one pod
+per attempt); when its `backup` container did not finish, the Job has no
+result and the message is taken from the pod's statuses:
 
 ```sh
-kubectl -n <ns> get pods -l job-name=<job> \
-  -o jsonpath='{.items[0].status.containerStatuses[?(@.name=="backup")].state.terminated.message}'
+kubectl -n <ns> get pods -l job-name=<job> --sort-by=.metadata.creationTimestamp \
+  -o jsonpath='{.items[-1:].status.containerStatuses[?(@.name=="backup")].state.terminated.message}'
 ```

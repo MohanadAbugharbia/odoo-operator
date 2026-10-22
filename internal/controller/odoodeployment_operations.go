@@ -514,6 +514,9 @@ func (r *OdooDeploymentReconciler) startOperationJob(ctx context.Context, s *rec
 		s.ready(metav1.ConditionFalse, ReasonWaitingForOperation, "waiting for job "+j.Name+" to finish")
 		return "", nil
 	}
+	if err := s.holdForJob(ctx); err != nil {
+		return "", err
+	}
 	if err := r.createJob(ctx, od, job); err != nil {
 		return "", err
 	}
@@ -1077,6 +1080,9 @@ func (r *OdooDeploymentReconciler) reachStore(ctx context.Context, s *reconcileS
 			return r.finishBackupFailed(ctx, s, b, err.Error())
 		}
 		if err := controllerutil.SetControllerReference(od, &job, r.Scheme); err != nil {
+			return ctrl.Result{}, false, err
+		}
+		if err := s.holdForJob(ctx); err != nil {
 			return ctrl.Result{}, false, err
 		}
 		if err := r.Create(ctx, &job); err != nil && !apierrors.IsAlreadyExists(err) {

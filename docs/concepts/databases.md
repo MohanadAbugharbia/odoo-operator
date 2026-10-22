@@ -16,7 +16,13 @@ How the operator decides whether it owns an instance's database, and when it may
   Restores and drills create databases (restores also rename them) whatever
   `createPolicy` says, so for those the database user needs `CREATEDB`.
 - `spec.database.deletionPolicy: Delete` adds the finalizer
-  `odoo.abugharbia.com/database`, unless the database was adopted. On deletion the operator stops the pods and
+  `odoo.abugharbia.com/database`, unless the database was adopted. Without
+  it, the finalizer `odoo.abugharbia.com/operations` is added only while a
+  backup, restore, cleanup, drill, init or upgrade Job of the instance runs,
+  so that deleting the instance waits for that Job's pods rather than
+  killing one half way, and is removed once none runs. Neither ever drops a
+  database the operator did not create, or one with `Retain`. On deletion
+  the operator stops the pods and
   drops the database **only if** it recorded `provisionedBy: operator` **and**
   the database comment still equals its tag. A CR pointing at a pre-existing
   database never drops it, whatever the policy says. Dropping uses

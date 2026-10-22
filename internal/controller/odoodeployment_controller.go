@@ -148,27 +148,47 @@ func (s *reconcileState) patchStatus(ctx context.Context) error {
 	return nil
 }
 
-// setFinalizer adds or removes the database finalizer with a metadata-only
-// patch on a copy, so the in-memory status is never overwritten by the
-// API-server response.
-func (s *reconcileState) setFinalizer(ctx context.Context, want bool) error {
-	has := controllerutil.ContainsFinalizer(s.od, odoov1.DatabaseFinalizer)
-	if has == want {
+// setFinalizers adds or removes the database and operations finalizers with
+// a metadata-only patch on a copy, so the in-memory status is never
+// overwritten by the API-server response.
+func (s *reconcileState) setFinalizers(ctx context.Context, database, operations bool) error {
+	patched := s.od.DeepCopy()
+	changed := false
+	for _, f := range []struct {
+		name string
+		want bool
+	}{{odoov1.DatabaseFinalizer, database}, {odoov1.OperationsFinalizer, operations}} {
+		if f.want {
+			changed = controllerutil.AddFinalizer(patched, f.name) || changed
+		} else {
+			changed = controllerutil.RemoveFinalizer(patched, f.name) || changed
+		}
+	}
+	if !changed {
 		return nil
 	}
-	patched := s.od.DeepCopy()
-	if want {
-		controllerutil.AddFinalizer(patched, odoov1.DatabaseFinalizer)
-	} else {
-		controllerutil.RemoveFinalizer(patched, odoov1.DatabaseFinalizer)
-	}
 	if err := s.r.Patch(ctx, patched, client.MergeFrom(s.od)); err != nil {
-		return fmt.Errorf("patch finalizer: %w", err)
+		return fmt.Errorf("patch finalizers: %w", err)
 	}
 	s.od.ObjectMeta = patched.ObjectMeta
 	s.base.ObjectMeta = *patched.ObjectMeta.DeepCopy()
-	log.FromContext(ctx).Info("Updated database finalizer", "present", want)
+	log.FromContext(ctx).Info("Updated finalizers", "database", database, "operations", operations)
 	return nil
+}
+
+// syncFinalizers sets the finalizers the instance needs now.
+func (s *reconcileState) syncFinalizers(ctx context.Context) error {
+	return s.setFinalizers(ctx, wantsFinalizer(s.od), wantsOperationsFinalizer(s.od))
+}
+
+// holdForJob makes sure a Job about to be created cannot be killed by the
+// instance's deletion: the database finalizer already waits for its pods,
+// otherwise the operations finalizer is added before the Job exists.
+func (s *reconcileState) holdForJob(ctx context.Context) error {
+	if wantsFinalizer(s.od) || controllerutil.ContainsFinalizer(s.od, odoov1.OperationsFinalizer) {
+		return nil
+	}
+	return s.setFinalizers(ctx, controllerutil.ContainsFinalizer(s.od, odoov1.DatabaseFinalizer), true)
 }
 
 // enteredDegraded is true when this reconcile left the OdooDeployment
@@ -283,6 +303,14 @@ func (r *OdooDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	defer func() {
 		if patchErr := s.patchStatus(ctx); patchErr != nil {
 			err = utilerrors.NewAggregate([]error{err, patchErr})
+		} else if s.od.DeletionTimestamp.IsZero() && !wantsOperationsFinalizer(s.od) &&
+			controllerutil.ContainsFinalizer(s.od, odoov1.OperationsFinalizer) {
+			// The Job this reconcile saw finish no longer holds the
+			// instance; its status is written, so a later reconcile cannot
+			// need the finalizer back for it.
+			if finErr := s.setFinalizers(ctx, controllerutil.ContainsFinalizer(s.od, odoov1.DatabaseFinalizer), false); finErr != nil {
+				err = utilerrors.NewAggregate([]error{err, finErr})
+			}
 		}
 		// After the status patch, so the page shows what this reconcile decided.
 		if pubErr := r.publishMaintenancePage(ctx, s.od); pubErr != nil {
@@ -307,9 +335,11 @@ func (r *OdooDeploymentReconciler) reconcileNormal(ctx context.Context, s *recon
 	od := s.od
 	metrics.Track(od.Namespace, od.Name)
 
-	// The finalizer is only needed while the operator may own the database:
-	// deletionPolicy Delete and provisionedBy not yet known or "operator".
-	if err := s.setFinalizer(ctx, wantsFinalizer(od)); err != nil {
+	// The database finalizer is only needed while the operator may own the
+	// database: deletionPolicy Delete and provisionedBy not yet known or
+	// "operator". Otherwise the operations finalizer holds the instance while
+	// one of its Jobs runs.
+	if err := s.syncFinalizers(ctx); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -753,8 +783,8 @@ func (r *OdooDeploymentReconciler) settleDatabase(
 		}
 	}
 	s.condition(odoov1.ConditionDatabaseReady, metav1.ConditionTrue, dbResult.Reason, dbResult.Message)
-	// An adopted (external) database releases the finalizer.
-	if err := s.setFinalizer(ctx, wantsFinalizer(od)); err != nil {
+	// An adopted (external) database releases the database finalizer.
+	if err := s.syncFinalizers(ctx); err != nil {
 		return ctrl.Result{}, false, err
 	}
 	return ctrl.Result{}, true, nil
@@ -771,6 +801,12 @@ func wantsFinalizer(od *odoov1.OdooDeployment) bool {
 	default:
 		return false
 	}
+}
+
+// wantsOperationsFinalizer: no database finalizer, and a Job of the instance
+// may run.
+func wantsOperationsFinalizer(od *odoov1.OdooDeployment) bool {
+	return !wantsFinalizer(od) && (od.Status.CurrentOperation.Kind != "" || od.Status.CurrentInitJob.Name != "")
 }
 
 // observeCurrentJob handles status.currentInitJob. done is true when the
@@ -912,6 +948,9 @@ func (r *OdooDeploymentReconciler) startMaintenanceJob(
 		}
 	}
 
+	if err := s.holdForJob(ctx); err != nil {
+		return s.fail(odoov1.ReasonReconcileFailed, err)
+	}
 	job, err := reconcileloops.EnsureMaintenanceJob(ctx, r.Client, r.Scheme, od, initModules, upgradeModules, firstBoot)
 	if errors.Is(err, reconcileloops.ErrJobTerminating) {
 		od.Status.Phase = phase
@@ -943,12 +982,14 @@ func (r *OdooDeploymentReconciler) startMaintenanceJob(
 	return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 }
 
-// reconcileDelete stops the workload and drops the database when, and only
-// when, the operator created it, then removes the finalizer.
+// reconcileDelete stops the workload, waits for the pods of the instance's
+// Jobs, drops the database when, and only when, the operator created it and
+// deletionPolicy is Delete, then removes the finalizers.
 func (r *OdooDeploymentReconciler) reconcileDelete(ctx context.Context, s *reconcileState) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	od := s.od
-	if !controllerutil.ContainsFinalizer(od, odoov1.DatabaseFinalizer) {
+	dropping := controllerutil.ContainsFinalizer(od, odoov1.DatabaseFinalizer)
+	if !dropping && !controllerutil.ContainsFinalizer(od, odoov1.OperationsFinalizer) {
 		// Children are garbage collected through their owner references.
 		return ctrl.Result{}, nil
 	}
@@ -959,11 +1000,17 @@ func (r *OdooDeploymentReconciler) reconcileDelete(ctx context.Context, s *recon
 	if err := r.Delete(ctx, deployment, &client.DeleteOptions{PropagationPolicy: &propagation}); err != nil && !apierrors.IsNotFound(err) {
 		return s.fail(odoov1.ReasonDeleting, fmt.Errorf("delete deployment: %w", err))
 	}
-	if od.Status.CurrentInitJob.Name != "" {
+	if dropping && od.Status.CurrentInitJob.Name != "" {
+		// The database it initializes or upgrades is dropped anyway; a
+		// database that stays is never left half upgraded, so its Job is
+		// waited for below.
 		job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: od.Status.CurrentInitJob.Name, Namespace: od.Namespace}}
 		if err := reconcileloops.DeleteMaintenanceJob(ctx, r.Client, job); err != nil {
 			return s.fail(odoov1.ReasonDeleting, err)
 		}
+	}
+	if err := r.deleteJobsThatNeverRan(ctx, od); err != nil {
+		return s.fail(odoov1.ReasonDeleting, err)
 	}
 	appPods, err := r.countPods(ctx, od.Namespace, od.GetServiceSelectorLabels())
 	if err != nil {
@@ -974,8 +1021,13 @@ func (r *OdooDeploymentReconciler) reconcileDelete(ctx context.Context, s *recon
 		return s.fail(odoov1.ReasonDeleting, err)
 	}
 	if appPods+ownedPods > 0 {
-		logger.Info("Waiting for pods to stop before dropping the database", "pods", appPods+ownedPods)
+		logger.Info("Waiting for pods to stop before releasing the instance", "pods", appPods+ownedPods)
+		s.ready(metav1.ConditionFalse, odoov1.ReasonDeleting,
+			fmt.Sprintf("OdooDeployment is being deleted; waiting for %d pod(s) to stop", appPods+ownedPods))
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+	if !dropping {
+		return ctrl.Result{}, s.setFinalizers(ctx, false, false)
 	}
 
 	conn, connErr := od.Spec.Database.GetDbConnectionDetails(r.Client, ctx, od.Namespace)
@@ -1016,7 +1068,58 @@ func (r *OdooDeploymentReconciler) reconcileDelete(ctx context.Context, s *recon
 		r.event(od, corev1.EventTypeWarning, odoov1.ReasonDatabaseNotDropped, msg)
 	}
 
-	return ctrl.Result{}, s.setFinalizer(ctx, false)
+	return ctrl.Result{}, s.setFinalizers(ctx, false, false)
+}
+
+// deleteJobsThatNeverRan deletes the instance's unfinished Jobs none of whose
+// pods ever started a container: nothing of them ran, so nothing is cut
+// short, and a Job stuck before its first container (an image that cannot
+// be pulled, a quota) would otherwise hold the deletion for ever. Jobs that
+// ran anything are left to finish.
+func (r *OdooDeploymentReconciler) deleteJobsThatNeverRan(ctx context.Context, od *odoov1.OdooDeployment) error {
+	jobs := &batchv1.JobList{}
+	if err := r.reader().List(ctx, jobs, client.InNamespace(od.Namespace),
+		client.MatchingLabels{odoov1.LabelOdooDeployment: od.Name}); err != nil {
+		return fmt.Errorf("list jobs: %w", err)
+	}
+	for i := range jobs.Items {
+		j := &jobs.Items[i]
+		if !metav1.IsControlledBy(j, od) || jobFinished(j) || j.Status.Failed+j.Status.Succeeded > 0 {
+			continue
+		}
+		pods := &corev1.PodList{}
+		if err := r.reader().List(ctx, pods, client.InNamespace(od.Namespace), client.MatchingLabels{"job-name": j.Name}); err != nil {
+			return fmt.Errorf("list pods of job %s: %w", j.Name, err)
+		}
+		ran := false
+		for p := range pods.Items {
+			ran = ran || anyContainerStarted(&pods.Items[p])
+		}
+		if ran {
+			continue
+		}
+		log.FromContext(ctx).Info("Deleting a job that never ran", "job", j.Name)
+		if err := reconcileloops.DeleteMaintenanceJob(ctx, r.Client, j); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// anyContainerStarted reports whether any container of the pod, a step
+// (init container) or the main one, started or may have.
+func anyContainerStarted(p *corev1.Pod) bool {
+	if p.Status.Phase == corev1.PodRunning || p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodUnknown {
+		return true
+	}
+	for _, list := range [][]corev1.ContainerStatus{p.Status.InitContainerStatuses, p.Status.ContainerStatuses} {
+		for _, cs := range list {
+			if cs.State.Waiting == nil || cs.LastTerminationState.Terminated != nil || cs.LastTerminationState.Running != nil {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // dropKeptRestoreData drops, with the instance's database, the databases its
