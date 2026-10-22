@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 )
 
@@ -18,6 +19,17 @@ type Fake struct {
 	ExistsErr error
 	CreateErr error
 	DropErr   error
+}
+
+// Names returns the databases in the fake.
+func (f *Fake) Names() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, 0, len(f.dbs))
+	for db := range f.dbs {
+		out = append(out, db)
+	}
+	return out
 }
 
 var _ Provisioner = (*Fake)(nil)
@@ -56,7 +68,8 @@ func (f *Fake) Calls() []string {
 	return append([]string(nil), f.calls...)
 }
 
-// CallCount returns how many times op ("Exists", "Create", "Tag", "OwnerTag", "Drop") was called.
+// CallCount returns how many times op ("Exists", "Create", "Tag", "OwnerTag",
+// "Drop", "Databases", "DropCopy") was called.
 func (f *Fake) CallCount(op string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -135,5 +148,41 @@ func (f *Fake) Drop(_ context.Context, _ ConnInfo, db string, tag OwnerTag) erro
 		return fmt.Errorf("%w: database %q has comment %q, expected %q", ErrNotOwned, db, current, tag)
 	}
 	delete(f.dbs, db)
+	return nil
+}
+
+func (f *Fake) Databases(_ context.Context, _ ConnInfo) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("Databases", "")
+	if f.ExistsErr != nil {
+		return nil, f.ExistsErr
+	}
+	out := make([]string, 0, len(f.dbs))
+	for db := range f.dbs {
+		out = append(out, db)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func (f *Fake) DropCopy(_ context.Context, _ ConnInfo, db, name string, tag OwnerTag) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("DropCopy", name)
+	if err := CheckCopy(db, name); err != nil {
+		return err
+	}
+	if f.DropErr != nil {
+		return f.DropErr
+	}
+	current, ok := f.dbs[name]
+	if !ok {
+		return nil
+	}
+	if err := copyOwned(name, current, tag); err != nil {
+		return err
+	}
+	delete(f.dbs, name)
 	return nil
 }

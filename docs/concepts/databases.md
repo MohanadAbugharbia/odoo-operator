@@ -29,8 +29,19 @@ How the operator decides whether it owns an instance's database, and when it may
   `DROP DATABASE … WITH (FORCE)`, which needs PostgreSQL 13 or later. If the
   connection Secret is already gone (for example when the whole namespace is
   deleted) the database is left in place with a `DatabaseNotDropped` event.
-  With it go the databases the instance's restores kept for an undo
-  (`status.previous.database`), under the same tag check.
+  With it go the databases the instance's restores made: the data a restore
+  replaced and kept for an undo (`<db>_prev_<suffix>`, under the same tag
+  check) and the copy a restore loads into (`<db>_restore_<suffix>`, which
+  carries no comment and is dropped by that exact name only, never a
+  database carrying another owner's tag). That includes a restore the
+  deletion cut short, whose Job may have swapped the data in after the
+  restore stopped being followed: it is marked `Failed` and `cleanedUp`.
+- An instance being deleted settles its own backups and restores: the
+  `OdooBackup` and `OdooRestore` reconcilers leave them alone until the
+  instance is gone. The deletion waits for a running backup Job, records its
+  snapshot on the `OdooBackup` (or the reason it failed), and only then
+  removes the instance; a backup still `Running` once the instance is gone
+  is marked `Failed`.
 - `spec.database.name` and the `nameFromSecret` selector are immutable so a
   rename can never orphan or drop the wrong database. Changing the value inside
   the Secret that `nameFromSecret` points at stops the instance instead: phase

@@ -17,8 +17,9 @@ What stays behind depends on each instance's policies:
   the snapshots in their stores. The instance's repositories are no longer
   checked or pruned either, since store tasks only cover instances that list
   the store.
-- The databases and folders that restores kept for undo
-  (`<db>_prev_<suffix>`) stay; drop them by hand.
+- The databases restores made (`<db>_prev_<suffix>` kept for an undo, a
+  half-loaded `<db>_restore_<suffix>`) are dropped with the instance's
+  database, and stay with it under `Retain`.
 - Deleting an instance waits for all its pods to stop, including a running
   backup, restore, init or upgrade Job, whatever its deletion policies, so
   that none is cut short. A Job that never started a container, and the
