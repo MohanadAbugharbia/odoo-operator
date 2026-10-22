@@ -1060,8 +1060,11 @@ func (r *OdooDeploymentReconciler) reconcileDelete(ctx context.Context, s *recon
 	switch {
 	case drop:
 		tag := database.NewOwnerTag(od.Namespace, od.Name)
-		if retry, err := r.dropRestoreData(ctx, s, w, reconcileloops.ConnInfoFor(od, conn), tag); err != nil || retry {
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+		if wait, err := r.dropWorkData(ctx, s, w, reconcileloops.ConnInfoFor(od, conn), tag); err != nil || wait > 0 {
+			if err != nil {
+				return s.fail(odoov1.ReasonDeleting, err)
+			}
+			return ctrl.Result{RequeueAfter: wait}, nil
 		}
 		err := r.DB.Drop(ctx, reconcileloops.ConnInfoFor(od, conn), db.Name, tag)
 		switch {
@@ -1099,7 +1102,8 @@ func (r *OdooDeploymentReconciler) reconcileDelete(ctx context.Context, s *recon
 // pods ever started a container: nothing of them ran, so nothing is cut
 // short, and a Job stuck before its first container (an image that cannot
 // be pulled, a quota) would otherwise hold the deletion for ever. Jobs that
-// ran anything are left to finish.
+// ran anything are left to finish, and so are the cleanup Jobs the deletion
+// itself starts, which their deadline bounds.
 func (r *OdooDeploymentReconciler) deleteJobsThatNeverRan(ctx context.Context, od *odoov1.OdooDeployment) error {
 	jobs := &batchv1.JobList{}
 	if err := r.reader().List(ctx, jobs, client.InNamespace(od.Namespace),
@@ -1109,6 +1113,10 @@ func (r *OdooDeploymentReconciler) deleteJobsThatNeverRan(ctx context.Context, o
 	for i := range jobs.Items {
 		j := &jobs.Items[i]
 		if !metav1.IsControlledBy(j, od) || jobFinished(j) || j.Status.Failed+j.Status.Succeeded > 0 {
+			continue
+		}
+		if j.Annotations[annotationStartedByDeletion] != "" {
+			// The deletion's own cleanup Job, which its deadline bounds.
 			continue
 		}
 		pods := &corev1.PodList{}

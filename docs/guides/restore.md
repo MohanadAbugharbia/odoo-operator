@@ -223,5 +223,6 @@ it kept.
 !!! note "Deleting the instance"
     Deleting an OdooDeployment whose database is dropped
     (`spec.database.deletionPolicy: Delete`) drops the `<db>_prev_<suffix>`
-    and `<db>_restore_<suffix>` databases of its restores with it. With
+    and `<db>_restore_<suffix>` databases of its restores with it, and
+    deletes their folders from a filestore volume that is kept. With
     `Retain` they stay, beside the database.

@@ -205,6 +205,80 @@ var _ = Describe("Deleting an instance with its database", func() {
 		Expect(h.fake.CallCount("Drop")).To(BeZero())
 	})
 
+	Describe("with the data volume retained", func() {
+		retainVolume := func(od *odoov1.OdooDeployment) {
+			od.Spec.OdooFilestore.DeletionPolicy = odoov1.DeletionPolicyRetain
+		}
+		// keptRestore is a completed restore that kept the data it replaced.
+		keptRestore := func() *odoov1.OdooRestore {
+			h.completedBackup()
+			h.newRestore("r", func(s *odoov1.OdooRestoreSpec) { s.Backup = h.name + "-one" })
+			_, od := h.reconcile()
+			h.finishJob(od.Status.CurrentOperation.Job, &result.Result{OK: true, LiveChanged: true, PreviousKept: true, Image: "odoo:a"})
+			h.reconcile()
+			rs := h.restore("r")
+			Expect(rs.Status.Previous.State).To(Equal(odoov1.PreviousKept))
+			Expect(rs.Status.Previous.Filestore).NotTo(BeEmpty())
+			h.fake.Seed(rs.Status.Previous.Database, database.NewOwnerTag(ns, h.name))
+			return rs
+		}
+		// cleanupJob reconciles the deletion up to the cleanup Job of rs.
+		cleanupJob := func(rs *odoov1.OdooRestore) string {
+			Expect(k8sClient.Delete(ctx, h.get())).To(Succeed())
+			_, od := h.reconcile()
+			Expect(od).NotTo(BeNil(), "the volume is cleaned before the instance goes")
+			op := od.Status.CurrentOperation
+			Expect(op.Kind).To(Equal(odoov1.OperationCleanup))
+			Expect(op.Name).To(Equal(rs.Name))
+			Expect(jobArgs(h.job(op.Job))).To(ContainSubstring("cleanup --suffix " + rs.Status.Suffix))
+			By("a Job the deletion started is not taken for one that never ran")
+			_, od = h.reconcile()
+			Expect(od).NotTo(BeNil())
+			Expect(h.job(op.Job)).NotTo(BeNil())
+			return op.Job
+		}
+
+		It("runs each restore's cleanup Job before it leaves the volume behind", func() {
+			h = newBackupHarness(retainVolume)
+			rs := keptRestore()
+			job := cleanupJob(rs)
+			Expect(h.fake.Has(h.dbName())).To(BeTrue(), "the database waits for the volume's cleanup")
+
+			// The Job deletes the folders and drops <db>_prev_ and <db>_restore_ itself.
+			h.finishJob(job, &result.Result{OK: true})
+			for i := 0; i < 3 && h.get() != nil; i++ {
+				h.reconcile()
+			}
+			Expect(h.get()).To(BeNil())
+			Expect(h.fake.Has(h.dbName())).To(BeFalse())
+			rs = h.restore("r")
+			Expect(rs.Status.Previous.Database).To(BeEmpty())
+			Expect(rs.Status.CleanedUp).To(BeTrue())
+			Expect(rs.Status.Previous.State).To(Equal(odoov1.PreviousRemoved))
+			Expect(rs.Status.Previous.Filestore).To(BeEmpty())
+			Expect(rs.Finalizers).NotTo(ContainElement(odoov1.RestoreFinalizer))
+		})
+
+		It("records what stays when the cleanup Job fails, and does not try again", func() {
+			h = newBackupHarness(retainVolume)
+			rs := keptRestore()
+			prev, folder := rs.Status.Previous.Database, rs.Status.Previous.Filestore
+			job := cleanupJob(rs)
+			h.finishJob(job, &result.Result{OK: false, Step: result.StepCleanup, Error: "restore has not finished its swap"})
+			for i := 0; i < 3 && h.get() != nil; i++ {
+				h.reconcile()
+			}
+			Expect(h.get()).To(BeNil(), "a failed cleanup does not hold the deletion")
+			Expect(h.fake.Has(prev)).To(BeFalse(), "the database is dropped all the same")
+			rs = h.restore("r")
+			Expect(rs.Status.CleanedUp).To(BeFalse())
+			Expect(rs.Status.Previous.Database).To(BeEmpty())
+			Expect(rs.Status.Previous.Filestore).To(Equal(folder), "the folder that stays is recorded")
+			Expect(rs.Annotations[AnnotationFilesKept]).To(ContainSubstring("has not finished its swap"))
+			Expect(rs.Annotations[AnnotationFilesKept]).To(ContainSubstring(layout.StagingDir(rs.Status.Suffix)))
+		})
+	})
+
 	It("reports the reason of a backup whose Job failed during the deletion", func() {
 		h = newBackupHarness(func(od *odoov1.OdooDeployment) {
 			od.Spec.Database.DeletionPolicy = odoov1.DeletionPolicyRetain
