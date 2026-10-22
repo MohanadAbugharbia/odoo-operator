@@ -233,7 +233,8 @@ YAML
 	wait_for pod/e2e-ls-zips .status.phase Succeeded 300 >/dev/null
 	k logs e2e-ls-zips
 }
-zip_of() { k get odoobackup "$1" -o jsonpath='{.status.copies[?(@.store=="zips")].file}'; }
+# A backup listed a moment ago may be gone: retention keeps the last one.
+zip_of() { k get odoobackup "$1" -o jsonpath='{.status.copies[?(@.store=="zips")].file}' 2>/dev/null || true; }
 k patch odoodeployment "$OD" --type=merge -p '{"spec":{"backup":{"stores":["s3","zips"],"schedule":"* * * * *",
   "retention":{"last":1,"daily":0,"weekly":0,"monthly":0}}}}'
 deadline=$((SECONDS + 900))

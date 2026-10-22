@@ -1053,6 +1053,41 @@ func TestRestoreJobUndo(t *testing.T) {
 	}
 }
 
+func TestFinishRestoreJob(t *testing.T) {
+	for _, undo := range []bool{false, true} {
+		p := params(s3Store()) // a store is never wired in, even when known
+		rs := &odoov1.OdooRestore{ObjectMeta: metav1.ObjectMeta{Name: "rs1", UID: "uid-1"}}
+		job := FinishRestoreJob(p, rs, "20250101T000000", undo, 4)
+		spec := job.Spec.Template.Spec
+		checkPodWiring(t, spec)
+		mode := "restore"
+		if undo {
+			mode = "undo"
+		}
+		want := []string{"odoo-backup", mode, "--finish-swap", "--suffix", "20250101T000000", "--data", "/data", "--maintenance-db", "maint"}
+		if cmd := command(job); !slices.Equal(cmd, want) {
+			t.Errorf("command = %q", cmd)
+		}
+		if job.Name != RestoreJobName(p.Instance, rs, 4) || job.Labels[odoov1.LabelJobKind] != KindRestore || job.Labels[LabelRestore] != "rs1" {
+			t.Errorf("job %s labels %v", job.Name, job.Labels)
+		}
+		if len(spec.InitContainers) != 0 || len(spec.Containers) != 1 {
+			t.Errorf("containers: %d steps, %d main", len(spec.InitContainers), len(spec.Containers))
+		}
+		for _, e := range spec.Containers[0].Env {
+			if (strings.HasPrefix(e.Name, "RESTIC_") && e.Name != "RESTIC_CACHE_DIR") || strings.HasPrefix(e.Name, "AWS_") || strings.HasPrefix(e.Name, "RCLONE_") {
+				t.Errorf("finishing gets store env %s", e.Name)
+			}
+		}
+		if len(spec.Volumes) != 3 {
+			t.Errorf("volumes = %+v", spec.Volumes)
+		}
+		if *job.Spec.BackoffLimit != 2 {
+			t.Errorf("backoff %d", *job.Spec.BackoffLimit)
+		}
+	}
+}
+
 func TestCleanupJob(t *testing.T) {
 	p := params(s3Store())
 	rs := &odoov1.OdooRestore{ObjectMeta: metav1.ObjectMeta{Name: "rs1"}}

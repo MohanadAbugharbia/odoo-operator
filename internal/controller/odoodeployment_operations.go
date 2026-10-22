@@ -192,37 +192,43 @@ func (w instanceWork) cleanupDue(now time.Time) (*odoov1.OdooRestore, time.Durat
 	var wait time.Duration
 	for i := range w.restores {
 		rs := &w.restores[i]
-		st := &rs.Status
-		if st.CleanedUp || st.Suffix == "" {
-			continue
-		}
-		if st.RetryAfter != nil && st.RetryAfter.After(now) {
-			if d := st.RetryAfter.Sub(now); wait == 0 || d < wait {
-				wait = d
-			}
-			continue
-		}
-		switch st.Phase {
-		case odoov1.RestorePhaseFailed:
-			if st.LiveChanged {
-				continue // never: a restore that changed live data is finished, not failed
-			}
+		due, d := restoreCleanupDue(rs, now)
+		if due {
 			return rs, 0
-		case odoov1.RestorePhaseCompleted:
-			if st.Previous.State != odoov1.PreviousKept || !rs.DeletionTimestamp.IsZero() {
-				return rs, 0
-			}
-			if st.Previous.KeptUntil != nil {
-				if !st.Previous.KeptUntil.After(now) {
-					return rs, 0
-				}
-				if d := st.Previous.KeptUntil.Sub(now); wait == 0 || d < wait {
-					wait = d
-				}
-			}
+		}
+		if d > 0 && (wait == 0 || d < wait) {
+			wait = d
 		}
 	}
 	return nil, wait
+}
+
+// restoreCleanupDue tells whether the leftovers of restore rs can be deleted
+// now, or else how long until they can (zero when never, or not yet known).
+func restoreCleanupDue(rs *odoov1.OdooRestore, now time.Time) (bool, time.Duration) {
+	st := &rs.Status
+	if st.CleanedUp || st.Suffix == "" {
+		return false, 0
+	}
+	if st.RetryAfter != nil && st.RetryAfter.After(now) {
+		return false, st.RetryAfter.Sub(now)
+	}
+	switch st.Phase {
+	case odoov1.RestorePhaseFailed:
+		// Never when it changed live data: such a restore is finished, not failed.
+		return !st.LiveChanged, 0
+	case odoov1.RestorePhaseCompleted:
+		if st.Previous.State != odoov1.PreviousKept || !rs.DeletionTimestamp.IsZero() {
+			return true, 0
+		}
+		if st.Previous.KeptUntil != nil {
+			if !st.Previous.KeptUntil.After(now) {
+				return true, 0
+			}
+			return false, st.Previous.KeptUntil.Sub(now)
+		}
+	}
+	return false, 0
 }
 
 // BackupImageLookup returns the backup image; the store reconciler uses it.
@@ -1382,48 +1388,72 @@ func (r *OdooDeploymentReconciler) driveRestore(ctx context.Context, s *reconcil
 			s.ready(metav1.ConditionFalse, odoov1.ReasonWaitingForPodsToStop, "stopping Odoo for OdooRestore "+rs.Name)
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, false, nil
 		}
-		src, refusal, err := r.resolveRestore(ctx, od, w, rs)
-		if err != nil {
-			return ctrl.Result{}, false, err
-		}
-		if refusal != "" && !rs.Status.LiveChanged {
-			return r.finishRestoreFailed(ctx, s, rs, refusal)
-		}
-		if refusal != "" {
-			// A swap that started must be finished; its inputs are in the
-			// journal, only the store is needed again for a restore.
-			msg := "cannot retry the unfinished restore: " + refusal
-			s.degraded(ReasonRestoreIncomplete, msg)
-			_ = r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) { st.Message = msg })
-			return ctrl.Result{RequeueAfter: time.Minute}, false, nil
+		// A swap that started is finished from the restore journal on the
+		// data volume alone, so its retries never look the source up again:
+		// the OdooBackup, the store or its Secret may be gone or changed by
+		// then. A change only an attempt without a result suggested is
+		// retried in full while the source can still be had (the journal
+		// may show the swap never started); finishing it otherwise either
+		// finishes the swap or reports that it never started.
+		var src restoreSource
+		finishing := rs.Status.LiveChanged && !rs.Status.LiveChangeUnconfirmed
+		var noSource string
+		if !finishing {
+			var refusal string
+			src, refusal, err = r.resolveRestore(ctx, od, w, rs)
+			if err != nil {
+				return ctrl.Result{}, false, err
+			}
+			switch {
+			case refusal != "" && !rs.Status.LiveChanged:
+				return r.finishRestoreFailed(ctx, s, rs, refusal)
+			case refusal != "":
+				finishing, noSource = true, refusal
+			}
 		}
 		params, err := r.jobParams(ctx, od, src.store)
 		if err != nil {
 			s.degraded(ReasonBackupImageUnknown, err.Error())
 			return ctrl.Result{RequeueAfter: time.Minute}, false, nil
 		}
-		jobSrc := jobspec.RestoreSource{
-			Snapshot: src.snapshot, Host: src.host, Tags: src.tags,
-			Repository: src.repository, File: src.file, Neutralize: rs.Spec.Neutralize,
-		}
-		if src.undo != nil {
-			jobSrc.UndoSuffix = src.undo.Status.Suffix
-		}
-		if rs.Spec.From != nil || rs.Spec.Neutralize {
-			// A backup from elsewhere records no image to compare with, so
-			// the instance's own Odoo reports the version it will run;
-			// it is also the Odoo that neutralizes.
-			jobSrc.OdooImage = orDefault(od.Status.AppliedImage, od.Spec.Image)
-		}
-		if rs.Spec.Upgrade {
-			// The data is upgraded to the image the instance is to run.
-			jobSrc.OdooImage = od.Spec.Image
-			jobSrc.UpgradeModules = restoreUpgradeModules(od)
-		}
 		attempt := rs.Status.Attempts + 1
-		job, err := jobspec.RestoreJob(params, rs, rs.Status.Suffix, jobSrc, od.Spec.Modules, attempt)
-		if err != nil {
-			return r.finishRestoreFailed(ctx, s, rs, err.Error())
+		var job batchv1.Job
+		if finishing {
+			job = jobspec.FinishRestoreJob(params, rs, rs.Status.Suffix, rs.Spec.Undo != "", attempt)
+		} else {
+			jobSrc := jobspec.RestoreSource{
+				Snapshot: src.snapshot, Host: src.host, Tags: src.tags,
+				Repository: src.repository, File: src.file, Neutralize: rs.Spec.Neutralize,
+			}
+			if src.undo != nil {
+				jobSrc.UndoSuffix = src.undo.Status.Suffix
+			}
+			if rs.Spec.From != nil || rs.Spec.Neutralize {
+				// A backup from elsewhere records no image to compare with, so
+				// the instance's own Odoo reports the version it will run;
+				// it is also the Odoo that neutralizes.
+				jobSrc.OdooImage = orDefault(od.Status.AppliedImage, od.Spec.Image)
+			}
+			if rs.Spec.Upgrade {
+				// The data is upgraded to the image the instance is to run.
+				jobSrc.OdooImage = od.Spec.Image
+				jobSrc.UpgradeModules = restoreUpgradeModules(od)
+			}
+			build := r.restoreJob
+			if build == nil {
+				build = jobspec.RestoreJob
+			}
+			job, err = build(params, rs, rs.Status.Suffix, jobSrc, od.Spec.Modules, attempt)
+			switch {
+			case err != nil && !rs.Status.LiveChanged:
+				return r.finishRestoreFailed(ctx, s, rs, err.Error())
+			case err != nil:
+				// The swap may have started, so the restore cannot fail
+				// here as one that left the live data alone: the journal
+				// tells, through the Job that only finishes the swap.
+				finishing, noSource = true, "cannot restore from the source again: "+err.Error()
+				job = jobspec.FinishRestoreJob(params, rs, rs.Status.Suffix, rs.Spec.Undo != "", attempt)
+			}
 		}
 		started, err := r.startOperationJob(ctx, s, &job)
 		if err != nil {
@@ -1440,6 +1470,14 @@ func (r *OdooDeploymentReconciler) driveRestore(ctx context.Context, s *reconcil
 			st.Job = job.Name
 			st.Attempts = attempt
 			st.RetryAfter = nil
+			if finishing {
+				// What was restored stays as the first attempt recorded it.
+				st.Message = "job " + job.Name + " is finishing the swap from the restore journal, without the source"
+				if noSource != "" {
+					st.Message += " (" + noSource + ")"
+				}
+				return
+			}
 			if src.store != nil {
 				st.Store = src.store.Name
 			}

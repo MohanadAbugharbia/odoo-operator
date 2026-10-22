@@ -912,6 +912,66 @@ var _ = Describe("OdooDeployment lifecycle", func() {
 		Expect(h.fake.Has(h.dbName())).To(BeTrue())
 	})
 
+	// gcPod deletes a pod as the garbage collector does once its Job is gone
+	// (envtest runs no garbage collector).
+	gcPod := func(name string) {
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
+		Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, pod, client.GracePeriodSeconds(0)))).To(Succeed())
+		Eventually(func() bool {
+			return apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(pod), pod))
+		}).Should(BeTrue())
+	}
+
+	It("deletes an image check stuck pulling instead of waiting for it", func() {
+		h.create()
+		od := h.bootToRunning()
+		Expect(controllerutil.ContainsFinalizer(od, odoov1.DatabaseFinalizer)).To(BeTrue())
+		od.Spec.Image = "odoo:gone"
+		Expect(k8sClient.Update(ctx, od)).To(Succeed())
+		_, od = h.reconcile()
+		check := od.ImageCheckJobName()
+		Expect(h.job(check)).NotTo(BeNil())
+		h.podStuckPulling(check, "odoo:gone")
+
+		Expect(k8sClient.Delete(ctx, od)).To(Succeed())
+		h.reconcile()
+		Eventually(func() *batchv1.Job { return h.job(check) }).Should(BeNil(), "an image check is never waited for")
+		gcPod(check + "-pod")
+		for i := 0; i < 5 && h.get() != nil; i++ {
+			h.reconcile()
+		}
+		Expect(h.get()).To(BeNil(), "the deletion completes")
+		Expect(h.fake.Has(h.dbName())).To(BeFalse(), "and drops the database as usual")
+	})
+
+	It("deletes an image check whose container runs while waiting for another Job", func() {
+		h.create(func(od *odoov1.OdooDeployment) { od.Spec.Database.DeletionPolicy = odoov1.DeletionPolicyRetain })
+		_, od := h.reconcile()
+		initJob := od.Status.CurrentInitJob.Name
+		Expect(initJob).NotTo(BeEmpty())
+		Expect(od.Finalizers).To(ConsistOf(odoov1.OperationsFinalizer))
+		initPod := jobPod(h, initJob)
+
+		By("an image check left from earlier, its container running")
+		check := od.GetImageCheckJobTemplate()
+		Expect(controllerutil.SetControllerReference(od, &check, k8sClient.Scheme())).To(Succeed())
+		Expect(k8sClient.Create(ctx, &check)).To(Succeed())
+		jobPod(h, check.Name)
+
+		Expect(k8sClient.Delete(ctx, od)).To(Succeed())
+		_, od = h.reconcile()
+		Expect(od).NotTo(BeNil(), "the init Job's pod is waited for")
+		Eventually(func() *batchv1.Job { return h.job(check.Name) }).Should(BeNil(), "the image check is not")
+		Expect(h.job(initJob)).NotTo(BeNil())
+		gcPod(check.Name + "-pod")
+
+		initPod.Status.Phase = corev1.PodSucceeded
+		Expect(k8sClient.Status().Update(ctx, initPod)).To(Succeed())
+		_, od = h.reconcile()
+		Expect(od).To(BeNil(), "released once the init Job's pod finished")
+		Expect(h.fake.Has(h.dbName())).To(BeTrue())
+	})
+
 	It("releases the operations finalizer once the Job is done", func() {
 		h.create(func(od *odoov1.OdooDeployment) { od.Spec.Database.DeletionPolicy = odoov1.DeletionPolicyRetain })
 		_, od := h.reconcile()
