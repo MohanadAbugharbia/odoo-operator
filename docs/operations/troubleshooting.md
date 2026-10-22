@@ -101,6 +101,7 @@ deleted (see below).
 | `PartiallyCompleted` | The backup is in the first store, but a copy failed. | `status.copies` says why; fix the copy's store. |
 | `Failed`, "keeps zip files and only takes copies" | The first store in `spec.backup.stores` is a zip store. | List a restic store first and the zip store after it. |
 | `CompletedWithWarnings`, "could not delete …, whose backups retention forgot" | A zip store refused to delete the zip of a forgotten backup. | Check the store's credentials allow deleting; delete the named zips by hand. The next backup does not try again. |
+| `CompletedWithWarnings`, "could not delete …, left by uploads that were cut short" | A zip store refused to delete a `.<zip>.partial` file a killed upload left. | Check the store's credentials allow deleting; the next copy tries again. |
 
 A failed backup is final: the operator does not retry it. The
 `BackupFailed`, `BackupCopyFailed` and `RetentionFailed` events, and the
