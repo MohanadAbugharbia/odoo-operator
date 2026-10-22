@@ -181,6 +181,11 @@ const (
 	// ReasonJobSuperseded: a Job stuck pulling an image was replaced because
 	// spec.image moved on.
 	ReasonJobSuperseded = "JobSuperseded"
+	// ReasonJobCannotStart: a Job's pod cannot start: it cannot be
+	// scheduled, a container cannot be created (a missing Secret or
+	// ConfigMap), it waits long for a volume, or (for a backup, restore or
+	// cleanup) it cannot pull its image or a quota keeps it from being made.
+	ReasonJobCannotStart = "JobCannotStart"
 )
 
 type DatabaseConnectionDetails struct {

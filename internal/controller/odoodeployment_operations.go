@@ -550,8 +550,11 @@ type jobOutcome struct {
 	decoded bool
 	// detail describes a Job that failed without a Result.
 	detail string
-	// pullMessage is set while the Job's pod cannot pull its image.
-	pullMessage string
+	// startMessage is set while the Job's pod cannot start: it cannot pull
+	// its image, a quota keeps it from being created, it cannot be
+	// scheduled, a container cannot be created, or it waits long for a
+	// volume.
+	startMessage string
 	// mainStarted is false only when no pod of the finished Job got as far
 	// as its main container (a step before it failed, or no pod ran at
 	// all), and every pod the Job counted is still there to show it.
@@ -571,10 +574,14 @@ func (r *OdooDeploymentReconciler) observeJob(ctx context.Context, namespace, na
 	if err != nil {
 		return jobOutcome{}, err
 	}
-	out := jobOutcome{state: obs.State, job: obs.Job, detail: obs.FailureMessage, pullMessage: obs.ImagePullMessage}
+	out := jobOutcome{state: obs.State, job: obs.Job, detail: obs.FailureMessage,
+		startMessage: orDefault(obs.ImagePullMessage, obs.StartMessage)}
 	if obs.QuotaMessage != "" {
 		out.detail = obs.QuotaMessage
-		out.pullMessage = obs.QuotaMessage
+		out.startMessage = obs.QuotaMessage
+	}
+	if obs.State == reconcileloops.JobStateActive && obs.NeverStarted && r.now().Sub(obs.StartedAt) > jobStartLimit {
+		return r.giveUpJob(ctx, out)
 	}
 	if obs.State != reconcileloops.JobStateSucceeded && obs.State != reconcileloops.JobStateFailed {
 		return out, nil
@@ -615,6 +622,42 @@ func (r *OdooDeploymentReconciler) observeJob(ctx context.Context, namespace, na
 		return out, nil
 	}
 	out.result, out.decoded = res, true
+	return out, nil
+}
+
+// jobStartLimit is how long an operation Job may go without any of its pods
+// starting a container before the operator deletes it and counts it failed.
+// Such a Job waits on something only a person fixes (a node that fits, a
+// missing Secret, a volume attached elsewhere, an image that cannot be
+// pulled), and a restore or an offline backup keeps Odoo stopped meanwhile.
+const jobStartLimit = 15 * time.Minute
+
+// giveUpJob deletes an operation Job none of whose pods ever started a
+// container in jobStartLimit, and reports it failed without a result and
+// without its main container having run: nothing of it ran, so it changed
+// nothing. The deletion is in the foreground, so the Job's pods are marked
+// for deletion before the Job goes and none of them starts a container
+// later: the kubelet does not start a pod being deleted.
+func (r *OdooDeploymentReconciler) giveUpJob(ctx context.Context, out jobOutcome) (jobOutcome, error) {
+	job := out.job
+	why := out.startMessage
+	if why == "" {
+		why = "its pods are pending; kubectl describe them to see why"
+	}
+	log.FromContext(ctx).Info("Deleting a job none of whose pods started", "job", job.Name, "limit", jobStartLimit, "why", why)
+	if job.DeletionTimestamp.IsZero() {
+		propagation := metav1.DeletePropagationForeground
+		err := r.Delete(ctx, job, &client.DeleteOptions{
+			PropagationPolicy: &propagation, Preconditions: &metav1.Preconditions{UID: &job.UID},
+		})
+		if err != nil && !apierrors.IsNotFound(err) {
+			return out, fmt.Errorf("delete job %s: %w", job.Name, err)
+		}
+	}
+	out.state = reconcileloops.JobStateFailed
+	out.mainStarted = false
+	out.startMessage = ""
+	out.detail = fmt.Sprintf("started no container within %s, so the operator deleted it (%s)", jobStartLimit, why)
 	return out, nil
 }
 
@@ -944,13 +987,14 @@ func (r *OdooDeploymentReconciler) driveBackup(ctx context.Context, s *reconcile
 		op.Job = ""
 		return ctrl.Result{RequeueAfter: time.Second}, false, nil
 	case reconcileloops.JobStateActive:
-		if out.pullMessage != "" {
-			_ = r.patchBackupStatus(ctx, b, func(st *odoov1.OdooBackupStatus) {
-				st.Message = "job " + op.Job + " cannot start: " + out.pullMessage
-			})
-		}
 		if op.StoppedOdoo {
 			s.ready(metav1.ConditionFalse, ReasonBackupRunning, "Odoo is stopped for backup "+b.Name)
+		}
+		if out.startMessage != "" {
+			msg := "job " + op.Job + " cannot start: " + out.startMessage
+			_ = r.patchBackupStatus(ctx, b, func(st *odoov1.OdooBackupStatus) { st.Message = msg })
+			s.degraded(odoov1.ReasonJobCannotStart, fmt.Sprintf("backup %s: %s; a Job none of whose pods starts a container "+
+				"within %s is given up", b.Name, msg, jobStartLimit))
 		}
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, false, nil
 	}
@@ -1098,8 +1142,8 @@ func (r *OdooDeploymentReconciler) reachStore(ctx context.Context, s *reconcileS
 		_ = r.patchBackupStatus(ctx, b, func(st *odoov1.OdooBackupStatus) { st.Message = waiting })
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, false, nil
 	case reconcileloops.JobStateActive:
-		if out.pullMessage != "" {
-			waiting = "job " + name + " cannot start: " + out.pullMessage
+		if out.startMessage != "" {
+			waiting = "job " + name + " cannot start: " + out.startMessage
 			_ = r.patchBackupStatus(ctx, b, func(st *odoov1.OdooBackupStatus) { st.Message = waiting })
 		}
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, false, nil
@@ -1503,10 +1547,11 @@ func (r *OdooDeploymentReconciler) driveRestore(ctx context.Context, s *reconcil
 		op.Job = ""
 		return ctrl.Result{RequeueAfter: time.Second}, false, nil
 	case reconcileloops.JobStateActive:
-		if out.pullMessage != "" {
-			_ = r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) {
-				st.Message = "job " + op.Job + " cannot start: " + out.pullMessage
-			})
+		if out.startMessage != "" {
+			msg := "job " + op.Job + " cannot start: " + out.startMessage
+			_ = r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) { st.Message = msg })
+			s.degraded(odoov1.ReasonJobCannotStart, fmt.Sprintf("OdooRestore %s: %s; Odoo is stopped meanwhile, "+
+				"and a Job none of whose pods starts a container within %s is given up", rs.Name, msg, jobStartLimit))
 		}
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, false, nil
 	}
@@ -1769,6 +1814,10 @@ func (r *OdooDeploymentReconciler) driveCleanup(ctx context.Context, s *reconcil
 		op.Job = ""
 		return ctrl.Result{RequeueAfter: time.Second}, false, nil
 	case reconcileloops.JobStateActive:
+		if out.startMessage != "" {
+			s.degraded(odoov1.ReasonJobCannotStart, fmt.Sprintf("cleanup job %s of OdooRestore %s cannot start: %s",
+				op.Job, rs.Name, out.startMessage))
+		}
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, false, nil
 	}
 	od.Status.CurrentOperation = odoov1.OperationStatus{}

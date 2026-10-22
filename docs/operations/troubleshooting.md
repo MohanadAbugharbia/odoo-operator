@@ -84,8 +84,11 @@ set `--maintenance-page-image` ([Operator flags](../reference/operator-flags.md)
 the message carries the API error (often RBAC, a quota or an invalid field).
 They are retried with backoff. `BackupImageUnknown` means the operator could
 not derive the backup image: set `--backup-image`. `DrillRunning` as a
-`Degraded` reason means the drill Job's pod cannot start (an image pull or a
-quota); `Deleting` and `DatabaseDropFailed` appear while the instance is
+`Degraded` reason means the drill Job's pod cannot start (an image pull, a
+quota, scheduling, a missing Secret or a volume), and `JobCannotStart` the
+same for a backup, restore, cleanup, init or upgrade Job: the message says
+why. A backup, restore, drill or cleanup Job none of whose pods started a
+container within 15 minutes is deleted and counted failed; `Deleting` and `DatabaseDropFailed` appear while the instance is
 deleted (see below).
 
 ## Backups
@@ -97,6 +100,7 @@ deleted (see below).
 | `WaitingForFilestoreCleanup` | Odoo's attachment cleanup (`base.autovacuum_job`) runs or is due. | Nothing: retried every 2 minutes, and run anyway after 2 hours. |
 | `Failed`, "has no spec.backup.stores" or a store or Secret error | Checked before the Job starts. | Fix the instance or store, then create a new OdooBackup. |
 | `Failed`, "job … failed at step …" | The Job failed at that step (connect, dump, filestore, upload, verify…). | `kubectl -n <ns> logs job/<job>`; the Job is kept until its TTL. Create a new OdooBackup to retry; a scheduled backup tries again at its next time. |
+| `Running`, "job … cannot start: …", instance `Degraded` `JobCannotStart` | The backup Job's pod cannot be scheduled, a container cannot be created (a missing Secret), its image cannot be pulled, or it waits long for a volume (see the same row under Restores). | Fix the cause. A Job none of whose pods started a container within 15 minutes is deleted and the backup fails ("started no container within 15m0s"); an offline backup then brings Odoo back. |
 | `CompletedWithWarnings` | The backup is good, but some attachments were in neither the filestore nor the previous backup. | `status.missingFileNames` lists them. |
 | `PartiallyCompleted` | The backup is in the first store, but a copy failed. | `status.copies` says why; fix the copy's store. |
 | `Failed`, "keeps zip files and only takes copies" | The first store in `spec.backup.stores` is a zip store. | List a restic store first and the zip store after it. |
@@ -120,6 +124,7 @@ example alerts, report failures.
 | `Failed` after one pod, the Job's condition `PodFailurePolicy` | The restore was refused by a check no new pod can change (the message names it), so the Job ended at its first pod (exit code 3). | Fix the cause the message names; create a new OdooRestore. |
 | `Restoring` for long, instance `Degraded` `RestoreIncomplete` | The Job failed after the swap may have started: its result said so, or its main container started and left no result (`status.liveChangeUnconfirmed`). It is retried, from 30 seconds up to every 15 minutes, until it finishes, or until an attempt reports from the restore journal that the swap never started. Odoo stays stopped meanwhile. A retry after the swap started only finishes it from the journal (`--finish-swap`), so it needs neither the backup nor the store. | Fix the cause (usually the database or the data volume); it carries on by itself. |
 | `Stopping` | Waiting for Odoo's pods to stop. | — |
+| `Restoring`, "job … cannot start: …", instance `Degraded` `JobCannotStart` | The restore Job's pod cannot start: it cannot be scheduled (`Unschedulable`, with the scheduler's message), a container cannot be created (`CreateContainerConfigError`: a Secret or ConfigMap it names is missing), its image cannot be pulled, or it has waited more than 5 minutes for its first container after it was scheduled (most often a `ReadWriteOnce` data volume still attached to another node, or a volume that fails to mount; `kubectl describe pod` shows the events). Odoo is stopped meanwhile. | Fix the cause. If no pod of the Job starts a container within 15 minutes, the operator deletes the Job and the restore fails with the live data untouched ("started no container within 15m0s"), and Odoo comes back. |
 
 ## Backup stores
 

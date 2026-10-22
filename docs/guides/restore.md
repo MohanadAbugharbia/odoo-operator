@@ -185,6 +185,13 @@ How the operator tells which side of the swap a failed Job ended on:
   nothing was swapped: the restore fails, and the message names the step
   that failed and why (for example `failed in step load: OOMKilled (exit
   code 137)`).
+- While the Job's pod cannot start (it cannot be scheduled, a Secret it
+  names is missing, its image cannot be pulled, or it waits for a volume
+  attached to another node), `status.message` and the instance's `Degraded`
+  condition (`JobCannotStart`) say why. When no pod of the Job has started
+  a container 15 minutes after the Job started, the operator deletes the
+  Job, and the restore fails with the live data untouched and Odoo back,
+  rather than keeping Odoo stopped until `spec.backup.activeDeadlineSeconds`.
 - When it left none after the main container started, or the pods that
   would tell are gone, the swap may have started: Odoo stays stopped and the
   restore is retried (`status.liveChanged`, `status.liveChangeUnconfirmed`).

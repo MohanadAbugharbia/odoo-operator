@@ -164,8 +164,8 @@ func (r *OdooDeploymentReconciler) driveDrill(ctx context.Context, s *reconcileS
 		r.dropDrillScratch(ctx, s, layout.Suffix(started.Time))
 		return r.finishDrill(ctx, s, outcome)
 	case reconcileloops.JobStateActive:
-		if out.pullMessage != "" {
-			s.degraded(ReasonDrillRunning, "drill job "+op.Job+" cannot start: "+out.pullMessage)
+		if out.startMessage != "" {
+			s.degraded(ReasonDrillRunning, "drill job "+op.Job+" cannot start: "+out.startMessage)
 		}
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, false, nil
 	}
