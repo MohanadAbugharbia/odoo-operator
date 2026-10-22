@@ -871,6 +871,7 @@ _Appears in:_
 | `snapshotID` _string_ |  |  |  |
 | `file` _string_ |  |  |  |
 | `image` _string_ | Image is the Odoo image recorded in the backup; the instance is<br />started on it. |  |  |
+| `upgradeToken` _string_ | UpgradeToken is the upgrade token the instance counts as running once<br />the restore completed: the backup's, or for an upgraded restore<br />(spec.upgrade) the spec.upgrade.token the restore Job upgraded the<br />data for. A spec.upgrade.token that differs from it runs the upgrade. |  |  |
 | `odooVersion` _string_ | OdooVersion is the Odoo series in the backup. |  |  |
 | `job` _string_ | Job is the Job running the restore. Attempts counts the Jobs that<br />ran it. |  |  |
 | `attempts` _integer_ |  |  |  |

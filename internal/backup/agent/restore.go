@@ -159,8 +159,11 @@ type RestoreOptions struct {
 	// in the loaded database (WorkUpgradeExit) before it is swapped in, with
 	// the instance's Odoo of the backup's series. The restored data then
 	// counts as running UpgradeImage.
+	// UpgradeToken is the upgrade token the upgraded data then counts as
+	// upgraded for (the instance's spec.upgrade.token when the Job was made).
 	UpgradeModules []string
 	UpgradeImage   string
+	UpgradeToken   string
 
 	// FinishSwap only finishes a swap that has started, from the journal
 	// alone: it needs neither the backup nor its store (Snapshot, File,
@@ -578,7 +581,7 @@ func (r *restoreRun) beforeSwap(ctx context.Context) (string, error) {
 				strings.Join(o.UpgradeModules, ","), o.UpgradeImage))
 		}
 		j.Upgraded = true
-		j.Image = o.UpgradeImage
+		j.Image, j.UpgradeToken = o.UpgradeImage, o.UpgradeToken
 		if err := j.save(r.path); err != nil {
 			return result.StepCheck, err
 		}

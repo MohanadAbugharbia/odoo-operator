@@ -403,6 +403,7 @@ func TestRestoreUpgradeWithOdooStep(t *testing.T) {
 	upgraded := func(f *fixture, store, work, suffix string) result.Result {
 		return f.restoreFile(store, "fixture.zip", suffix, func(o *RestoreOptions) {
 			o.WorkDir, o.UpgradeModules, o.UpgradeImage = work, []string{"shop", "pos"}, "registry.example/shop:2"
+			o.UpgradeToken = "release-2"
 		})
 	}
 	t.Run("upgraded", func(t *testing.T) {
@@ -410,8 +411,8 @@ func TestRestoreUpgradeWithOdooStep(t *testing.T) {
 		hWrite(t, filepath.Join(work, WorkOdooVersion), []byte("Odoo Server 18.0-20261015\n"))
 		hWrite(t, filepath.Join(work, WorkUpgradeExit), []byte("0\n"))
 		rr := upgraded(f, store, work, suffix)
-		if !rr.OK || !rr.LiveChanged || rr.Image != "registry.example/shop:2" {
-			t.Fatalf("last step: %+v", rr)
+		if !rr.OK || !rr.LiveChanged || rr.Image != "registry.example/shop:2" || rr.UpgradeToken != "release-2" {
+			t.Fatalf("last step: %+v; the data counts as upgraded for the token the upgrade was for", rr)
 		}
 		if !slices.ContainsFunc(rr.Warnings, func(w string) bool { return strings.Contains(w, "upgraded (-u shop,pos)") }) {
 			t.Errorf("warnings = %q", rr.Warnings)
@@ -451,10 +452,10 @@ func TestRestoreUpgradeWithOdooStep(t *testing.T) {
 // failed.
 func TestRestoreRetriedPodSkipsOdooStep(t *testing.T) {
 	x := odooFixtures[1]
-	last := func(f *fixture, store, work, suffix string) result.Result {
+	last := func(f *fixture, store, work, suffix, token string) result.Result {
 		return f.restoreFile(store, "fixture.zip", suffix, func(o *RestoreOptions) {
 			o.WorkDir, o.Neutralize = work, true
-			o.UpgradeModules, o.UpgradeImage = []string{"shop"}, "registry.example/shop:2"
+			o.UpgradeModules, o.UpgradeImage, o.UpgradeToken = []string{"shop"}, "registry.example/shop:"+token, token
 		})
 	}
 	// firstPod checks and upgrades the database, then fails to swap it in
@@ -469,7 +470,7 @@ func TestRestoreRetriedPodSkipsOdooStep(t *testing.T) {
 		if err := os.MkdirAll(blocker, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if rr := last(f, store, work, suffix); rr.OK || rr.LiveChanged || rr.Final || !strings.Contains(rr.Error, "already exists") {
+		if rr := last(f, store, work, suffix, "2"); rr.OK || rr.LiveChanged || rr.Final || !strings.Contains(rr.Error, "already exists") {
 			t.Fatalf("first pod: %+v; a swap that fails is retried", rr)
 		}
 		if err := os.Remove(blocker); err != nil {
@@ -491,9 +492,11 @@ func TestRestoreRetriedPodSkipsOdooStep(t *testing.T) {
 
 	t.Run("left out", func(t *testing.T) {
 		f, store, next, suffix := firstPod(t)
-		rr := last(f, store, next, suffix)
-		if !rr.OK || !rr.LiveChanged || rr.Image != "registry.example/shop:2" {
-			t.Fatalf("second pod: %+v", rr)
+		// A later Job may be made for another image and token: the data
+		// stays what the pod that upgraded it upgraded it for.
+		rr := last(f, store, next, suffix, "3")
+		if !rr.OK || !rr.LiveChanged || rr.Image != "registry.example/shop:2" || rr.UpgradeToken != "2" {
+			t.Fatalf("second pod: %+v; the data counts as upgraded on the first pod's image and token", rr)
 		}
 		for _, w := range []string{"neutralized", "upgraded"} {
 			n := 0
@@ -513,7 +516,7 @@ func TestRestoreRetriedPodSkipsOdooStep(t *testing.T) {
 		live := f.state(f.db)
 		hWrite(t, filepath.Join(next, WorkUpgradeExit), []byte("1\n"))
 		hWrite(t, filepath.Join(next, WorkUpgradeLog), []byte("KeyError: 'x_field'\n"))
-		rr := last(f, store, next, suffix)
+		rr := last(f, store, next, suffix, "2")
 		if rr.OK || rr.LiveChanged || !rr.Final || !strings.Contains(rr.Error, "x_field") {
 			t.Fatalf("second pod: %+v; a database whose latest upgrade failed is never swapped in", rr)
 		}

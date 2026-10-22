@@ -688,10 +688,12 @@ type RestoreSource struct {
 	// OdooImage, when set, adds the Odoo step: it reports the Odoo version
 	// the restored data will run on and, with Neutralize, neutralizes the
 	// loaded database before it is swapped in; with UpgradeModules it then
-	// upgrades them (-u) in the loaded database, on its filestore.
+	// upgrades them (-u) in the loaded database, on its filestore, and the
+	// restored data then counts as upgraded for UpgradeToken.
 	OdooImage      string
 	Neutralize     bool
 	UpgradeModules []string
+	UpgradeToken   string
 }
 
 // Paths of the restore Job's shared folder.
@@ -797,7 +799,8 @@ func RestoreJob(p Params, restore *odoov1.OdooRestore, suffix string, src Restor
 		last = append(last, "--neutralize")
 	}
 	if len(src.UpgradeModules) > 0 {
-		last = append(last, "--upgrade", strings.Join(src.UpgradeModules, ","), "--upgrade-image", src.OdooImage)
+		last = append(last, "--upgrade", strings.Join(src.UpgradeModules, ","), "--upgrade-image", src.OdooImage,
+			"--upgrade-token", src.UpgradeToken)
 	}
 	spec := p.podSpec(last, env, volumes, mounts)
 	loader := spec.Containers[0]

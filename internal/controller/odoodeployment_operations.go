@@ -1435,9 +1435,13 @@ func (r *OdooDeploymentReconciler) driveRestore(ctx context.Context, s *reconcil
 				jobSrc.OdooImage = orDefault(od.Status.AppliedImage, od.Spec.Image)
 			}
 			if rs.Spec.Upgrade {
-				// The data is upgraded to the image the instance is to run.
+				// The data is upgraded to the image the instance is to run,
+				// for the upgrade token it has now; the agent reports both
+				// back from the attempt that upgraded, so a token changed
+				// later is still upgraded for.
 				jobSrc.OdooImage = od.Spec.Image
 				jobSrc.UpgradeModules = restoreUpgradeModules(od)
+				jobSrc.UpgradeToken = od.Spec.Upgrade.Token
 			}
 			build := r.restoreJob
 			if build == nil {
@@ -1600,6 +1604,14 @@ func (r *OdooDeploymentReconciler) finishRestore(ctx context.Context, s *reconci
 			}
 		}
 	}
+	// An upgraded restore counts as upgraded for the token its Job upgraded
+	// the data for (res.UpgradeToken), not the one spec.upgrade.token has
+	// now: a token changed while it ran still gets its upgrade.
+	if image == "" && rs.Spec.From != nil && !rs.Spec.Upgrade {
+		// A backup from elsewhere records neither: the data now runs on
+		// this instance's image and counts as upgraded for its token.
+		token = od.Spec.Upgrade.Token
+	}
 	keep := od.Spec.Backup.KeepPreviousValue()
 	if rs.Spec.KeepPrevious != nil {
 		keep = rs.Spec.KeepPrevious.Duration
@@ -1614,11 +1626,16 @@ func (r *OdooDeploymentReconciler) finishRestore(ctx context.Context, s *reconci
 	if len(res.MissingModules) > 0 {
 		msg += fmt.Sprintf("; modules %s are installed again", strings.Join(res.MissingModules, ", "))
 	}
+	if rs.Spec.Upgrade && rs.Spec.Undo == "" && token != od.Spec.Upgrade.Token {
+		msg += fmt.Sprintf("; it was upgraded for upgrade token %q and spec.upgrade.token is now %q, "+
+			"which is applied next as any change of the token is", token, od.Spec.Upgrade.Token)
+	}
 	err := r.patchRestoreStatus(ctx, rs, func(st *odoov1.OdooRestoreStatus) {
 		st.Phase = odoov1.RestorePhaseCompleted
 		st.Message = msg
 		st.CompletedAt = &now
 		st.Image = image
+		st.UpgradeToken = token
 		st.OdooVersion = res.OdooVersion
 		st.LiveChanged = true
 		st.LiveChangeUnconfirmed = false
@@ -1645,12 +1662,6 @@ func (r *OdooDeploymentReconciler) finishRestore(ctx context.Context, s *reconci
 	}
 	if image != "" {
 		od.Status.AppliedImage = image
-	}
-	if (image == "" && rs.Spec.From != nil) || rs.Spec.Upgrade {
-		// A backup from elsewhere records neither, and an upgraded restore
-		// was upgraded to spec.image: the data now runs on this instance's
-		// image and counts as upgraded for its token.
-		token = od.Spec.Upgrade.Token
 	}
 	od.Status.AppliedUpgradeToken = token
 	installed := utils.Difference(od.Spec.Modules, res.MissingModules)
