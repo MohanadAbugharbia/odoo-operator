@@ -286,6 +286,8 @@ func runRestore(ctx context.Context, fs *flag.FlagSet, c *common, command string
 	fs.StringVar(&upgrade, "upgrade", "", "comma-separated modules the Odoo step must have upgraded")
 	fs.StringVar(&o.UpgradeImage, "upgrade-image", "", "with --upgrade: the image the Odoo step upgraded on")
 	fs.StringVar(&o.UndoSuffix, "undo-suffix", "", "suffix of the restore to undo (undo)")
+	fs.BoolVar(&o.FinishSwap, "finish-swap", false, "only finish a swap that has started, from the restore journal; "+
+		"needs no source, and fails changing nothing when the swap has not started")
 	fs.StringVar(&o.DataRoot, "data", layout.DataMount, "root of the instance's data volume")
 	fs.StringVar(&modules, "expect-modules", "", "comma-separated modules the instance should have")
 	fs.IntVar(&o.CheckSample, "check-sample", 200, "restored files whose content is checked")
@@ -313,6 +315,10 @@ func runRestore(ctx context.Context, fs *flag.FlagSet, c *common, command string
 	}
 	if o.LoadOnly && o.WorkDir == "" {
 		fmt.Fprintln(os.Stderr, "restore: --load-only needs --work-dir")
+		return 2
+	}
+	if o.FinishSwap && (o.LoadOnly || o.WorkDir != "") {
+		fmt.Fprintln(os.Stderr, "restore: --finish-swap runs alone, without --load-only or --work-dir")
 		return 2
 	}
 	var res result.Result

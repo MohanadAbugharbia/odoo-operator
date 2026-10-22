@@ -341,3 +341,151 @@ var _ = Describe("Deleting an instance during a restore", func() {
 		Expect(h.fake.Has(h.dbName())).To(BeTrue())
 	})
 })
+
+var _ = Describe("Finishing an interrupted swap", func() {
+	var h *backupHarness
+
+	AfterEach(func() {
+		if h != nil {
+			h.cleanupAll()
+		}
+	})
+
+	// interrupted starts restore r, lets its first Job fail with res (nil:
+	// without a result) and makes the retry due. It returns that Job.
+	interrupted := func(set func(*odoov1.OdooRestoreSpec), res *result.Result) string {
+		h.newRestore("r", set)
+		_, od := h.reconcile()
+		first := od.Status.CurrentOperation.Job
+		Expect(first).NotTo(BeEmpty())
+		h.finishJob(first, res)
+		h.reconcile()
+		rs := h.restore("r")
+		Expect(rs.Status.LiveChanged).To(BeTrue())
+		Expect(rs.Status.RetryAfter).NotTo(BeNil())
+		past := metav1.NewTime(time.Now().Add(-time.Second))
+		rs.Status.RetryAfter = &past
+		Expect(k8sClient.Status().Update(ctx, rs)).To(Succeed())
+		return first
+	}
+	swapFailed := &result.Result{OK: false, Step: result.StepSwap, Error: "rename failed", LiveChanged: true}
+	fromBackup := func(s *odoov1.OdooRestoreSpec) { s.Backup = h.name + "-one" }
+	fromSnapshot := func(s *odoov1.OdooRestoreSpec) { s.SnapshotID = completedSnapshot }
+
+	for _, tc := range []struct {
+		name        string
+		set         func(*odoov1.OdooRestoreSpec)
+		breakSource func()
+	}{
+		{"its OdooBackup was deleted", fromBackup, func() {
+			Expect(k8sClient.Delete(ctx, &odoov1.OdooBackup{ObjectMeta: metav1.ObjectMeta{Name: h.name + "-one", Namespace: ns}})).To(Succeed())
+		}},
+		{"the store's Secret was deleted", fromBackup, func() {
+			Expect(k8sClient.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: h.name + "-restic", Namespace: ns}})).To(Succeed())
+		}},
+		{"the instance's store changed", fromSnapshot, func() {
+			od := h.get()
+			od.Spec.Backup.Stores = []string{h.name + "-elsewhere"}
+			Expect(k8sClient.Update(ctx, od)).To(Succeed())
+		}},
+	} {
+		It("finishes it from the journal when "+tc.name, func() {
+			h = newBackupHarness()
+			h.completedBackup()
+			first := interrupted(tc.set, swapFailed)
+			tc.breakSource()
+
+			_, od := h.reconcile()
+			second := od.Status.CurrentOperation.Job
+			Expect(second).NotTo(BeEmpty(), "the retry does not wait for the source")
+			Expect(second).NotTo(Equal(first))
+			job := h.job(second)
+			args := jobArgs(job)
+			Expect(args).To(HavePrefix("odoo-backup restore --finish-swap --suffix " + h.restore("r").Status.Suffix))
+			Expect(args).NotTo(ContainSubstring("--snapshot"))
+			Expect(job.Spec.Template.Spec.InitContainers).To(BeEmpty())
+			Expect(job.Spec.Template.Spec.Volumes).To(HaveLen(3), "no store volume")
+			rs := h.restore("r")
+			Expect(rs.Status.Message).To(ContainSubstring("is finishing the swap from the restore journal"))
+			Expect(rs.Status.Attempts).To(Equal(int32(2)))
+			Expect(rs.Status.SnapshotID).To(Equal(completedSnapshot), "what was restored stays recorded")
+			Expect(h.replicas()).To(BeZero())
+
+			h.finishJob(second, &result.Result{OK: true, LiveChanged: true, PreviousKept: true, Image: "odoo:a"})
+			_, od = h.reconcile()
+			rs = h.restore("r")
+			Expect(rs.Status.Phase).To(Equal(odoov1.RestorePhaseCompleted), rs.Status.Message)
+			Expect(rs.Status.SnapshotID).To(Equal(completedSnapshot))
+			Expect(od.Status.CurrentOperation.Kind).To(BeEmpty())
+			Expect(condition(od, odoov1.ConditionDegraded).Reason).NotTo(Equal(ReasonRestoreIncomplete))
+		})
+	}
+
+	It("finishes a confirmed swap from the journal even while the source is there", func() {
+		h = newBackupHarness()
+		h.completedBackup()
+		interrupted(fromBackup, swapFailed)
+		_, od := h.reconcile()
+		Expect(jobArgs(h.job(od.Status.CurrentOperation.Job))).To(ContainSubstring("--finish-swap"))
+	})
+
+	It("finishes an interrupted undo without the undone restore's suffix", func() {
+		h = newBackupHarness()
+		h.completedBackup()
+		h.newRestore("first", fromBackup)
+		_, od := h.reconcile()
+		h.finishJob(od.Status.CurrentOperation.Job, &result.Result{OK: true, LiveChanged: true, PreviousKept: true, Image: "odoo:old"})
+		h.reconcile()
+		first := h.restore("first")
+		Expect(first.Status.Phase).To(Equal(odoov1.RestorePhaseCompleted))
+		time.Sleep(time.Until(first.Status.StartedAt.Add(1100 * time.Millisecond)))
+
+		interrupted(func(s *odoov1.OdooRestoreSpec) { s.Undo = first.Name }, swapFailed)
+		_, od = h.reconcile()
+		args := jobArgs(h.job(od.Status.CurrentOperation.Job))
+		Expect(args).To(HavePrefix("odoo-backup undo --finish-swap "))
+		Expect(args).NotTo(ContainSubstring("--undo-suffix"))
+		h.finishJob(od.Status.CurrentOperation.Job, &result.Result{OK: true, LiveChanged: true, PreviousKept: true})
+		_, od = h.reconcile()
+		Expect(h.restore("r").Status.Phase).To(Equal(odoov1.RestorePhaseCompleted))
+		Expect(h.restore("first").Status.Previous.State).To(Equal(odoov1.PreviousUndone))
+		Expect(od.Status.AppliedImage).To(Equal("odoo:a"))
+	})
+
+	It("fails, live data unchanged, when the journal of a swap only thought started shows it never did", func() {
+		h = newBackupHarness()
+		h.completedBackup()
+		interrupted(fromBackup, nil)
+		Expect(h.restore("r").Status.LiveChangeUnconfirmed).To(BeTrue())
+		Expect(k8sClient.Delete(ctx, &odoov1.OdooBackup{ObjectMeta: metav1.ObjectMeta{Name: h.name + "-one", Namespace: ns}})).To(Succeed())
+
+		_, od := h.reconcile()
+		second := od.Status.CurrentOperation.Job
+		Expect(jobArgs(h.job(second))).To(ContainSubstring("--finish-swap"), "the source cannot be had: only finishing is left")
+		Expect(h.restore("r").Status.Message).To(ContainSubstring(`OdooBackup "` + h.name + `-one" does not exist`))
+
+		h.finishJob(second, &result.Result{OK: false, Step: result.StepSwap,
+			Error: "nothing to finish: the restore journal shows the swap has not started (stage restored)"})
+		_, od = h.reconcile()
+		rs := h.restore("r")
+		Expect(rs.Status.Phase).To(Equal(odoov1.RestorePhaseFailed))
+		Expect(rs.Status.LiveChanged).To(BeFalse())
+		Expect(rs.Status.Message).To(ContainSubstring("swap has not started"))
+		Expect(rs.Status.Message).To(ContainSubstring("the live data was not changed"))
+		Expect(od.Status.CurrentOperation.Kind).To(Equal(odoov1.OperationCleanup), "the loaded copy is cleaned up")
+	})
+
+	It("keeps retrying a started swap when finishing reports the journal unchanged", func() {
+		h = newBackupHarness()
+		h.completedBackup()
+		interrupted(fromBackup, swapFailed)
+		_, od := h.reconcile()
+		h.finishJob(od.Status.CurrentOperation.Job, &result.Result{OK: false, Step: result.StepSwap,
+			Error: "nothing to finish: the restore journal shows the swap has not started (stage none)"})
+		h.reconcile()
+		rs := h.restore("r")
+		Expect(rs.Status.Phase).To(Equal(odoov1.RestorePhaseRestoring), "a swap a result reported as started is never given up")
+		Expect(rs.Status.LiveChanged).To(BeTrue())
+		Expect(h.replicas()).To(BeZero())
+	})
+})
