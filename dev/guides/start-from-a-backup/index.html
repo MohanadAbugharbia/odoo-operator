@@ -1795,6 +1795,12 @@ initializes an empty database in its place. Read the OdooRestore's
 <code>status.message</code> and the Job log it names, fix the cause (the file, the
 store, the image's Odoo series), then delete the OdooRestore. The operator
 creates it again and retries.</p>
+<p>Meanwhile a cleanup Job deletes what the failed restore left behind (the
+half-loaded <code>&lt;db&gt;_restore_&lt;suffix&gt;</code> database and folders, its journal), as it
+does on a running instance. The OdooRestore's finalizer stays until that
+cleanup succeeded, so a deletion may wait for it: a cleanup that fails is
+retried after an hour (<code>kubectl -n shop get jobs -l
+odoo.abugharbia.com/job-kind=cleanup</code>).</p>
 <div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>-n<span class="w"> </span>shop<span class="w"> </span>get<span class="w"> </span>odoorestore<span class="w"> </span>my-odoo-bootstrap<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.status.message}'</span>
 kubectl<span class="w"> </span>-n<span class="w"> </span>shop<span class="w"> </span>delete<span class="w"> </span>odoorestore<span class="w"> </span>my-odoo-bootstrap
 </code></pre></div>

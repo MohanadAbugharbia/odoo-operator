@@ -1761,6 +1761,17 @@ damaging it, and a Job that dies halfway finishes when it is retried:</p>
   retried for ever. A swap that a result reported as started is always
   finished.</li>
 </ul>
+<p>How a started swap is finished: the retry runs the Job in a mode that only
+finishes the swap (<code>odoo-backup restore --finish-swap</code>, or <code>undo
+--finish-swap</code>), a single container reading the restore journal on the data
+volume. It needs neither the backup nor its store, so it goes on even when
+the OdooBackup, the store or its Secret was deleted meanwhile, or
+<code>spec.backup.stores</code> changed. When only an attempt without a result made the
+swap look started, the retry runs the whole restore again while its source
+can still be found, and otherwise the finishing mode; that mode changes
+nothing when the journal shows the swap never started, and the restore then
+fails with the live data untouched (<code>nothing to finish: the restore journal
+shows the swap has not started</code>).</p>
 <pre class="mermaid"><code>flowchart TD
   start([OdooRestore: Odoo is stopped]) --&gt; load["Load the backup beside the live data:&lt;br/&gt;database db_restore_suffix, its filestore"]
   load --&gt; check[Check row counts, attachments&lt;br/&gt;and a sample of checksums]
@@ -1771,7 +1782,7 @@ damaging it, and a Job that dies halfway finishes when it is retried:</p>
   odoo -- "yes" --&gt; step["The instance's Odoo reports its version,&lt;br/&gt;neutralizes and upgrades the loaded database&lt;br/&gt;when asked"]
   step --&gt;|another series, or&lt;br/&gt;neutralize or upgrade failed| failed
   step --&gt; swap["Swap: live becomes db_prev_suffix,&lt;br/&gt;restored becomes db"]
-  swap --&gt;|Job dies| retry["Retried Job reads the journal&lt;br/&gt;and finishes the swap&lt;br/&gt;(Degraded: RestoreIncomplete meanwhile)"]
+  swap --&gt;|Job dies| retry["Retried Job finishes the swap&lt;br/&gt;from the journal, without the source&lt;br/&gt;(Degraded: RestoreIncomplete meanwhile)"]
   retry --&gt; swap
   swap --&gt;|"Job dies, no result"| unknown["Odoo stays stopped, retried;&lt;br/&gt;the next attempt's journal decides"]
   unknown --&gt;|journal: swap never started| failed
