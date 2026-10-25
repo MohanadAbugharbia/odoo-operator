@@ -44,6 +44,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/jobspec"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/controller/reconcileloops"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/database"
 	"github.com/MohanadAbugharbia/odoo-operator/internal/metrics"
@@ -76,6 +77,11 @@ type OdooDeploymentReconciler struct {
 	Version string
 	// Now is the clock of backup schedules; time.Now when nil.
 	Now func() time.Time
+
+	// restoreJob renders a restore Job; jobspec.RestoreJob when nil. Tests
+	// set it to make the rendering fail.
+	restoreJob func(p jobspec.Params, restore *odoov1.OdooRestore, suffix string, src jobspec.RestoreSource,
+		expectModules []string, attempt int32) (batchv1.Job, error)
 
 	imageMu sync.Mutex
 }
@@ -1008,6 +1014,11 @@ func (r *OdooDeploymentReconciler) reconcileDelete(ctx context.Context, s *recon
 		if err := reconcileloops.DeleteMaintenanceJob(ctx, r.Client, job); err != nil {
 			return s.fail(odoov1.ReasonDeleting, err)
 		}
+	}
+	// An image check mounts nothing and changes nothing, so it is never
+	// waited for, whether its pod is stuck pulling or its container runs.
+	if err := reconcileloops.PruneImageCheckJobs(ctx, r.Client, od, ""); err != nil {
+		return s.fail(odoov1.ReasonDeleting, err)
 	}
 	if err := r.deleteJobsThatNeverRan(ctx, od); err != nil {
 		return s.fail(odoov1.ReasonDeleting, err)

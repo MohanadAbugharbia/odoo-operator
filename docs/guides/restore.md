@@ -172,6 +172,18 @@ How the operator tells which side of the swap a failed Job ended on:
   retried for ever. A swap that a result reported as started is always
   finished.
 
+How a started swap is finished: the retry runs the Job in a mode that only
+finishes the swap (`odoo-backup restore --finish-swap`, or `undo
+--finish-swap`), a single container reading the restore journal on the data
+volume. It needs neither the backup nor its store, so it goes on even when
+the OdooBackup, the store or its Secret was deleted meanwhile, or
+`spec.backup.stores` changed. When only an attempt without a result made the
+swap look started, the retry runs the whole restore again while its source
+can still be found, and otherwise the finishing mode; that mode changes
+nothing when the journal shows the swap never started, and the restore then
+fails with the live data untouched (`nothing to finish: the restore journal
+shows the swap has not started`).
+
 ```mermaid
 flowchart TD
   start([OdooRestore: Odoo is stopped]) --> load["Load the backup beside the live data:<br/>database db_restore_suffix, its filestore"]
@@ -183,7 +195,7 @@ flowchart TD
   odoo -- "yes" --> step["The instance's Odoo reports its version,<br/>neutralizes and upgrades the loaded database<br/>when asked"]
   step -->|another series, or<br/>neutralize or upgrade failed| failed
   step --> swap["Swap: live becomes db_prev_suffix,<br/>restored becomes db"]
-  swap -->|Job dies| retry["Retried Job reads the journal<br/>and finishes the swap<br/>(Degraded: RestoreIncomplete meanwhile)"]
+  swap -->|Job dies| retry["Retried Job finishes the swap<br/>from the journal, without the source<br/>(Degraded: RestoreIncomplete meanwhile)"]
   retry --> swap
   swap -->|"Job dies, no result"| unknown["Odoo stays stopped, retried;<br/>the next attempt's journal decides"]
   unknown -->|journal: swap never started| failed

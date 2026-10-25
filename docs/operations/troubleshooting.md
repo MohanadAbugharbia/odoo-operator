@@ -54,7 +54,7 @@ fails.
 |---|---|---|
 | The init or upgrade Job failed | `InitJobFailed`, `UpgradeJobFailed`, `QuotaExceeded` | Read `kubectl -n <ns> logs job/<job>`, fix the cause, then **delete the Job** to retry: changing the spec alone does not. The failed Job stays until you delete it, so it is never retried behind your back. A failed upgrade leaves Odoo stopped; restoring a backup replaces the failed Job ([Restore and undo](../guides/restore.md)). |
 | The database name changed | `DatabaseNameChanged` | `spec.database.name` (or the Secret value behind `nameFromSecret`) now resolves to another name than the instance uses. Put the old value back; the operator never switches databases. |
-| The backup to start from was not restored | `BootstrapFailed` | The OdooRestore `<name>-bootstrap` of `spec.bootstrap.fromBackup` failed; the message has its reason, and Odoo does not start. Fix the cause (the file, the store, the image's Odoo series), then delete that OdooRestore: it is created again and retried. See [Start an instance from a backup](../guides/start-from-a-backup.md#when-the-bootstrap-fails). When the message says the database already exists, the operator did not create it and never bootstraps over it: remove `spec.bootstrap`, see [An existing database](../guides/start-from-a-backup.md#an-existing-database). |
+| The backup to start from was not restored | `BootstrapFailed` | The OdooRestore `<name>-bootstrap` of `spec.bootstrap.fromBackup` failed; the message has its reason, and Odoo does not start. Fix the cause (the file, the store, the image's Odoo series), then delete that OdooRestore: it is created again and retried, once the cleanup Job that deletes what the failed one left (its half-loaded copy) has run. See [Start an instance from a backup](../guides/start-from-a-backup.md#when-the-bootstrap-fails). When the message says the database already exists, the operator did not create it and never bootstraps over it: remove `spec.bootstrap`, see [An existing database](../guides/start-from-a-backup.md#an-existing-database). |
 | A restore was deleted halfway through its swap | `RestoreIncomplete` | Odoo stays stopped. Check the `<db>_restore_*` / `<db>_prev_*` databases and filestore folders named in the restore Job's log, put the data right, then clear `status.currentOperation` on the OdooDeployment. |
 
 ### A new image is not rolled out
@@ -111,12 +111,12 @@ example alerts, report failures.
 | What you see | Meaning | What to do |
 |---|---|---|
 | `Failed` with a `RestoreRefused` event | The restore was refused before it started: the backup does not exist, is of another instance, has not completed, the store is missing, the undo target is gone or not the latest. | Read `status.message`; create a corrected OdooRestore. |
-| `Failed`, "the live data was not changed" | The Job failed before the swap. "no pod of it got past the steps before the swap" means its pods stopped in the load or Odoo step; the message names the step and the reason (`OOMKilled`, `ImagePullBackOff`). "the restore journal shows the swap never started" ends a restore that an attempt without a result had kept going. | `kubectl -n <ns> logs job/<job> -c <step>`; give the Job more memory (`spec.backup.resources`) or fix the image; nothing to undo. |
+| `Failed`, "the live data was not changed" | The Job failed before the swap. "no pod of it got past the steps before the swap" means its pods stopped in the load or Odoo step; the message names the step and the reason (`OOMKilled`, `ImagePullBackOff`). "the restore journal shows the swap never started" ends a restore that an attempt without a result had kept going; with "nothing to finish", that retry could only finish the swap, because the restore's source was gone. | `kubectl -n <ns> logs job/<job> -c <step>`; give the Job more memory (`spec.backup.resources`) or fix the image; nothing to undo. |
 | `Failed`: "the backup was taken on Odoo … but the instance runs Odoo …" | A backup of another Odoo series than the instance's image (17.0 on 18.0). | Restore it on an image of its series, or upgrade it there first. |
 | `Failed`: "no file in … matches" | `from.path`'s pattern matched no file in the store. | Check the folder and pattern; a pattern is only allowed in the last segment. |
 | `Failed`: "has no encryptionKeySecret" | `from` names a restic repository in a store without a key. | Add the repository's key to the store, or point `from.path` at a `.zip` or `.dump` file. |
 | `Failed`: "neutralize" | Odoo could not neutralize the loaded database (Odoo before 16 has no `neutralize`). | Read the Job's `odoo` container log; restore without `neutralize` and neutralize by hand. |
-| `Restoring` for long, instance `Degraded` `RestoreIncomplete` | The Job failed after the swap may have started: its result said so, or its main container started and left no result (`status.liveChangeUnconfirmed`). It is retried, from 30 seconds up to every 15 minutes, until it finishes, or until an attempt reports from the restore journal that the swap never started. Odoo stays stopped meanwhile. | Fix the cause (store, database); it carries on by itself. |
+| `Restoring` for long, instance `Degraded` `RestoreIncomplete` | The Job failed after the swap may have started: its result said so, or its main container started and left no result (`status.liveChangeUnconfirmed`). It is retried, from 30 seconds up to every 15 minutes, until it finishes, or until an attempt reports from the restore journal that the swap never started. Odoo stays stopped meanwhile. A retry after the swap started only finishes it from the journal (`--finish-swap`), so it needs neither the backup nor the store. | Fix the cause (usually the database or the data volume); it carries on by itself. |
 | `Stopping` | Waiting for Odoo's pods to stop. | — |
 
 ## Backup stores
@@ -156,7 +156,10 @@ dropped afterwards. Otherwise (`Retain`, or a database the operator did not
 create) the finalizer `odoo.abugharbia.com/operations` holds it only while
 one of its Jobs runs, init and upgrade Jobs included, and is removed as soon
 as none does. A Job none of whose pods ever started a container (an image
-that cannot be pulled) is deleted rather than waited for. The `Ready`
+that cannot be pulled) is deleted rather than waited for, and so is the
+image check of a new `spec.image` (the Job `<name>-image-<hash>`, see
+[A new image is not rolled out](#a-new-image-is-not-rolled-out)), stuck
+pulling or not, since it mounts nothing and changes nothing. The `Ready`
 condition says how many pods are still awaited. A
 `DatabaseDropFailed` event means the drop keeps failing (retried every 30
 seconds): fix the database access, or set `deletionPolicy: Retain` to skip

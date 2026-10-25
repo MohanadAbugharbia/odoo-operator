@@ -161,6 +161,13 @@ type RestoreOptions struct {
 	// counts as running UpgradeImage.
 	UpgradeModules []string
 	UpgradeImage   string
+
+	// FinishSwap only finishes a swap that has started, from the journal
+	// alone: it needs neither the backup nor its store (Snapshot, File,
+	// UndoSuffix and the Work options are ignored). When the journal shows
+	// that the swap has not started it changes nothing and fails, reporting
+	// the live data unchanged: carrying on would need the source.
+	FinishSwap bool
 }
 
 // Files the steps of a restore Job share in RestoreOptions.WorkDir.
@@ -201,7 +208,7 @@ func (r *restoreRun) fs(name string) string {
 // failure leaves it as it was; once it has started, Restore (run again by a
 // retried Job) finishes it.
 func Restore(ctx context.Context, e *Env, o RestoreOptions) result.Result {
-	if !layout.ValidSuffix(o.Suffix) || (o.Mode == ModeUndo && !layout.ValidSuffix(o.UndoSuffix)) {
+	if !layout.ValidSuffix(o.Suffix) || (o.Mode == ModeUndo && !o.FinishSwap && !layout.ValidSuffix(o.UndoSuffix)) {
 		return result.Failed(result.StepConnect, errors.New("invalid restore suffix"))
 	}
 	if o.Mode != ModeRestore && o.Mode != ModeUndo {
@@ -222,6 +229,12 @@ func Restore(ctx context.Context, e *Env, o RestoreOptions) result.Result {
 	r.j = j
 	if j.Mode != o.Mode {
 		return r.failed(result.StepConnect, fmt.Errorf("restore journal is for a %s, not a %s", j.Mode, o.Mode))
+	}
+	if o.FinishSwap {
+		if err := r.onlyFinish(); err != nil {
+			return r.failed(result.StepSwap, err)
+		}
+		o = r.o
 	}
 	if j.Stage == stageNew && o.WorkDir != "" && !o.LoadOnly {
 		// The load step stopped before the backup was loaded: its result
@@ -286,6 +299,22 @@ func Restore(ctx context.Context, e *Env, o RestoreOptions) result.Result {
 		File:           j.File,
 		SnapshotID:     j.SnapshotID,
 	}
+}
+
+// onlyFinish prepares a run that only finishes a swap (FinishSwap): it
+// refuses unless the journal shows the swap has started, and leaves out the
+// steps before it.
+func (r *restoreRun) onlyFinish() error {
+	if r.j.Stage != stageSwapping && r.j.Stage != stageSwapped {
+		stage := r.j.Stage
+		if stage == stageNew {
+			stage = "none"
+		}
+		return fmt.Errorf("nothing to finish: the restore journal shows the swap has not started "+
+			"(stage %s), and carrying on from there needs the restore's source", stage)
+	}
+	r.o.WorkDir, r.o.LoadOnly = "", false
+	return nil
 }
 
 func (r *restoreRun) failed(step string, err error) result.Result {

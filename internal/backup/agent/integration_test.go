@@ -42,6 +42,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1140,6 +1141,110 @@ func TestUndoResumesFromEveryPoint(t *testing.T) {
 			f.assertState(f.db, live, "after the retried undo")
 			f.assertState(layout.PrevName(f.db, s2), backupState, "the data the undo replaced")
 		})
+	}
+}
+
+// A swap that started is finished from the journal alone: the retry needs
+// neither the snapshot nor the repository, which may be gone by then. Before
+// the swap starts, finishing refuses and leaves everything as it was.
+func TestFinishSwapNeedsNoSource(t *testing.T) {
+	for _, undo := range []bool{false, true} {
+		for _, point := range []string{FaultRestoreChecked, FaultSwapStarted, FaultSwapDatabases, FaultSwapLiveAside, FaultSwapFilestore} {
+			swapping := point != FaultRestoreChecked
+			mode := ModeRestore
+			if undo {
+				mode = ModeUndo
+				if !swapping {
+					continue // an undo loads nothing
+				}
+			}
+			t.Run(mode+"/"+point, func(t *testing.T) {
+				f := newFixture(t)
+				f.seed(6)
+				backupState := f.state(f.db)
+				res := f.mustBackup("first")
+				f.mutate()
+				live := f.state(f.db)
+				var undoSuffix string
+				if undo {
+					undoSuffix = f.nextSuffix()
+					if rr := f.restore(res.SnapshotID, undoSuffix); !rr.OK {
+						t.Fatalf("restore: %+v", rr)
+					}
+					live, backupState = backupState, live
+				}
+				suffix := f.nextSuffix()
+				// Before the swap the attempt crashes, as a killed pod does,
+				// so that it leaves its loaded copy and its journal behind (a
+				// failure it reports removes the copy).
+				f.env.Fault = func(p string) error {
+					if p != point {
+						return nil
+					}
+					if !swapping {
+						panic("simulated crash at " + p)
+					}
+					return errors.New("simulated failure at " + p)
+				}
+				var rr result.Result
+				crashed := func() (crashed bool) {
+					defer func() {
+						if recover() != nil {
+							crashed = true
+						}
+					}()
+					if undo {
+						rr = f.undo(undoSuffix, suffix)
+					} else {
+						rr = f.restore(res.SnapshotID, suffix)
+					}
+					return false
+				}()
+				if crashed == swapping || (swapping && (rr.OK || !rr.LiveChanged)) {
+					t.Fatalf("failed attempt: crashed %v, %+v", crashed, rr)
+				}
+				f.env.Fault = nil
+
+				// The source is gone: a run that needed it would fail.
+				if err := os.RemoveAll(f.repo); err != nil {
+					t.Fatal(err)
+				}
+				f.env.Restic.Bin = filepath.Join(t.TempDir(), "no-restic")
+				finish := func() result.Result {
+					return Restore(context.Background(), f.env, RestoreOptions{
+						Mode: mode, Suffix: suffix, DataRoot: f.dataRoot, FinishSwap: true,
+					})
+				}
+				fr := finish()
+				if !swapping {
+					if fr.OK || fr.LiveChanged || fr.Step != result.StepSwap || !strings.Contains(fr.Error, "swap has not started") {
+						t.Fatalf("finishing a swap that never started: %+v", fr)
+					}
+					f.assertState(f.db, live, "live data after finishing refused")
+					if !slices.Contains(f.databases(), layout.RestoreName(f.db, suffix)) {
+						t.Fatalf("the loaded copy is kept for the cleanup: %v", f.databases())
+					}
+					if cr := f.cleanup(suffix); !cr.OK {
+						t.Fatalf("cleanup: %+v", cr)
+					}
+					return
+				}
+				if !fr.OK || !fr.LiveChanged || !fr.PreviousKept {
+					t.Fatalf("finished swap: %+v", fr)
+				}
+				if fr.OdooVersion == "" {
+					t.Fatalf("the journal's record of the source is reported: %+v", fr)
+				}
+				f.assertState(f.db, backupState, "after finishing the swap")
+				f.assertState(layout.PrevName(f.db, suffix), live, "the replaced data after finishing the swap")
+				if c := f.comment(f.db); c != itOwnerTag {
+					t.Fatalf("owner tag after finishing the swap: %q", c)
+				}
+				if again := finish(); !again.OK {
+					t.Fatalf("finishing a finished swap again: %+v", again)
+				}
+			})
+		}
 	}
 }
 

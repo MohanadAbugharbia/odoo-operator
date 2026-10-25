@@ -658,6 +658,12 @@ var _ = Describe("Backups and restores", func() {
 				Expect(second).NotTo(BeEmpty())
 				Expect(second).NotTo(Equal(first))
 				Expect(jobArgs(h.job(second))).To(ContainSubstring("--suffix " + fresh.Status.Suffix))
+				if tc.journalSettles {
+					Expect(jobArgs(h.job(second))).To(ContainSubstring("--snapshot"), "retried in full while the source is there")
+				} else {
+					Expect(jobArgs(h.job(second))).To(ContainSubstring("--finish-swap"), "finished from the journal")
+					Expect(jobArgs(h.job(second))).NotTo(ContainSubstring("--snapshot"))
+				}
 				Expect(h.restore("r").Status.Attempts).To(Equal(int32(2)))
 
 				h.finishJob(second, &result.Result{OK: false, Step: result.StepCheck, Error: "again", LiveChanged: false})

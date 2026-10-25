@@ -602,7 +602,7 @@ func BackupJob(p Params, backup *odoov1.OdooBackup, kind string, attempt int32, 
 		Name:            "prepare",
 		Image:           p.Image,
 		ImagePullPolicy: corev1.PullIfNotPresent,
-		Command:         []string{toolBinary, "prepare", "--data", layout.DataMount, "--database", p.Database},
+		Command:         []string{toolBinary, "prepare", flagData, layout.DataMount, "--database", p.Database},
 		VolumeMounts:    []corev1.VolumeMount{{Name: volData, MountPath: layout.DataMount}},
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m"), corev1.ResourceMemory: resource.MustParse("16Mi")},
@@ -618,6 +618,12 @@ func BackupJob(p Params, backup *odoov1.OdooBackup, kind string, attempt int32, 
 	return p.job(BackupJobName(od, backup.Name, attempt), KindBackup, map[string]string{LabelBackup: backup.Name},
 		spec, backoff, od.Spec.Backup.ActiveDeadlineSecondsValue()), nil
 }
+
+// Flags of the agent that several Jobs pass.
+const (
+	flagSuffix = "--suffix"
+	flagData   = "--data"
+)
 
 // RestoreJobName is the name of attempt of a restore's Job. The restore's
 // UID is part of it, so a restore made again under the same name never
@@ -698,8 +704,8 @@ func RestoreJob(p Params, restore *odoov1.OdooRestore, suffix string, src Restor
 		}
 	}
 	args = append(args,
-		"--suffix", suffix,
-		"--data", layout.DataMount,
+		flagSuffix, suffix,
+		flagData, layout.DataMount,
 		"--expect-modules", strings.Join(expectModules, ","),
 	)
 	env := baseEnv()
@@ -795,6 +801,30 @@ func RestoreJob(p Params, restore *odoov1.OdooRestore, suffix string, src Restor
 		spec, restoreBackoff, od.Spec.Backup.ActiveDeadlineSecondsValue()), nil
 }
 
+// FinishRestoreJob renders the Job that finishes the swap of a restore (or
+// undo) that has started it, from the restore journal on the data volume
+// alone: one container, without the store, the backup or the Odoo step.
+// The agent changes nothing, and says so, when the journal shows that the
+// swap has not started.
+func FinishRestoreJob(p Params, restore *odoov1.OdooRestore, suffix string, undo bool, attempt int32) batchv1.Job {
+	od := p.Instance
+	command := "restore"
+	if undo {
+		command = "undo"
+	}
+	args := append([]string{toolBinary, command, "--finish-swap", flagSuffix, suffix, flagData, layout.DataMount},
+		p.commonArgs(Location{})...)
+	volumes := []corev1.Volume{od.ConfigSecretVolume(volConfig), p.dataVolume(), emptyDir(volTmp)}
+	mounts := []corev1.VolumeMount{
+		{Name: volConfig, MountPath: layout.ConfigMount, ReadOnly: true},
+		{Name: volData, MountPath: layout.DataMount},
+		{Name: volTmp, MountPath: tmpDir},
+	}
+	spec := p.podSpec(args, baseEnv(), volumes, mounts)
+	return p.job(RestoreJobName(od, restore, attempt), KindRestore, map[string]string{LabelRestore: restore.Name},
+		spec, restoreBackoff, od.Spec.Backup.ActiveDeadlineSecondsValue())
+}
+
 // DrillJobName is the Job of the drill with suffix.
 func DrillJobName(instance *odoov1.OdooDeployment, suffix string) string {
 	return jobName(instance.Name, KindDrill, 0, instance.Namespace, suffix)
@@ -849,7 +879,7 @@ func DrillJob(p Params, d Drill) (batchv1.Job, error) {
 		return batchv1.Job{}, err
 	}
 	scratch := layout.DrillName(p.Database, d.Suffix)
-	common := append([]string{"--suffix", d.Suffix, "--root", layout.DrillRoot}, p.commonArgs(loc)...)
+	common := append([]string{flagSuffix, d.Suffix, "--root", layout.DrillRoot}, p.commonArgs(loc)...)
 	load := append([]string{toolBinary, "drill-load", "--snapshot", d.Snapshot,
 		"--expect-modules", strings.Join(d.ExpectModules, ",")}, common...)
 	finish := append([]string{toolBinary, "drill-finish"}, common...)
@@ -905,7 +935,7 @@ func CleanupJobName(instance *odoov1.OdooDeployment, restore *odoov1.OdooRestore
 // CleanupJob renders the Job that deletes what restore left behind.
 func CleanupJob(p Params, restore *odoov1.OdooRestore, suffix string, attempt int32) batchv1.Job {
 	od := p.Instance
-	command := append([]string{toolBinary, "cleanup", "--suffix", suffix, "--data", layout.DataMount}, p.commonArgs(Location{})...)
+	command := append([]string{toolBinary, "cleanup", flagSuffix, suffix, flagData, layout.DataMount}, p.commonArgs(Location{})...)
 	volumes := []corev1.Volume{od.ConfigSecretVolume(volConfig), p.dataVolume(), emptyDir(volTmp)}
 	mounts := []corev1.VolumeMount{
 		{Name: volConfig, MountPath: layout.ConfigMount, ReadOnly: true},

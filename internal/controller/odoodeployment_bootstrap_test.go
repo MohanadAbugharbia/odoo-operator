@@ -243,12 +243,25 @@ var _ = Describe("Bootstrap from a backup", func() {
 		Expect(cond.Message).To(ContainSubstring("delete it to try again"))
 		Expect(od.Status.Bootstrap.Completed).To(BeFalse())
 
-		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(rs), rs)).To(Succeed())
-		if controllerutil.RemoveFinalizer(rs, odoov1.RestoreFinalizer) {
-			Expect(k8sClient.Update(ctx, rs)).To(Succeed())
-		}
+		By("what the failed restore left is cleaned up although the instance never ran")
+		Expect(od.Status.CurrentOperation.Kind).To(Equal(odoov1.OperationCleanup))
+		Expect(od.Status.CurrentOperation.Name).To(Equal(rs.Name))
+		cleanup := h.job(od.Status.CurrentOperation.Job)
+		Expect(cleanup).NotTo(BeNil())
+		Expect(jobArgs(cleanup)).To(ContainSubstring("cleanup --suffix " + rs.Status.Suffix))
+		Expect(controllerutil.ContainsFinalizer(rs, odoov1.RestoreFinalizer)).To(BeTrue(), "held until its cleanup ran")
+
+		By("deleting it waits for the cleanup, which then releases it")
 		Expect(k8sClient.Delete(ctx, rs)).To(Succeed())
-		Eventually(func() *odoov1.OdooRestore { return h.bootstrapRestore() }).Should(BeNil())
+		h.reconcile()
+		Expect(h.bootstrapRestore()).NotTo(BeNil())
+		h.finishJob(cleanup.Name, &result.Result{OK: true})
+		_, od = h.reconcile()
+		Expect(od.Status.CurrentOperation.Kind).To(BeEmpty())
+		Eventually(func() bool {
+			again := h.bootstrapRestore()
+			return again == nil || again.UID != rs.UID
+		}).Should(BeTrue(), "the finalizer was released")
 		h.reconcile()
 		again := h.bootstrapRestore()
 		Expect(again).NotTo(BeNil())
