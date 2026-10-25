@@ -4829,6 +4829,12 @@ for keepPrevious so the restore can be undone.</p>
 <td></td>
 </tr>
 <tr>
+<td><code>liveChangeUnconfirmed</code> <em>boolean</em></td>
+<td>LiveChangeUnconfirmed is true while liveChanged rests only on<br />attempts that ended without a result after their main container may<br />have started (it ran, or the pods that would tell are gone).<br />The next attempt reads the restore journal: when it reports that the<br />swap never started, the restore fails with the live data unchanged<br />instead of being retried.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
 <td><code>retryAfter</code> <em><a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.34/#time-v1-meta">Time</a></em></td>
 <td>RetryAfter is when the next attempt (of the restore or its cleanup)<br />starts after a failed one.</td>
 <td></td>

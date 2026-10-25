@@ -1435,7 +1435,9 @@ operator that applies their deletion policies.</p>
 <li>The databases and folders that restores kept for undo
   (<code>&lt;db&gt;_prev_&lt;suffix&gt;</code>) stay; drop them by hand.</li>
 <li>Deleting an instance waits for all its pods to stop, including a running
-  backup Job.</li>
+  backup, restore, init or upgrade Job, whatever its deletion policies, so
+  that none is cut short. A Job that never started a container is deleted
+  instead.</li>
 </ul>
 <p>Then remove the operator, its CRDs and RBAC:</p>
 <div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>delete<span class="w"> </span>-f<span class="w"> </span>https://github.com/MohanadAbugharbia/odoo-operator/releases/latest/download/install.yaml

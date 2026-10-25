@@ -843,6 +843,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#an-existing-database" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An existing database
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#when-the-bootstrap-fails" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1593,6 +1604,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#an-existing-database" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        An existing database
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#when-the-bootstrap-fails" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1685,7 +1707,9 @@ backup files needs no encryption key:</p>
 <span class="w">  </span><span class="c1"># database, odooFilestore, ingress… as for any instance</span>
 </code></pre></div>
 <p>The operator creates the database and the filestore volume, then the
-OdooRestore <code>my-odoo-bootstrap</code> instead of the init Job. Follow it:</p>
+OdooRestore <code>my-odoo-bootstrap</code> instead of the init Job. The database must
+not exist yet: a bootstrap only fills a database the operator has just
+created (see <a href="#an-existing-database">An existing database</a>). Follow it:</p>
 <div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>-n<span class="w"> </span>shop<span class="w"> </span>get<span class="w"> </span>odoorestore<span class="w"> </span>my-odoo-bootstrap<span class="w"> </span>-w
 kubectl<span class="w"> </span>-n<span class="w"> </span>shop<span class="w"> </span>get<span class="w"> </span>odoodeployment<span class="w"> </span>my-odoo<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.status.bootstrap}'</span>
 </code></pre></div>
@@ -1744,6 +1768,26 @@ production's store:</p>
 <p>To refresh it later, restore into it again with an
 <a href="../restore/#restore-a-backup-from-elsewhere">OdooRestore</a> using the same
 <code>from</code> and <code>neutralize: true</code>.</p>
+<h2 id="an-existing-database">An existing database<a class="headerlink" href="#an-existing-database" title="Permanent link">&para;</a></h2>
+<p>A bootstrap never restores over a database the operator did not create.
+When the database <code>spec.database</code> names already exists, the operator adopts
+it (<code>status.database.provisionedBy: external</code>, see
+<a href="../../concepts/databases/">Databases</a>) and does not bootstrap: no OdooRestore
+is created, no init Job runs and Odoo does not start. The instance stays
+<code>Pending</code>, <code>Degraded</code> with reason <code>BootstrapFailed</code> and a message naming the
+database. This protects data a previous instance left behind, for example
+one deleted with <code>deletionPolicy: Retain</code>. Then either:</p>
+<ul>
+<li>remove <code>spec.bootstrap</code>, and Odoo runs the existing database (an init Job
+  installs the <code>spec.modules</code> it lacks, as for any adopted database); or</li>
+<li>replace its data deliberately: create an <a href="../restore/">OdooRestore</a> with
+  the same source first, then remove <code>spec.bootstrap</code>. A restore goes before
+  everything else, so it runs before Odoo or an init Job touches the
+  database.</li>
+</ul>
+<p>A bootstrap OdooRestore that already existed but had not started is marked
+<code>Failed</code> with the same message, so it never runs later as an ordinary
+restore.</p>
 <h2 id="when-the-bootstrap-fails">When the bootstrap fails<a class="headerlink" href="#when-the-bootstrap-fails" title="Permanent link">&para;</a></h2>
 <p>A failed restore leaves the instance <code>Degraded</code> with reason <code>BootstrapFailed</code>
 and the restore's message, and Odoo does not start: the operator never
