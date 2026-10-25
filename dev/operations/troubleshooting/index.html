@@ -1942,8 +1942,11 @@ set <code>--maintenance-page-image</code> (<a href="../../reference/operator-fla
 the message carries the API error (often RBAC, a quota or an invalid field).
 They are retried with backoff. <code>BackupImageUnknown</code> means the operator could
 not derive the backup image: set <code>--backup-image</code>. <code>DrillRunning</code> as a
-<code>Degraded</code> reason means the drill Job's pod cannot start (an image pull or a
-quota); <code>Deleting</code> and <code>DatabaseDropFailed</code> appear while the instance is
+<code>Degraded</code> reason means the drill Job's pod cannot start (an image pull, a
+quota, scheduling, a missing Secret or a volume), and <code>JobCannotStart</code> the
+same for a backup, restore, cleanup, init or upgrade Job: the message says
+why. A backup, restore, drill or cleanup Job none of whose pods started a
+container within 15 minutes is deleted and counted failed; <code>Deleting</code> and <code>DatabaseDropFailed</code> appear while the instance is
 deleted (see below).</p>
 <h2 id="backups">Backups<a class="headerlink" href="#backups" title="Permanent link">&para;</a></h2>
 <table>
@@ -1979,6 +1982,11 @@ deleted (see below).</p>
 <td><code>Failed</code>, "job … failed at step …"</td>
 <td>The Job failed at that step (connect, dump, filestore, upload, verify…).</td>
 <td><code>kubectl -n &lt;ns&gt; logs job/&lt;job&gt;</code>; the Job is kept until its TTL. Create a new OdooBackup to retry; a scheduled backup tries again at its next time.</td>
+</tr>
+<tr>
+<td><code>Running</code>, "job … cannot start: …", instance <code>Degraded</code> <code>JobCannotStart</code></td>
+<td>The backup Job's pod cannot be scheduled, a container cannot be created (a missing Secret), its image cannot be pulled, or it waits long for a volume (see the same row under Restores).</td>
+<td>Fix the cause. A Job none of whose pods started a container within 15 minutes is deleted and the backup fails ("started no container within 15m0s"); an offline backup then brings Odoo back.</td>
 </tr>
 <tr>
 <td><code>CompletedWithWarnings</code></td>
@@ -2051,6 +2059,11 @@ example alerts, report failures.</p>
 <td>Read the Job's <code>odoo</code> container log; restore without <code>neutralize</code> and neutralize by hand.</td>
 </tr>
 <tr>
+<td><code>Failed</code> after one pod, the Job's condition <code>PodFailurePolicy</code></td>
+<td>The restore was refused by a check no new pod can change (the message names it), so the Job ended at its first pod (exit code 3).</td>
+<td>Fix the cause the message names; create a new OdooRestore.</td>
+</tr>
+<tr>
 <td><code>Restoring</code> for long, instance <code>Degraded</code> <code>RestoreIncomplete</code></td>
 <td>The Job failed after the swap may have started: its result said so, or its main container started and left no result (<code>status.liveChangeUnconfirmed</code>). It is retried, from 30 seconds up to every 15 minutes, until it finishes, or until an attempt reports from the restore journal that the swap never started. Odoo stays stopped meanwhile. A retry after the swap started only finishes it from the journal (<code>--finish-swap</code>), so it needs neither the backup nor the store.</td>
 <td>Fix the cause (usually the database or the data volume); it carries on by itself.</td>
@@ -2059,6 +2072,11 @@ example alerts, report failures.</p>
 <td><code>Stopping</code></td>
 <td>Waiting for Odoo's pods to stop.</td>
 <td>—</td>
+</tr>
+<tr>
+<td><code>Restoring</code>, "job … cannot start: …", instance <code>Degraded</code> <code>JobCannotStart</code></td>
+<td>The restore Job's pod cannot start: it cannot be scheduled (<code>Unschedulable</code>, with the scheduler's message), a container cannot be created (<code>CreateContainerConfigError</code>: a Secret or ConfigMap it names is missing), its image cannot be pulled, or it has waited more than 5 minutes for its first container after it was scheduled (most often a <code>ReadWriteOnce</code> data volume still attached to another node, or a volume that fails to mount; <code>kubectl describe pod</code> shows the events). Odoo is stopped meanwhile.</td>
+<td>Fix the cause. If no pod of the Job starts a container within 15 minutes, the operator deletes the Job and the restore fails with the live data untouched ("started no container within 15m0s"), and Odoo comes back.</td>
 </tr>
 </tbody>
 </table>
@@ -2151,6 +2169,20 @@ result and the message is taken from the pod's statuses:</p>
 <div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>-n<span class="w"> </span>&lt;ns&gt;<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-l<span class="w"> </span>job-name<span class="o">=</span>&lt;job&gt;<span class="w"> </span>--sort-by<span class="o">=</span>.metadata.creationTimestamp<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.items[-1:].status.containerStatuses[?(@.name=="backup")].state.terminated.message}'</span>
 </code></pre></div>
+<p>The <code>backup</code> container exits 0 when the Job did what it was asked, 1 when it
+failed in a way a new pod may get past (the Job's <code>backoffLimit</code> retries
+it), 2 for a command line it does not take, and 3 for a failure no new pod
+can change (<code>"final": true</code> in the result, such as a restore whose backup
+does not pass its checks). The Job's pod failure policy ends the Job at once
+on 2 and 3, so the Job's condition then reads <code>PodFailurePolicy</code> instead of
+<code>BackoffLimitExceeded</code>.</p>
+<p>A result that does not fit in the 4096 bytes Kubernetes keeps loses its
+warnings and list entries first (they are also in the log). A restore's
+<code>missingModules</code> is never shortened: when it does not fit, the result has
+<code>"missingModulesUnknown": true</code> instead, and the operator reads the modules
+installed in the restored database itself. A restore that stays <code>Restoring</code>
+after its Job completed, with a reconcile error "reading them from it
+failed", is waiting for that database read.</p>
 
 
 
