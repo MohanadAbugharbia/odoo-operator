@@ -22,7 +22,7 @@ the project by roughly 25 points.
 The `internal/database` tests that need a real PostgreSQL skip unless one is
 configured, because they assert the SQL the provisioner emits, the `COMMENT`
 that marks operator-owned databases and the refusal to drop a database
-carrying somebody else's comment. CI starts a `postgres:16` service for them.
+carrying somebody else's comment. CI starts a `postgres:18` service for them.
 To run them locally against any throwaway server:
 
 ```sh
