@@ -9,7 +9,7 @@
 # image carries a working client for every server major, restic and rclone.
 set -euo pipefail
 
-PG_MAJOR="${PG_MAJOR:-16}"
+PG_MAJOR="${PG_MAJOR:-18}"
 IMAGE="${IMAGE:-odoo-operator-backup:it}"
 NET="backup-it"
 WORK="$(mktemp -d)"
@@ -65,7 +65,7 @@ cp "$WORK/agent.test" "$WORK/retention.test" "$WORK/ssh/"
 
 # The retention rules against restic's own forget, with the image's restic
 # (once: it does not depend on PostgreSQL).
-if [ "$PG_MAJOR" = 16 ]; then
+if [ "$PG_MAJOR" = 18 ]; then
 	docker run --rm --user 65532:65532 -v "$WORK/ssh:/it:ro" -w /tmp --entrypoint /it/retention.test "$IMAGE" \
 		-test.v -test.count=1 -test.run TestSameAsRestic
 fi
