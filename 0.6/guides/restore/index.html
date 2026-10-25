@@ -1616,10 +1616,17 @@ becomes <code>&lt;db&gt;_prev_&lt;suffix&gt;</code> and the restored data takes 
 starts on the image recorded in the backup. A restore that fails before the
 swap leaves the live data untouched (<code>Failed</code>); one that fails during the swap
 is retried until it finishes, with Odoo stopped and the instance <code>Degraded</code>
-(<code>RestoreIncomplete</code>). A restore takes precedence over everything else and
+(<code>RestoreIncomplete</code>). Only the Job's main container swaps: a Job whose pods
+never got past the steps before it (the load step was OOMKilled, the Odoo
+step's image could not be pulled) fails with the live data untouched and the
+step named in <code>status.message</code>. A restore takes precedence over everything else and
 replaces a failed init or upgrade Job, which makes it the way back from a
 failed upgrade. Modules in <code>spec.modules</code> that the backup lacks are installed
-again afterwards.</p>
+again afterwards. The restore Job lists them in its result; when they are too
+many for it (Kubernetes keeps 4096 bytes of a Job's result, room for some 250
+module names), the result says so instead of listing part of them, and the
+operator reads the installed modules from the restored database itself, with
+the instance's database credentials, before Odoo starts on it.</p>
 <p>The instance then counts as running the backup's image and upgrade token. If
 <code>spec.image</code> differs from the backup's image, the usual upgrade follows when
 <code>spec.upgrade.onImageChange</code> is true; if <code>spec.upgrade.token</code> differs from the
@@ -1715,7 +1722,11 @@ database keeps the module versions of the backup until the next upgrade.</p>
 <li>The restore fails, with the live data untouched, when the upgrade fails;
   <code>status.message</code> ends with the end of Odoo's log.</li>
 <li>Afterwards the instance counts as running <code>spec.image</code> and
-  <code>spec.upgrade.token</code>, so no upgrade Job follows.</li>
+  <code>spec.upgrade.token</code> as they were when the restore Job was made, so no
+  upgrade Job follows. <code>status.upgradeToken</code> records that token; the agent
+  reports it from the pod that ran the upgrade. A token changed while the
+  restore ran (or <code>spec.image</code> changed, with <code>onImageChange</code>) is applied next,
+  by the usual upgrade, and <code>status.message</code> says so.</li>
 <li><code>upgrade</code> cannot be set on an undo. The upgrade runs inside the restore Job,
   so the Job's deadline (<code>spec.backup.activeDeadlineSeconds</code>) covers it too.</li>
 </ul>
@@ -1739,7 +1750,59 @@ database keeps the module versions of the backup until the next upgrade.</p>
 </ul>
 <h2 id="what-happens-if-something-goes-wrong">What happens if something goes wrong<a class="headerlink" href="#what-happens-if-something-goes-wrong" title="Permanent link">&para;</a></h2>
 <p>The live data is never edited in place, so a restore can fail without
-damaging it, and a Job that dies halfway finishes when it is retried:</p>
+damaging it, and a Job that dies halfway finishes when it is retried.</p>
+<p>A restore Job runs up to three pods (<code>backoffLimit: 2</code>) for failures that a
+new pod may get past: a pod killed out of memory, evicted, or one that lost
+its connection to the database. A failure no new pod can change ends the Job
+at its first pod instead, through the Job's pod failure policy: the backup
+refused by its checks (another Odoo series, row counts or attachments that do
+not match, a file that is not an Odoo backup), <code>odoo neutralize</code> or the
+upgrade failing, or an undo whose previous data is gone. The agent reports
+such a failure with exit code 3 and <code>"final": true</code> in its result, and the
+restore fails with the live data untouched, instead of loading the backup
+twice more with Odoo stopped. On a cluster that has the Job pod failure policy
+turned off (it is on by default from Kubernetes 1.26), such a Job simply
+fails the same way three times. A new pod of the same Job does not run
+<code>neutralize</code> or the upgrade again when an earlier pod already did, as the
+restore journal records; should it run either again all the same, its
+outcome counts, and a database whose latest neutralize or upgrade failed is
+never swapped in.</p>
+<p>How the operator tells which side of the swap a failed Job ended on:</p>
+<ul>
+<li>It reads the result of the Job's newest pod only, its latest attempt. An
+  older attempt's result is stale once another pod ran after it.</li>
+<li>When that pod left a result, the result says whether the swap had started
+  (the agent reads it from the restore journal on the data volume).</li>
+<li>When it left none, and no pod of the Job got as far as the main container,
+  nothing was swapped: the restore fails, and the message names the step
+  that failed and why (for example <code>failed in step load: OOMKilled (exit
+  code 137)</code>).</li>
+<li>While the Job's pod cannot start (it cannot be scheduled, a Secret it
+  names is missing, its image cannot be pulled, or it waits for a volume
+  attached to another node), <code>status.message</code> and the instance's <code>Degraded</code>
+  condition (<code>JobCannotStart</code>) say why. When no pod of the Job has started
+  a container 15 minutes after the Job started, the operator deletes the
+  Job, and the restore fails with the live data untouched and Odoo back,
+  rather than keeping Odoo stopped until <code>spec.backup.activeDeadlineSeconds</code>.</li>
+<li>When it left none after the main container started, or the pods that
+  would tell are gone, the swap may have started: Odoo stays stopped and the
+  restore is retried (<code>status.liveChanged</code>, <code>status.liveChangeUnconfirmed</code>).
+  If the next attempt reports, from the journal, that the swap never
+  started, the restore fails with the live data untouched instead of being
+  retried for ever. A swap that a result reported as started is always
+  finished.</li>
+</ul>
+<p>How a started swap is finished: the retry runs the Job in a mode that only
+finishes the swap (<code>odoo-backup restore --finish-swap</code>, or <code>undo
+--finish-swap</code>), a single container reading the restore journal on the data
+volume. It needs neither the backup nor its store, so it goes on even when
+the OdooBackup, the store or its Secret was deleted meanwhile, or
+<code>spec.backup.stores</code> changed. When only an attempt without a result made the
+swap look started, the retry runs the whole restore again while its source
+can still be found, and otherwise the finishing mode; that mode changes
+nothing when the journal shows the swap never started, and the restore then
+fails with the live data untouched (<code>nothing to finish: the restore journal
+shows the swap has not started</code>).</p>
 <pre class="mermaid"><code>flowchart TD
   start([OdooRestore: Odoo is stopped]) --&gt; load["Load the backup beside the live data:&lt;br/&gt;database db_restore_suffix, its filestore"]
   load --&gt; check[Check row counts, attachments&lt;br/&gt;and a sample of checksums]
@@ -1750,8 +1813,11 @@ damaging it, and a Job that dies halfway finishes when it is retried:</p>
   odoo -- "yes" --&gt; step["The instance's Odoo reports its version,&lt;br/&gt;neutralizes and upgrades the loaded database&lt;br/&gt;when asked"]
   step --&gt;|another series, or&lt;br/&gt;neutralize or upgrade failed| failed
   step --&gt; swap["Swap: live becomes db_prev_suffix,&lt;br/&gt;restored becomes db"]
-  swap --&gt;|Job dies| retry["Retried Job reads the journal&lt;br/&gt;and finishes the swap&lt;br/&gt;(Degraded: RestoreIncomplete meanwhile)"]
+  swap --&gt;|Job dies| retry["Retried Job finishes the swap&lt;br/&gt;from the journal, without the source&lt;br/&gt;(Degraded: RestoreIncomplete meanwhile)"]
   retry --&gt; swap
+  swap --&gt;|"Job dies, no result"| unknown["Odoo stays stopped, retried;&lt;br/&gt;the next attempt's journal decides"]
+  unknown --&gt;|journal: swap never started| failed
+  unknown --&gt;|journal: swap started| swap
   swap --&gt; run[Odoo starts on the backup's image]
   run --&gt; kept["Previous data kept until&lt;br/&gt;status.previous.keptUntil"]
   kept --&gt;|OdooRestore with undo| undo[Swap the previous data back]
@@ -1765,10 +1831,13 @@ then the restore can be undone:</p>
 </code></pre></div>
 <p>Only the latest restore can be undone. Deleting an OdooRestore deletes the data
 it kept.</p>
-<div class="admonition warning">
-<p class="admonition-title">Deleting the instance keeps the previous data</p>
-<p>Deleting an OdooDeployment does not delete the <code>&lt;db&gt;_prev_&lt;suffix&gt;</code>
-databases and folders its restores kept; drop them by hand.</p>
+<div class="admonition note">
+<p class="admonition-title">Deleting the instance</p>
+<p>Deleting an OdooDeployment whose database is dropped
+(<code>spec.database.deletionPolicy: Delete</code>) drops the <code>&lt;db&gt;_prev_&lt;suffix&gt;</code>
+and <code>&lt;db&gt;_restore_&lt;suffix&gt;</code> databases of its restores with it, and
+deletes their folders from a filestore volume that is kept. With
+<code>Retain</code> they stay, beside the database.</p>
 </div>
 
 
