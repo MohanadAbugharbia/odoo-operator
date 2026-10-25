@@ -127,6 +127,10 @@ func (r *OdooRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	case !found && (rs.Status.Phase == odoov1.RestorePhaseStopping || rs.Status.Phase == odoov1.RestorePhaseRestoring):
 		rs.Status.Phase = odoov1.RestorePhaseFailed
 		rs.Status.Message = fmt.Sprintf("OdooDeployment %s was deleted while the restore was running", rs.Spec.OdooDeployment)
+		if rs.Status.Job != "" {
+			rs.Status.Message += fmt.Sprintf("; its deletion waited for job %s to stop, whose outcome is not recorded here: "+
+				"its log says whether it swapped the data in", rs.Status.Job)
+		}
 		rs.Status.Job = ""
 		rs.Status.RetryAfter = nil
 	default:

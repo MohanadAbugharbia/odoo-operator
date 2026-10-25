@@ -29,6 +29,12 @@ const (
 	// DatabaseFinalizer is set on OdooDeployments whose database the operator
 	// created and is expected to drop (spec.database.deletionPolicy: Delete).
 	DatabaseFinalizer = "odoo.abugharbia.com/database"
+	// OperationsFinalizer holds an OdooDeployment without the database
+	// finalizer (deletionPolicy Retain, or an adopted database) while one of
+	// its Jobs runs a backup, restore, cleanup, drill, init or upgrade, so
+	// that deleting the instance waits for the Job's pods to finish instead
+	// of killing one half way through. It is removed once no such Job runs.
+	OperationsFinalizer = "odoo.abugharbia.com/operations"
 
 	// LabelOdooDeployment marks every pod (Deployment and Job) that belongs to an OdooDeployment.
 	LabelOdooDeployment = "odoo.abugharbia.com/odoodeployment"

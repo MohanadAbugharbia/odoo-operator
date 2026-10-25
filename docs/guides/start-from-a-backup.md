@@ -76,7 +76,9 @@ spec:
 ```
 
 The operator creates the database and the filestore volume, then the
-OdooRestore `my-odoo-bootstrap` instead of the init Job. Follow it:
+OdooRestore `my-odoo-bootstrap` instead of the init Job. The database must
+not exist yet: a bootstrap only fills a database the operator has just
+created (see [An existing database](#an-existing-database)). Follow it:
 
 ```sh
 kubectl -n shop get odoorestore my-odoo-bootstrap -w
@@ -145,6 +147,28 @@ spec:
 To refresh it later, restore into it again with an
 [OdooRestore](restore.md#restore-a-backup-from-elsewhere) using the same
 `from` and `neutralize: true`.
+
+## An existing database
+
+A bootstrap never restores over a database the operator did not create.
+When the database `spec.database` names already exists, the operator adopts
+it (`status.database.provisionedBy: external`, see
+[Databases](../concepts/databases.md)) and does not bootstrap: no OdooRestore
+is created, no init Job runs and Odoo does not start. The instance stays
+`Pending`, `Degraded` with reason `BootstrapFailed` and a message naming the
+database. This protects data a previous instance left behind, for example
+one deleted with `deletionPolicy: Retain`. Then either:
+
+- remove `spec.bootstrap`, and Odoo runs the existing database (an init Job
+  installs the `spec.modules` it lacks, as for any adopted database); or
+- replace its data deliberately: create an [OdooRestore](restore.md) with
+  the same source first, then remove `spec.bootstrap`. A restore goes before
+  everything else, so it runs before Odoo or an init Job touches the
+  database.
+
+A bootstrap OdooRestore that already existed but had not started is marked
+`Failed` with the same message, so it never runs later as an ordinary
+restore.
 
 ## When the bootstrap fails
 

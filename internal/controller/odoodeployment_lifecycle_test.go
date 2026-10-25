@@ -289,8 +289,9 @@ func (h *harness) cleanup() {
 		_ = k8sClient.Delete(ctx, &jobs.Items[i])
 	}
 	// A CR stuck with our finalizer (a test that ended early) must not leak.
-	if od := h.get(); od != nil && controllerutil.ContainsFinalizer(od, odoov1.DatabaseFinalizer) {
+	if od := h.get(); od != nil && len(od.Finalizers) > 0 {
 		controllerutil.RemoveFinalizer(od, odoov1.DatabaseFinalizer)
+		controllerutil.RemoveFinalizer(od, odoov1.OperationsFinalizer)
 		_ = k8sClient.Update(ctx, od)
 	}
 }
@@ -828,17 +829,98 @@ var _ = Describe("OdooDeployment lifecycle", func() {
 		Expect(h.fake.Has(h.dbName())).To(BeFalse())
 	})
 
-	It("never adds a finalizer with deletionPolicy Retain", func() {
+	It("adds no finalizer with deletionPolicy Retain once no Job runs", func() {
 		h.create(func(od *odoov1.OdooDeployment) { od.Spec.Database.DeletionPolicy = odoov1.DeletionPolicyRetain })
 		od := h.bootToRunning()
 		Expect(od.Status.Database.ProvisionedBy).To(Equal("operator"))
 		Expect(controllerutil.ContainsFinalizer(od, odoov1.DatabaseFinalizer)).To(BeFalse())
+		Expect(controllerutil.ContainsFinalizer(od, odoov1.OperationsFinalizer)).To(BeFalse(), "released after the init Job")
 
 		Expect(k8sClient.Delete(ctx, od)).To(Succeed())
 		_, od = h.reconcile()
 		Expect(od).To(BeNil())
 		Expect(h.fake.CallCount("Drop")).To(BeZero())
 		Expect(h.fake.Has(h.dbName())).To(BeTrue())
+	})
+
+	// jobPod is a pod of Job job, labelled as the Job controller labels it,
+	// that has started its container.
+	jobPod := func(h *harness, job string) *corev1.Pod {
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: job + "-pod", Namespace: ns, Labels: map[string]string{
+				odoov1.LabelOdooDeployment: h.name, "job-name": job, "batch.kubernetes.io/job-name": job,
+			}},
+			Spec: corev1.PodSpec{RestartPolicy: corev1.RestartPolicyNever, Containers: []corev1.Container{{Name: "odoo", Image: "odoo:a"}}},
+		}
+		Expect(k8sClient.Create(ctx, pod)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, pod, client.GracePeriodSeconds(0)) })
+		pod.Status.Phase = corev1.PodRunning
+		pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "odoo", Image: "odoo:a", State: corev1.ContainerState{
+			Running: &corev1.ContainerStateRunning{StartedAt: metav1.Now()},
+		}}}
+		Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
+		return pod
+	}
+
+	for _, tc := range []struct {
+		name  string
+		setup func(h *harness)
+	}{
+		{"deletionPolicy Retain", func(h *harness) {
+			h.create(func(od *odoov1.OdooDeployment) { od.Spec.Database.DeletionPolicy = odoov1.DeletionPolicyRetain })
+		}},
+		{"an adopted database", func(h *harness) {
+			h.fake.Seed(h.dbName(), "")
+			h.create()
+		}},
+	} {
+		It("waits for a running init Job before letting go of an instance with "+tc.name, func() {
+			tc.setup(h)
+			_, od := h.reconcile()
+			job := od.Status.CurrentInitJob.Name
+			Expect(job).NotTo(BeEmpty())
+			Expect(controllerutil.ContainsFinalizer(od, odoov1.DatabaseFinalizer)).To(BeFalse())
+			Expect(controllerutil.ContainsFinalizer(od, odoov1.OperationsFinalizer)).To(BeTrue(), "held while the Job runs")
+			pod := jobPod(h, job)
+
+			Expect(k8sClient.Delete(ctx, od)).To(Succeed())
+			res, od := h.reconcile()
+			Expect(od).NotTo(BeNil(), "the running Job is not killed half way")
+			Expect(res.RequeueAfter).To(Equal(5 * time.Second))
+			Expect(h.job(job)).NotTo(BeNil(), "the database stays, so its Job is not deleted")
+			Expect(condition(od, odoov1.ConditionReady).Message).To(ContainSubstring("waiting for 1 pod(s) to stop"))
+
+			pod.Status.Phase = corev1.PodSucceeded
+			Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
+			_, od = h.reconcile()
+			Expect(od).To(BeNil(), "released once the pod finished")
+			Expect(h.fake.CallCount("Drop")).To(BeZero())
+			Expect(h.fake.Has(h.dbName())).To(BeTrue())
+		})
+	}
+
+	It("deletes a Job that never ran instead of waiting for it", func() {
+		h.create(func(od *odoov1.OdooDeployment) { od.Spec.Database.DeletionPolicy = odoov1.DeletionPolicyRetain })
+		_, od := h.reconcile()
+		job := od.Status.CurrentInitJob.Name
+		Expect(job).NotTo(BeEmpty())
+		h.podStuckPulling(job, "odoo:a")
+
+		Expect(k8sClient.Delete(ctx, od)).To(Succeed())
+		h.reconcile()
+		Eventually(func() *batchv1.Job { return h.job(job) }).Should(BeNil(), "nothing of it ran")
+		Expect(h.fake.Has(h.dbName())).To(BeTrue())
+	})
+
+	It("releases the operations finalizer once the Job is done", func() {
+		h.create(func(od *odoov1.OdooDeployment) { od.Spec.Database.DeletionPolicy = odoov1.DeletionPolicyRetain })
+		_, od := h.reconcile()
+		Expect(controllerutil.ContainsFinalizer(od, odoov1.OperationsFinalizer)).To(BeTrue())
+		h.succeedJob(od.Status.CurrentInitJob.Name)
+		h.reconcile()
+		_, od = h.reconcile()
+		Expect(od.Status.CurrentInitJob.Name).To(BeEmpty())
+		Expect(od.Finalizers).To(BeEmpty())
 	})
 
 	It("reports a missing database with createPolicy Never", func() {
