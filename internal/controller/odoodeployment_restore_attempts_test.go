@@ -10,6 +10,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
@@ -21,9 +22,10 @@ import (
 // podStatus is what the kubelet reported for one attempt (pod) of a
 // restore Job: its steps (init containers) and its main container.
 type podStatus struct {
-	phase corev1.PodPhase
-	steps []corev1.ContainerStatus
-	main  *corev1.ContainerStatus
+	phase      corev1.PodPhase
+	steps      []corev1.ContainerStatus
+	main       *corev1.ContainerStatus
+	conditions []corev1.PodCondition
 }
 
 // attemptPod creates a pod of Job job with the restore Job's steps (load,
@@ -47,6 +49,7 @@ func (h *backupHarness) attemptPod(job, name string, st podStatus) *corev1.Pod {
 	ExpectWithOffset(1, k8sClient.Create(ctx, pod)).To(Succeed())
 	DeferCleanup(func() { _ = k8sClient.Delete(ctx, pod, client.GracePeriodSeconds(0)) })
 	pod.Status.Phase = st.phase
+	pod.Status.Conditions = st.conditions
 	pod.Status.InitContainerStatuses = st.steps
 	if st.main != nil {
 		pod.Status.ContainerStatuses = []corev1.ContainerStatus{*st.main}
@@ -115,6 +118,34 @@ func (h *backupHarness) endJob(name string, failed int32, succeeded bool) {
 	job.Status.Failed = failed
 	ExpectWithOffset(1, k8sClient.Status().Update(ctx, job)).To(Succeed())
 }
+
+// startedAgo moves Job name's start time back by d, as if its pods had been
+// pending that long.
+func (h *backupHarness) startedAgo(name string, d time.Duration) {
+	job := h.job(name)
+	ExpectWithOffset(1, job).NotTo(BeNil())
+	t := metav1.NewTime(time.Now().Add(-d))
+	job.Status.StartTime = &t
+	ExpectWithOffset(1, k8sClient.Status().Update(ctx, job)).To(Succeed())
+}
+
+// expectGivenUp checks that Job name was deleted in the foreground (envtest
+// runs no garbage collector, so its finalizer is removed here).
+func expectGivenUp(name string) {
+	job := &batchv1.Job{}
+	err := k8sClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, job)
+	if err == nil {
+		ExpectWithOffset(1, job.DeletionTimestamp).NotTo(BeNil(), "the Job is deleted")
+		ExpectWithOffset(1, job.Finalizers).To(ContainElement(metav1.FinalizerDeleteDependents), "its pods go first")
+		job.Finalizers = nil
+		ExpectWithOffset(1, k8sClient.Update(ctx, job)).To(Succeed())
+	}
+}
+
+var unschedulable = []corev1.PodCondition{{
+	Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: corev1.PodReasonUnschedulable,
+	Message: "0/3 nodes are available: 3 Insufficient memory.", LastTransitionTime: metav1.Now(),
+}}
 
 var _ = Describe("Restore attempts", func() {
 	var h *backupHarness
@@ -280,6 +311,105 @@ var _ = Describe("Restore attempts", func() {
 		_, od := h.reconcile()
 		Expect(od.Status.Phase).NotTo(Equal(odoov1.PhaseFailed))
 		Expect(od.Status.CurrentOperation.Kind).To(BeEmpty())
+	})
+
+	It("ends the Job at its first refusal, which no retry changes, with the live data untouched", func() {
+		job := startRestore()
+		policy := h.job(job).Spec.PodFailurePolicy
+		Expect(policy).NotTo(BeNil(), "the Job ends at once on a final failure")
+		Expect(policy.Rules).To(ContainElement(HaveField("OnExitCodes.Values", ContainElement(int32(result.ExitFinal)))))
+
+		refused := mainResult(result.Result{OK: false, Step: result.StepCheck, Final: true,
+			Error: "the restored database does not match the backup: table x has 1 rows instead of 2"})
+		refused.State.Terminated.ExitCode = result.ExitFinal
+		h.attemptPod(job, "a", podStatus{
+			phase: corev1.PodFailed, steps: []corev1.ContainerStatus{stepDone("load"), stepDone("odoo")}, main: refused,
+		})
+		// The Job controller ends the Job on the pod failure policy rule.
+		j := h.job(job)
+		now := metav1.Now()
+		j.Status.StartTime = &now
+		j.Status.Failed = 1
+		j.Status.Conditions = []batchv1.JobCondition{
+			{Type: batchv1.JobFailureTarget, Status: corev1.ConditionTrue, Reason: batchv1.JobReasonPodFailurePolicy,
+				Message: "Container backup for pod x failed with exit code 3 matching FailJob rule at index 1", LastTransitionTime: now},
+			{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: batchv1.JobReasonPodFailurePolicy,
+				Message: "Container backup for pod x failed with exit code 3 matching FailJob rule at index 1", LastTransitionTime: now},
+		}
+		Expect(k8sClient.Status().Update(ctx, j)).To(Succeed())
+
+		_, od := h.reconcile()
+		rs := h.restore("r")
+		Expect(rs.Status.Phase).To(Equal(odoov1.RestorePhaseFailed), rs.Status.Message)
+		Expect(rs.Status.LiveChanged).To(BeFalse())
+		Expect(rs.Status.Attempts).To(Equal(int32(1)))
+		Expect(rs.Status.Message).To(ContainSubstring("failed at step check: the restored database does not match the backup"))
+		Expect(rs.Status.Message).To(ContainSubstring("the live data was not changed"))
+		Expect(od.Status.CurrentOperation.Kind).To(Equal(odoov1.OperationCleanup), "the loaded copy is dropped, then Odoo comes back")
+	})
+
+	It("says why its pod cannot start, then fails cleanly and brings Odoo back once none started in time", func() {
+		job := startRestore()
+		h.attemptPod(job, "a", podStatus{phase: corev1.PodPending, conditions: unschedulable})
+		_, od := h.reconcile()
+		rs := h.restore("r")
+		Expect(rs.Status.Phase).To(Equal(odoov1.RestorePhaseRestoring))
+		Expect(rs.Status.Message).To(ContainSubstring("cannot start: pod " + job + "-a cannot be scheduled: Unschedulable: 0/3 nodes are available"))
+		degraded := condition(od, odoov1.ConditionDegraded)
+		Expect(degraded.Status).To(Equal(metav1.ConditionTrue))
+		Expect(degraded.Reason).To(Equal(odoov1.ReasonJobCannotStart))
+		Expect(degraded.Message).To(ContainSubstring("Odoo is stopped meanwhile"))
+		Expect(h.replicas()).To(BeZero())
+
+		By("no container started within the limit")
+		h.startedAgo(job, jobStartLimit+time.Minute)
+		_, od = h.reconcile()
+		expectGivenUp(job)
+		rs = h.restore("r")
+		Expect(rs.Status.Phase).To(Equal(odoov1.RestorePhaseFailed), rs.Status.Message)
+		Expect(rs.Status.LiveChanged).To(BeFalse())
+		Expect(rs.Status.Message).To(ContainSubstring("started no container within 15m0s, so the operator deleted it"))
+		Expect(rs.Status.Message).To(ContainSubstring("cannot be scheduled"))
+		Expect(rs.Status.Message).To(ContainSubstring("the live data was not changed"))
+		Expect(od.Status.CurrentOperation.Kind).To(Equal(odoov1.OperationCleanup))
+		h.finishJob(od.Status.CurrentOperation.Job, &result.Result{OK: true})
+		_, od = h.reconcile()
+		Expect(od.Status.CurrentOperation.Kind).To(BeEmpty())
+		Expect(h.replicas()).To(Equal(int32(1)))
+	})
+
+	It("waits on a pod that ran a step, however long it takes", func() {
+		job := startRestore()
+		h.attemptPod(job, "a", podStatus{
+			phase: corev1.PodPending, steps: []corev1.ContainerStatus{stepDone("load"), stepWaiting("odoo", "CreateContainerConfigError",
+				`secret "odoo-env" not found`)}, main: mainWaiting(),
+		})
+		h.startedAgo(job, jobStartLimit+time.Minute)
+		h.reconcile()
+		Expect(h.job(job).DeletionTimestamp).To(BeNil(), "the load step ran: the Job is left to its deadline")
+		rs := h.restore("r")
+		Expect(rs.Status.Phase).To(Equal(odoov1.RestorePhaseRestoring))
+		Expect(rs.Status.Message).To(ContainSubstring("CreateContainerConfigError"),
+			"the step that cannot start is reported while the Job waits")
+	})
+
+	It("reads the missing modules from the database when they did not fit in the result", func() {
+		job := startRestore()
+		Expect(h.get().Spec.Modules).To(ConsistOf("base", "web"))
+		h.fake.SetModules(h.dbName(), "base", "account")
+		h.fake.ModulesErr = errors.New("connection refused")
+		res := result.Result{OK: true, LiveChanged: true, Image: "odoo:a", MissingModulesUnknown: true}
+		h.finishJob(job, &res)
+		_, err := h.r.Reconcile(ctx, ctrl.Request{NamespacedName: h.key})
+		Expect(err).To(MatchError(ContainSubstring("reading them from it failed: connection refused")))
+		Expect(h.restore("r").Status.Phase).To(Equal(odoov1.RestorePhaseRestoring), "not finished while the modules are unknown")
+
+		h.fake.ModulesErr = nil
+		_, od := h.reconcile()
+		rs := h.restore("r")
+		Expect(rs.Status.Phase).To(Equal(odoov1.RestorePhaseCompleted), rs.Status.Message)
+		Expect(rs.Status.Message).To(ContainSubstring("modules web are installed again"))
+		Expect(od.Status.InitModulesInstalled).To(ConsistOf("base"), "web is installed again, base is not")
 	})
 
 	It("takes the result of the newest pod when it succeeded after a failed one", func() {
@@ -519,5 +649,52 @@ var _ = Describe("Finishing an interrupted swap", func() {
 		Expect(rs.Status.Phase).To(Equal(odoov1.RestorePhaseRestoring), "a swap a result reported as started is never given up")
 		Expect(rs.Status.LiveChanged).To(BeTrue())
 		Expect(h.replicas()).To(BeZero())
+	})
+})
+
+var _ = Describe("A backup Job that cannot start", func() {
+	var h *backupHarness
+
+	AfterEach(func() {
+		if h != nil {
+			h.cleanupAll()
+		}
+	})
+
+	It("says why, and fails once none of its pods started in time", func() {
+		h = newBackupHarness()
+		b := h.newBackup("one")
+		_, od := h.reconcile()
+		job := od.Status.CurrentOperation.Job
+		Expect(job).NotTo(BeEmpty())
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: job + "-a", Namespace: ns,
+				Labels: map[string]string{"job-name": job, "batch.kubernetes.io/job-name": job}},
+			Spec: corev1.PodSpec{RestartPolicy: corev1.RestartPolicyNever, NodeName: "node-a",
+				Containers: []corev1.Container{{Name: jobspec.ContainerName, Image: "backup"}}},
+		}
+		Expect(k8sClient.Create(ctx, pod)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, pod, client.GracePeriodSeconds(0)) })
+		pod.Status.Phase = corev1.PodPending
+		pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionTrue, LastTransitionTime: metav1.Now()}}
+		pod.Status.ContainerStatuses = []corev1.ContainerStatus{stepWaiting(jobspec.ContainerName, "CreateContainerConfigError",
+			`secret "`+h.name+`-restic" not found`)}
+		Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
+
+		_, od = h.reconcile()
+		Expect(h.backup("one").Status.Message).To(ContainSubstring(
+			"cannot start: container backup of pod " + pod.Name + " cannot start: CreateContainerConfigError"))
+		degraded := condition(od, odoov1.ConditionDegraded)
+		Expect(degraded.Reason).To(Equal(odoov1.ReasonJobCannotStart))
+		Expect(degraded.Message).To(ContainSubstring("backup " + b.Name))
+
+		h.startedAgo(job, jobStartLimit+time.Minute)
+		_, od = h.reconcile()
+		expectGivenUp(job)
+		fresh := h.backup("one")
+		Expect(fresh.Status.Phase).To(Equal(odoov1.BackupPhaseFailed))
+		Expect(fresh.Status.Message).To(ContainSubstring("started no container within 15m0s"))
+		Expect(fresh.Status.Message).To(ContainSubstring("CreateContainerConfigError"))
+		Expect(od.Status.CurrentOperation.Kind).To(BeEmpty())
 	})
 })

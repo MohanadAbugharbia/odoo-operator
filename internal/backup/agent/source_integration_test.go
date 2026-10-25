@@ -227,11 +227,13 @@ func TestRestoreOdooFileRefusals(t *testing.T) {
 		setup func(t *testing.T, store string)
 		step  string
 		error string
+		// final: no retry can change it (the backup itself is refused).
+		final bool
 	}{
 		"another series": {
 			file:  "old.zip",
 			setup: func(t *testing.T, store string) { putFile(t, store, "17.0/fixture.zip", "old.zip") },
-			step:  result.StepCheck, error: "17.0",
+			step:  result.StepCheck, error: "17.0", final: true,
 		},
 		"not a zip": {
 			file:  "junk.zip",
@@ -243,14 +245,14 @@ func TestRestoreOdooFileRefusals(t *testing.T) {
 			setup: func(t *testing.T, store string) {
 				writeZip(t, filepath.Join(store, "empty.zip"), map[string]string{"readme.txt": "x"})
 			},
-			step: result.StepFetch, error: "no dump.sql",
+			step: result.StepFetch, error: "no dump.sql", final: true,
 		},
 		"two dump.sql": {
 			file: "two.zip",
 			setup: func(t *testing.T, store string) {
 				writeZip(t, filepath.Join(store, "two.zip"), map[string]string{"a/dump.sql": dump, "b/dump.sql": dump})
 			},
-			step: result.StepFetch, error: "2 dump.sql",
+			step: result.StepFetch, error: "2 dump.sql", final: true,
 		},
 		"a file outside the filestore": {
 			file: "slip.zip",
@@ -259,14 +261,14 @@ func TestRestoreOdooFileRefusals(t *testing.T) {
 					"dump.sql": dump, "filestore/../../../evil": "x",
 				})
 			},
-			step: result.StepLoad, error: "unsafe name",
+			step: result.StepLoad, error: "unsafe name", final: true,
 		},
 		"no Odoo database": {
 			file: "plain.zip",
 			setup: func(t *testing.T, store string) {
 				writeZip(t, filepath.Join(store, "plain.zip"), map[string]string{"dump.sql": "CREATE TABLE t (a int);\n"})
 			},
-			step: result.StepCheck, error: "holds no Odoo database",
+			step: result.StepCheck, error: "holds no Odoo database", final: true,
 		},
 	}
 	for name, cs := range cases {
@@ -277,8 +279,8 @@ func TestRestoreOdooFileRefusals(t *testing.T) {
 			store := t.TempDir()
 			cs.setup(t, store)
 			rr := f.restoreFile(store, cs.file, f.nextSuffix())
-			if rr.OK || rr.LiveChanged || rr.Step != cs.step || !strings.Contains(rr.Error, cs.error) {
-				t.Fatalf("restore: %+v; want step %s and an error with %q", rr, cs.step, cs.error)
+			if rr.OK || rr.LiveChanged || rr.Step != cs.step || !strings.Contains(rr.Error, cs.error) || rr.Final != cs.final {
+				t.Fatalf("restore: %+v; want step %s, an error with %q, final %v", rr, cs.step, cs.error, cs.final)
 			}
 			f.assertState(f.db, live, "after the refused restore")
 			if got := f.databases(); strings.Join(got, ",") != f.db {
@@ -362,7 +364,7 @@ func TestRestoreWithOdooStep(t *testing.T) {
 		live := f.state(f.db)
 		hWrite(t, filepath.Join(work, WorkOdooVersion), []byte("Odoo Server 19.0-20261015\n"))
 		rr := last(f, store, work, suffix, false)
-		if rr.OK || rr.LiveChanged || rr.Step != result.StepCheck || !strings.Contains(rr.Error, "19.0") {
+		if rr.OK || rr.LiveChanged || !rr.Final || rr.Step != result.StepCheck || !strings.Contains(rr.Error, "19.0") {
 			t.Fatalf("last step: %+v", rr)
 		}
 		f.assertState(f.db, live, "after the refused restore")
@@ -376,7 +378,7 @@ func TestRestoreWithOdooStep(t *testing.T) {
 		hWrite(t, filepath.Join(work, WorkOdooVersion), []byte("Odoo Server 18.0-20261015\n"))
 		hWrite(t, filepath.Join(work, WorkNeutralizeExit), []byte("1\n"))
 		rr := last(f, store, work, suffix, true)
-		if rr.OK || rr.LiveChanged || !strings.Contains(rr.Error, "neutralize") {
+		if rr.OK || rr.LiveChanged || !rr.Final || !strings.Contains(rr.Error, "neutralize") {
 			t.Fatalf("last step: %+v", rr)
 		}
 		f.assertState(f.db, live, "after the failed neutralize")
@@ -401,6 +403,7 @@ func TestRestoreUpgradeWithOdooStep(t *testing.T) {
 	upgraded := func(f *fixture, store, work, suffix string) result.Result {
 		return f.restoreFile(store, "fixture.zip", suffix, func(o *RestoreOptions) {
 			o.WorkDir, o.UpgradeModules, o.UpgradeImage = work, []string{"shop", "pos"}, "registry.example/shop:2"
+			o.UpgradeToken = "release-2"
 		})
 	}
 	t.Run("upgraded", func(t *testing.T) {
@@ -408,8 +411,8 @@ func TestRestoreUpgradeWithOdooStep(t *testing.T) {
 		hWrite(t, filepath.Join(work, WorkOdooVersion), []byte("Odoo Server 18.0-20261015\n"))
 		hWrite(t, filepath.Join(work, WorkUpgradeExit), []byte("0\n"))
 		rr := upgraded(f, store, work, suffix)
-		if !rr.OK || !rr.LiveChanged || rr.Image != "registry.example/shop:2" {
-			t.Fatalf("last step: %+v", rr)
+		if !rr.OK || !rr.LiveChanged || rr.Image != "registry.example/shop:2" || rr.UpgradeToken != "release-2" {
+			t.Fatalf("last step: %+v; the data counts as upgraded for the token the upgrade was for", rr)
 		}
 		if !slices.ContainsFunc(rr.Warnings, func(w string) bool { return strings.Contains(w, "upgraded (-u shop,pos)") }) {
 			t.Errorf("warnings = %q", rr.Warnings)
@@ -423,7 +426,7 @@ func TestRestoreUpgradeWithOdooStep(t *testing.T) {
 		hWrite(t, filepath.Join(work, WorkUpgradeExit), []byte("1\n"))
 		hWrite(t, filepath.Join(work, WorkUpgradeLog), []byte("KeyError: 'x_field'\n"))
 		rr := upgraded(f, store, work, suffix)
-		if rr.OK || rr.LiveChanged || rr.Step != result.StepCheck || !strings.Contains(rr.Error, "x_field") {
+		if rr.OK || rr.LiveChanged || !rr.Final || rr.Step != result.StepCheck || !strings.Contains(rr.Error, "x_field") {
 			t.Fatalf("last step: %+v", rr)
 		}
 		f.assertState(f.db, live, "after the failed upgrade")
@@ -439,6 +442,85 @@ func TestRestoreUpgradeWithOdooStep(t *testing.T) {
 		if rr.OK || rr.LiveChanged || !strings.Contains(rr.Error, "19.0") {
 			t.Fatalf("last step: %+v", rr)
 		}
+	})
+}
+
+// A pod of a restore Job retried after the Odoo step neutralized and
+// upgraded the loaded database (the swap failed after the checks): the load
+// step tells the next pod's Odoo step not to run them again, and the last
+// step accepts the database without them, but never one whose latest run
+// failed.
+func TestRestoreRetriedPodSkipsOdooStep(t *testing.T) {
+	x := odooFixtures[1]
+	last := func(f *fixture, store, work, suffix, token string) result.Result {
+		return f.restoreFile(store, "fixture.zip", suffix, func(o *RestoreOptions) {
+			o.WorkDir, o.Neutralize = work, true
+			o.UpgradeModules, o.UpgradeImage, o.UpgradeToken = []string{"shop"}, "registry.example/shop:"+token, token
+		})
+	}
+	// firstPod checks and upgrades the database, then fails to swap it in
+	// (the previous data's folder is in the way), and returns the next
+	// pod's shared folder after its load step.
+	firstPod := func(t *testing.T) (*fixture, string, string, string) {
+		f, store, work, suffix := loadForOdooStep(t, x)
+		hWrite(t, filepath.Join(work, WorkOdooVersion), []byte("Odoo Server 18.0-20261015\n"))
+		hWrite(t, filepath.Join(work, WorkNeutralizeExit), []byte("0\n"))
+		hWrite(t, filepath.Join(work, WorkUpgradeExit), []byte("0\n"))
+		blocker := f.filestore(layout.PrevName(f.db, suffix))
+		if err := os.MkdirAll(blocker, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if rr := last(f, store, work, suffix, "2"); rr.OK || rr.LiveChanged || rr.Final || !strings.Contains(rr.Error, "already exists") {
+			t.Fatalf("first pod: %+v; a swap that fails is retried", rr)
+		}
+		if err := os.Remove(blocker); err != nil {
+			t.Fatal(err)
+		}
+		next := t.TempDir()
+		lr := f.restoreFile(store, "fixture.zip", suffix, func(o *RestoreOptions) { o.WorkDir, o.LoadOnly = next, true })
+		if !lr.OK {
+			t.Fatalf("second load step: %+v", lr)
+		}
+		for _, name := range []string{WorkSource, WorkNeutralized, WorkUpgraded} {
+			if _, err := os.Stat(filepath.Join(next, name)); err != nil {
+				t.Fatalf("the second load step left no %s: %v", name, err)
+			}
+		}
+		hWrite(t, filepath.Join(next, WorkOdooVersion), []byte("Odoo Server 18.0-20261015\n"))
+		return f, store, next, suffix
+	}
+
+	t.Run("left out", func(t *testing.T) {
+		f, store, next, suffix := firstPod(t)
+		// A later Job may be made for another image and token: the data
+		// stays what the pod that upgraded it upgraded it for.
+		rr := last(f, store, next, suffix, "3")
+		if !rr.OK || !rr.LiveChanged || rr.Image != "registry.example/shop:2" || rr.UpgradeToken != "2" {
+			t.Fatalf("second pod: %+v; the data counts as upgraded on the first pod's image and token", rr)
+		}
+		for _, w := range []string{"neutralized", "upgraded"} {
+			n := 0
+			for _, got := range rr.Warnings {
+				if strings.Contains(got, w) {
+					n++
+				}
+			}
+			if n != 1 {
+				t.Errorf("%d warnings say %s: %q", n, w, rr.Warnings)
+			}
+		}
+		f.assertOdooFixture(x, false)
+	})
+	t.Run("run again and failed", func(t *testing.T) {
+		f, store, next, suffix := firstPod(t)
+		live := f.state(f.db)
+		hWrite(t, filepath.Join(next, WorkUpgradeExit), []byte("1\n"))
+		hWrite(t, filepath.Join(next, WorkUpgradeLog), []byte("KeyError: 'x_field'\n"))
+		rr := last(f, store, next, suffix, "2")
+		if rr.OK || rr.LiveChanged || !rr.Final || !strings.Contains(rr.Error, "x_field") {
+			t.Fatalf("second pod: %+v; a database whose latest upgrade failed is never swapped in", rr)
+		}
+		f.assertState(f.db, live, "after the failed upgrade")
 	})
 }
 

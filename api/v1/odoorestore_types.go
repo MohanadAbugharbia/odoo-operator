@@ -193,6 +193,11 @@ type OdooRestoreStatus struct {
 	// Image is the Odoo image recorded in the backup; the instance is
 	// started on it.
 	Image string `json:"image,omitempty"`
+	// UpgradeToken is the upgrade token the instance counts as running once
+	// the restore completed: the backup's, or for an upgraded restore
+	// (spec.upgrade) the spec.upgrade.token the restore Job upgraded the
+	// data for. A spec.upgrade.token that differs from it runs the upgrade.
+	UpgradeToken string `json:"upgradeToken,omitempty"`
 	// OdooVersion is the Odoo series in the backup.
 	OdooVersion string `json:"odooVersion,omitempty"`
 

@@ -30,7 +30,11 @@ step's image could not be pulled) fails with the live data untouched and the
 step named in `status.message`. A restore takes precedence over everything else and
 replaces a failed init or upgrade Job, which makes it the way back from a
 failed upgrade. Modules in `spec.modules` that the backup lacks are installed
-again afterwards.
+again afterwards. The restore Job lists them in its result; when they are too
+many for it (Kubernetes keeps 4096 bytes of a Job's result, room for some 250
+module names), the result says so instead of listing part of them, and the
+operator reads the installed modules from the restored database itself, with
+the instance's database credentials, before Odoo starts on it.
 
 The instance then counts as running the backup's image and upgrade token. If
 `spec.image` differs from the backup's image, the usual upgrade follows when
@@ -127,7 +131,11 @@ database keeps the module versions of the backup until the next upgrade.
 - The restore fails, with the live data untouched, when the upgrade fails;
   `status.message` ends with the end of Odoo's log.
 - Afterwards the instance counts as running `spec.image` and
-  `spec.upgrade.token`, so no upgrade Job follows.
+  `spec.upgrade.token` as they were when the restore Job was made, so no
+  upgrade Job follows. `status.upgradeToken` records that token; the agent
+  reports it from the pod that ran the upgrade. A token changed while the
+  restore ran (or `spec.image` changed, with `onImageChange`) is applied next,
+  by the usual upgrade, and `status.message` says so.
 - `upgrade` cannot be set on an undo. The upgrade runs inside the restore Job,
   so the Job's deadline (`spec.backup.activeDeadlineSeconds`) covers it too.
 
@@ -152,7 +160,24 @@ database keeps the module versions of the backup until the next upgrade.
 ## What happens if something goes wrong
 
 The live data is never edited in place, so a restore can fail without
-damaging it, and a Job that dies halfway finishes when it is retried:
+damaging it, and a Job that dies halfway finishes when it is retried.
+
+A restore Job runs up to three pods (`backoffLimit: 2`) for failures that a
+new pod may get past: a pod killed out of memory, evicted, or one that lost
+its connection to the database. A failure no new pod can change ends the Job
+at its first pod instead, through the Job's pod failure policy: the backup
+refused by its checks (another Odoo series, row counts or attachments that do
+not match, a file that is not an Odoo backup), `odoo neutralize` or the
+upgrade failing, or an undo whose previous data is gone. The agent reports
+such a failure with exit code 3 and `"final": true` in its result, and the
+restore fails with the live data untouched, instead of loading the backup
+twice more with Odoo stopped. On a cluster that has the Job pod failure policy
+turned off (it is on by default from Kubernetes 1.26), such a Job simply
+fails the same way three times. A new pod of the same Job does not run
+`neutralize` or the upgrade again when an earlier pod already did, as the
+restore journal records; should it run either again all the same, its
+outcome counts, and a database whose latest neutralize or upgrade failed is
+never swapped in.
 
 How the operator tells which side of the swap a failed Job ended on:
 
@@ -164,6 +189,13 @@ How the operator tells which side of the swap a failed Job ended on:
   nothing was swapped: the restore fails, and the message names the step
   that failed and why (for example `failed in step load: OOMKilled (exit
   code 137)`).
+- While the Job's pod cannot start (it cannot be scheduled, a Secret it
+  names is missing, its image cannot be pulled, or it waits for a volume
+  attached to another node), `status.message` and the instance's `Degraded`
+  condition (`JobCannotStart`) say why. When no pod of the Job has started
+  a container 15 minutes after the Job started, the operator deletes the
+  Job, and the restore fails with the live data untouched and Odoo back,
+  rather than keeping Odoo stopped until `spec.backup.activeDeadlineSeconds`.
 - When it left none after the main container started, or the pods that
   would tell are gone, the swap may have started: Odoo stays stopped and the
   restore is retried (`status.liveChanged`, `status.liveChangeUnconfirmed`).

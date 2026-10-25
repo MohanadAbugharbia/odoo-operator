@@ -5,6 +5,7 @@ import (
 	stderrors "errors"
 	"fmt"
 	"strings"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -44,6 +45,15 @@ type JobObservation struct {
 	QuotaMessage string
 	// ImagePullMessage is set when the Job's pod is stuck pulling its image.
 	ImagePullMessage string
+	// StartMessage is set when the Job's pod cannot start for another
+	// reason: it cannot be scheduled, a container cannot be created (a
+	// missing Secret), or it waits long for its first container (a volume
+	// attached elsewhere). See podStartMessage.
+	StartMessage string
+	// NeverStarted is true while no pod of the unfinished Job has ever run a
+	// container (JobNeverStarted), since StartedAt.
+	NeverStarted bool
+	StartedAt    time.Time
 }
 
 // ErrJobTerminating is returned by EnsureMaintenanceJob while a Job with the
@@ -98,8 +108,14 @@ func ObserveMaintenanceJob(
 		// No pod yet: the only interesting reason is a ResourceQuota rejection.
 		obs.QuotaMessage = quotaMessage(ctx, reader, job)
 	}
-	if obs.QuotaMessage == "" {
-		obs.ImagePullMessage = imagePullMessage(ctx, reader, job)
+	if pods, ok := jobPods(ctx, reader, job); ok {
+		obs.NeverStarted, obs.StartedAt = JobNeverStarted(job, pods)
+		if obs.QuotaMessage == "" {
+			obs.ImagePullMessage = podsImagePullMessage(pods)
+		}
+		if obs.QuotaMessage == "" && obs.ImagePullMessage == "" {
+			obs.StartMessage = podStartMessage(pods, time.Now())
+		}
 	}
 	return obs, nil
 }
