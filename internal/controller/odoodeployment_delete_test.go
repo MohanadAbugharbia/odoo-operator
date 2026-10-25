@@ -1,0 +1,303 @@
+package controller
+
+import (
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+
+	corev1 "k8s.io/api/core/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	odoov1 "github.com/MohanadAbugharbia/odoo-operator/api/v1"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/layout"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/backup/result"
+	"github.com/MohanadAbugharbia/odoo-operator/internal/database"
+)
+
+// ownedPod makes pod count as one of the instance's, which its deletion
+// waits for.
+func (h *backupHarness) ownedPod(pod *corev1.Pod) {
+	pod.Labels[odoov1.LabelOdooDeployment] = h.name
+	ExpectWithOffset(1, k8sClient.Update(ctx, pod)).To(Succeed())
+}
+
+// endPod lets pod end with res as its main container's result.
+func endPod(pod *corev1.Pod, res result.Result) {
+	ExpectWithOffset(1, k8sClient.Get(ctx, client.ObjectKeyFromObject(pod), pod)).To(Succeed())
+	pod.Status.Phase = corev1.PodSucceeded
+	if !res.OK {
+		pod.Status.Phase = corev1.PodFailed
+	}
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{*mainResult(res)}
+	ExpectWithOffset(1, k8sClient.Status().Update(ctx, pod)).To(Succeed())
+}
+
+// reconcileWork runs the OdooBackup and OdooRestore reconcilers on name.
+func reconcileWork(name string) {
+	req := ctrl.Request{NamespacedName: client.ObjectKey{Namespace: ns, Name: name}}
+	_, err := (&OdooBackupReconciler{Client: k8sClient}).Reconcile(ctx, req)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	_, err = (&OdooRestoreReconciler{Client: k8sClient}).Reconcile(ctx, req)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+}
+
+var _ = Describe("Deleting an instance with its database", func() {
+	var h *backupHarness
+
+	AfterEach(func() {
+		if h != nil {
+			h.cleanupAll()
+		}
+	})
+
+	It("drops the copies of a restore it cut short, which its Job swapped in unrecorded", func() {
+		h = newBackupHarness()
+		h.completedBackup()
+		h.newRestore("r", func(s *odoov1.OdooRestoreSpec) { s.Backup = h.name + "-one" })
+		_, od := h.reconcile()
+		job := od.Status.CurrentOperation.Job
+		Expect(job).NotTo(BeEmpty())
+		suffix := h.restore("r").Status.Suffix
+		pod := h.attemptPod(job, "a", podStatus{
+			phase: corev1.PodRunning, steps: []corev1.ContainerStatus{stepDone("load"), stepDone("odoo")}, main: mainRunning(),
+		})
+		h.ownedPod(pod)
+
+		Expect(k8sClient.Delete(ctx, od)).To(Succeed())
+		_, od = h.reconcile()
+		Expect(od).NotTo(BeNil(), "the deletion waits for the restore's pod")
+
+		By("the OdooRestore reconciler leaves the restore of an instance being deleted alone")
+		reconcileWork(h.name + "-r")
+		rs := h.restore("r")
+		Expect(rs.Status.Phase).To(Equal(odoov1.RestorePhaseRestoring))
+		Expect(rs.Status.Job).To(Equal(job))
+		Expect(rs.Finalizers).To(ContainElement(odoov1.RestoreFinalizer))
+
+		By("the Job swaps the data in: the replaced data is kept, owner-tagged; a half-loaded copy carries no comment")
+		tag := database.NewOwnerTag(ns, h.name)
+		prev, loaded := layout.PrevName(h.dbName(), suffix), layout.RestoreName(h.dbName(), suffix)
+		h.fake.Seed(prev, tag)
+		h.fake.Seed(loaded, "")
+		endPod(pod, result.Result{OK: true, LiveChanged: true, PreviousKept: true})
+		for i := 0; i < 3 && h.get() != nil; i++ {
+			h.reconcile()
+		}
+		Expect(h.get()).To(BeNil())
+		Expect(h.fake.Has(h.dbName())).To(BeFalse())
+		Expect(h.fake.Has(prev)).To(BeFalse(), "the replaced data goes with the instance")
+		Expect(h.fake.Has(loaded)).To(BeFalse(), "the copy is dropped by its name")
+		Expect(h.fake.CallCount("DropCopy")).To(Equal(1))
+
+		rs = h.restore("r")
+		Expect(rs).NotTo(BeNil())
+		Expect(rs.Status.Phase).To(Equal(odoov1.RestorePhaseFailed))
+		Expect(rs.Status.Message).To(ContainSubstring("was deleted while the restore was running"))
+		Expect(rs.Status.Message).To(ContainSubstring("dropped the databases the restore made"))
+		Expect(rs.Status.CleanedUp).To(BeTrue())
+		Expect(rs.Status.Job).To(BeEmpty())
+	})
+
+	It("drops the leftovers of a failed restore not yet cleaned up, never another owner's", func() {
+		h = newBackupHarness()
+		suffix := "20250102T030405"
+		rs := h.newRestore("failed", func(s *odoov1.OdooRestoreSpec) { s.SnapshotID = completedSnapshot })
+		rs.Status.Phase = odoov1.RestorePhaseFailed
+		rs.Status.Suffix = suffix
+		Expect(k8sClient.Status().Update(ctx, rs)).To(Succeed())
+		other := "20250102T030406"
+		foreign := h.newRestore("foreign", func(s *odoov1.OdooRestoreSpec) { s.SnapshotID = completedSnapshot })
+		foreign.Status.Phase = odoov1.RestorePhaseFailed
+		foreign.Status.Suffix = other
+		Expect(k8sClient.Status().Update(ctx, foreign)).To(Succeed())
+		loaded := layout.RestoreName(h.dbName(), suffix)
+		h.fake.Seed(loaded, "")
+		h.fake.Seed(layout.RestoreName(h.dbName(), other), "odoo-operator:elsewhere/odoo")
+
+		Expect(k8sClient.Delete(ctx, h.get())).To(Succeed())
+		for i := 0; i < 3 && h.get() != nil; i++ {
+			h.reconcile()
+		}
+		Expect(h.get()).To(BeNil())
+		Expect(h.fake.Has(loaded)).To(BeFalse())
+		Expect(h.restore("failed").Status.CleanedUp).To(BeTrue())
+		Expect(h.fake.Has(layout.RestoreName(h.dbName(), other))).To(BeTrue(), "a copy another owner tagged stays")
+		Expect(h.restore("foreign").Status.CleanedUp).To(BeFalse())
+	})
+
+	It("records the snapshot of a backup whose Job finished during the deletion", func() {
+		h = newBackupHarness()
+		h.newBackup("b")
+		_, od := h.reconcile()
+		job := od.Status.CurrentOperation.Job
+		Expect(job).NotTo(BeEmpty())
+		pod := h.attemptPod(job, "a", podStatus{phase: corev1.PodRunning, main: mainRunning()})
+		h.ownedPod(pod)
+
+		Expect(k8sClient.Delete(ctx, od)).To(Succeed())
+		_, od = h.reconcile()
+		Expect(od).NotTo(BeNil())
+		reconcileWork(h.name + "-b")
+		Expect(h.backup("b").Status.Phase).To(Equal(odoov1.BackupPhaseRunning), "never failed while its Job may still write")
+
+		endPod(pod, result.Result{OK: true, SnapshotID: "fedcba9876543210", DatabaseBytes: 1, FilestoreFiles: 1})
+		h.endJob(job, 0, true)
+		for i := 0; i < 3 && h.get() != nil; i++ {
+			h.reconcile()
+		}
+		Expect(h.get()).To(BeNil())
+		reconcileWork(h.name + "-b")
+		b := h.backup("b")
+		Expect(b.Status.Phase).To(Equal(odoov1.BackupPhaseCompleted), b.Status.Message)
+		Expect(b.Status.SnapshotID).To(Equal("fedcba9876543210"))
+	})
+
+	It("drops the kept data of restores deleted together with it, then lets them go", func() {
+		h = newBackupHarness()
+		h.completedBackup()
+		h.newRestore("r", func(s *odoov1.OdooRestoreSpec) { s.Backup = h.name + "-one" })
+		_, od := h.reconcile()
+		h.finishJob(od.Status.CurrentOperation.Job, &result.Result{OK: true, LiveChanged: true, PreviousKept: true, Image: "odoo:a"})
+		h.reconcile()
+		rs := h.restore("r")
+		Expect(rs.Status.Phase).To(Equal(odoov1.RestorePhaseCompleted))
+		Expect(rs.Status.Previous.State).To(Equal(odoov1.PreviousKept))
+		Expect(rs.Finalizers).To(ContainElement(odoov1.RestoreFinalizer))
+		prev := rs.Status.Previous.Database
+		h.fake.Seed(prev, database.NewOwnerTag(ns, h.name))
+
+		By("both are deleted at once, as an uninstall does")
+		Expect(k8sClient.Delete(ctx, rs)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, h.get())).To(Succeed())
+		reconcileWork(rs.Name)
+		Expect(h.restore("r")).NotTo(BeNil(), "the restore waits for the instance's deletion")
+		for i := 0; i < 3 && h.get() != nil; i++ {
+			h.reconcile()
+		}
+		Expect(h.get()).To(BeNil())
+		Expect(h.fake.Has(prev)).To(BeFalse(), "the kept data goes with the instance")
+		Eventually(func() *odoov1.OdooRestore { return h.restore("r") }).Should(BeNil(),
+			"the deletion released the restore, with no OdooRestore reconcile")
+	})
+
+	It("lets the restores go when the database is retained", func() {
+		h = newBackupHarness(func(od *odoov1.OdooDeployment) {
+			od.Spec.Database.DeletionPolicy = odoov1.DeletionPolicyRetain
+		})
+		h.completedBackup()
+		h.newRestore("r", func(s *odoov1.OdooRestoreSpec) { s.Backup = h.name + "-one" })
+		_, od := h.reconcile()
+		job := od.Status.CurrentOperation.Job
+		pod := h.attemptPod(job, "a", podStatus{
+			phase: corev1.PodRunning, steps: []corev1.ContainerStatus{stepDone("load"), stepDone("odoo")}, main: mainRunning(),
+		})
+		h.ownedPod(pod)
+		Expect(k8sClient.Delete(ctx, h.restore("r"))).To(Succeed())
+		Expect(k8sClient.Delete(ctx, od)).To(Succeed())
+		h.reconcile()
+		Expect(h.restore("r")).NotTo(BeNil(), "held while its Job runs")
+		endPod(pod, result.Result{OK: true, LiveChanged: true, PreviousKept: true})
+		for i := 0; i < 3 && h.get() != nil; i++ {
+			h.reconcile()
+		}
+		Expect(h.get()).To(BeNil())
+		Eventually(func() *odoov1.OdooRestore { return h.restore("r") }).Should(BeNil())
+		Expect(h.fake.CallCount("Drop")).To(BeZero())
+	})
+
+	Describe("with the data volume retained", func() {
+		retainVolume := func(od *odoov1.OdooDeployment) {
+			od.Spec.OdooFilestore.DeletionPolicy = odoov1.DeletionPolicyRetain
+		}
+		// keptRestore is a completed restore that kept the data it replaced.
+		keptRestore := func() *odoov1.OdooRestore {
+			h.completedBackup()
+			h.newRestore("r", func(s *odoov1.OdooRestoreSpec) { s.Backup = h.name + "-one" })
+			_, od := h.reconcile()
+			h.finishJob(od.Status.CurrentOperation.Job, &result.Result{OK: true, LiveChanged: true, PreviousKept: true, Image: "odoo:a"})
+			h.reconcile()
+			rs := h.restore("r")
+			Expect(rs.Status.Previous.State).To(Equal(odoov1.PreviousKept))
+			Expect(rs.Status.Previous.Filestore).NotTo(BeEmpty())
+			h.fake.Seed(rs.Status.Previous.Database, database.NewOwnerTag(ns, h.name))
+			return rs
+		}
+		// cleanupJob reconciles the deletion up to the cleanup Job of rs.
+		cleanupJob := func(rs *odoov1.OdooRestore) string {
+			Expect(k8sClient.Delete(ctx, h.get())).To(Succeed())
+			_, od := h.reconcile()
+			Expect(od).NotTo(BeNil(), "the volume is cleaned before the instance goes")
+			op := od.Status.CurrentOperation
+			Expect(op.Kind).To(Equal(odoov1.OperationCleanup))
+			Expect(op.Name).To(Equal(rs.Name))
+			Expect(jobArgs(h.job(op.Job))).To(ContainSubstring("cleanup --suffix " + rs.Status.Suffix))
+			By("a Job the deletion started is not taken for one that never ran")
+			_, od = h.reconcile()
+			Expect(od).NotTo(BeNil())
+			Expect(h.job(op.Job)).NotTo(BeNil())
+			return op.Job
+		}
+
+		It("runs each restore's cleanup Job before it leaves the volume behind", func() {
+			h = newBackupHarness(retainVolume)
+			rs := keptRestore()
+			job := cleanupJob(rs)
+			Expect(h.fake.Has(h.dbName())).To(BeTrue(), "the database waits for the volume's cleanup")
+
+			// The Job deletes the folders and drops <db>_prev_ and <db>_restore_ itself.
+			h.finishJob(job, &result.Result{OK: true})
+			for i := 0; i < 3 && h.get() != nil; i++ {
+				h.reconcile()
+			}
+			Expect(h.get()).To(BeNil())
+			Expect(h.fake.Has(h.dbName())).To(BeFalse())
+			rs = h.restore("r")
+			Expect(rs.Status.Previous.Database).To(BeEmpty())
+			Expect(rs.Status.CleanedUp).To(BeTrue())
+			Expect(rs.Status.Previous.State).To(Equal(odoov1.PreviousRemoved))
+			Expect(rs.Status.Previous.Filestore).To(BeEmpty())
+			Expect(rs.Finalizers).NotTo(ContainElement(odoov1.RestoreFinalizer))
+		})
+
+		It("records what stays when the cleanup Job fails, and does not try again", func() {
+			h = newBackupHarness(retainVolume)
+			rs := keptRestore()
+			prev, folder := rs.Status.Previous.Database, rs.Status.Previous.Filestore
+			job := cleanupJob(rs)
+			h.finishJob(job, &result.Result{OK: false, Step: result.StepCleanup, Error: "restore has not finished its swap"})
+			for i := 0; i < 3 && h.get() != nil; i++ {
+				h.reconcile()
+			}
+			Expect(h.get()).To(BeNil(), "a failed cleanup does not hold the deletion")
+			Expect(h.fake.Has(prev)).To(BeFalse(), "the database is dropped all the same")
+			rs = h.restore("r")
+			Expect(rs.Status.CleanedUp).To(BeFalse())
+			Expect(rs.Status.Previous.Database).To(BeEmpty())
+			Expect(rs.Status.Previous.Filestore).To(Equal(folder), "the folder that stays is recorded")
+			Expect(rs.Annotations[AnnotationFilesKept]).To(ContainSubstring("has not finished its swap"))
+			Expect(rs.Annotations[AnnotationFilesKept]).To(ContainSubstring(layout.StagingDir(rs.Status.Suffix)))
+		})
+	})
+
+	It("reports the reason of a backup whose Job failed during the deletion", func() {
+		h = newBackupHarness(func(od *odoov1.OdooDeployment) {
+			od.Spec.Database.DeletionPolicy = odoov1.DeletionPolicyRetain
+		})
+		h.newBackup("b")
+		_, od := h.reconcile()
+		job := od.Status.CurrentOperation.Job
+		pod := h.attemptPod(job, "a", podStatus{phase: corev1.PodRunning, main: mainRunning()})
+		h.ownedPod(pod)
+		Expect(k8sClient.Delete(ctx, od)).To(Succeed())
+		h.reconcile()
+		endPod(pod, result.Result{OK: false, Step: result.StepUpload, Error: "store full"})
+		h.endJob(job, 1, false)
+		for i := 0; i < 3 && h.get() != nil; i++ {
+			h.reconcile()
+		}
+		Expect(h.get()).To(BeNil())
+		b := h.backup("b")
+		Expect(b.Status.Phase).To(Equal(odoov1.BackupPhaseFailed))
+		Expect(b.Status.Message).To(ContainSubstring("store full"))
+	})
+})

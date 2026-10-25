@@ -313,3 +313,85 @@ func TestPgxUnreachableServer(t *testing.T) {
 		t.Errorf("a connection failure must not look like a missing or foreign database: %v", err)
 	}
 }
+
+// A restore's and a drill's working copies carry no comment: DropCopy drops
+// them by name, ending a session a killed pod left, and refuses every other
+// name and a copy another owner tagged.
+func TestPgxDropCopy(t *testing.T) {
+	conn := testConnInfo(t)
+	ctx := context.Background()
+	p := NewPgx()
+	live := uniqueDBName(t)
+	suffix := "20250102T030405"
+	restoreCopy := live + "_restore_" + suffix
+	drillCopy := live + "_drill_" + suffix
+	foreign := live + "_restore_20250102T030406"
+	prev := live + "_prev_" + suffix
+	tag := NewOwnerTag("shop", "odoo")
+	admin, err := pgx.Connect(ctx, DSN(conn, conn.MaintenanceDB))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = admin.Close(ctx) }()
+	for _, db := range []string{live, restoreCopy, drillCopy, foreign, prev} {
+		t.Cleanup(func() { dropDatabase(ctx, t, conn, db) })
+		if _, err := admin.Exec(ctx, "CREATE DATABASE "+quoteIdentifier(db)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := admin.Exec(ctx, "COMMENT ON DATABASE "+quoteIdentifier(foreign)+" IS 'odoo-operator:other/odoo'"); err != nil {
+		t.Fatal(err)
+	}
+	held, err := pgx.Connect(ctx, DSN(conn, restoreCopy))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = held.Close(ctx) }()
+
+	names, err := p.Databases(ctx, conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{live, restoreCopy, drillCopy} {
+		if !contains(names, want) {
+			t.Fatalf("Databases = %v, missing %s", names, want)
+		}
+	}
+	for _, name := range []string{live, prev, "postgres", live + "_restore_latest"} {
+		if err := p.DropCopy(ctx, conn, live, name, tag); !errors.Is(err, ErrNotCopy) {
+			t.Fatalf("DropCopy(%s) = %v, want ErrNotCopy", name, err)
+		}
+	}
+	if err := p.DropCopy(ctx, conn, live, foreign, tag); !errors.Is(err, ErrNotOwned) {
+		t.Fatalf("DropCopy of a copy another owner tagged = %v, want ErrNotOwned", err)
+	}
+	for _, name := range []string{restoreCopy, drillCopy} {
+		if err := p.DropCopy(ctx, conn, live, name, tag); err != nil {
+			t.Fatalf("DropCopy(%s): %v", name, err)
+		}
+		if err := p.DropCopy(ctx, conn, live, name, tag); err != nil {
+			t.Fatalf("second DropCopy(%s) is not a no-op: %v", name, err)
+		}
+	}
+	names, err = p.Databases(ctx, conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, db := range []string{live, prev, foreign} {
+		if !contains(names, db) {
+			t.Fatalf("%s was dropped", db)
+		}
+	}
+	if contains(names, restoreCopy) || contains(names, drillCopy) {
+		t.Fatalf("copies left: %v", names)
+	}
+}
+
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
