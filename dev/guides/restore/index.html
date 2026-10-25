@@ -1800,10 +1800,13 @@ then the restore can be undone:</p>
 </code></pre></div>
 <p>Only the latest restore can be undone. Deleting an OdooRestore deletes the data
 it kept.</p>
-<div class="admonition warning">
-<p class="admonition-title">Deleting the instance keeps the previous data</p>
-<p>Deleting an OdooDeployment does not delete the <code>&lt;db&gt;_prev_&lt;suffix&gt;</code>
-databases and folders its restores kept; drop them by hand.</p>
+<div class="admonition note">
+<p class="admonition-title">Deleting the instance</p>
+<p>Deleting an OdooDeployment whose database is dropped
+(<code>spec.database.deletionPolicy: Delete</code>) drops the <code>&lt;db&gt;_prev_&lt;suffix&gt;</code>
+and <code>&lt;db&gt;_restore_&lt;suffix&gt;</code> databases of its restores with it, and
+deletes their folders from a filestore volume that is kept. With
+<code>Retain</code> they stay, beside the database.</p>
 </div>
 
 

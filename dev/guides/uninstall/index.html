@@ -1432,8 +1432,15 @@ operator that applies their deletion policies.</p>
   the snapshots in their stores. The instance's repositories are no longer
   checked or pruned either, since store tasks only cover instances that list
   the store.</li>
-<li>The databases and folders that restores kept for undo
-  (<code>&lt;db&gt;_prev_&lt;suffix&gt;</code>) stay; drop them by hand.</li>
+<li>The databases restores made (<code>&lt;db&gt;_prev_&lt;suffix&gt;</code> kept for an undo, a
+  half-loaded <code>&lt;db&gt;_restore_&lt;suffix&gt;</code>) are dropped with the instance's
+  database, and stay with it under <code>Retain</code>. When the database is dropped
+  and the filestore volume kept, their folders, staging folders and journals
+  are deleted from the volume first by a cleanup Job per restore; if one
+  fails, the <code>odoo.abugharbia.com/files-kept</code> annotation of that
+  <code>OdooRestore</code> names what stayed (see <a href="../../concepts/databases/">Databases</a>).</li>
+<li>Scratch databases of restore drills (<code>&lt;db&gt;_drill_&lt;suffix&gt;</code>) a drill pod
+  left when it died are dropped with the instance's database too.</li>
 <li>Deleting an instance waits for all its pods to stop, including a running
   backup, restore, init or upgrade Job, whatever its deletion policies, so
   that none is cut short. A Job that never started a container, and the

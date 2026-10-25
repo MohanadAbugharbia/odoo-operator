@@ -1447,15 +1447,46 @@
   <code>DROP DATABASE … WITH (FORCE)</code>, which needs PostgreSQL 13 or later. If the
   connection Secret is already gone (for example when the whole namespace is
   deleted) the database is left in place with a <code>DatabaseNotDropped</code> event.
-  With it go the databases the instance's restores kept for an undo
-  (<code>status.previous.database</code>), under the same tag check.</li>
+  With it go the databases the instance's restores made: the data a restore
+  replaced and kept for an undo (<code>&lt;db&gt;_prev_&lt;suffix&gt;</code>, under the same tag
+  check) and the copy a restore loads into (<code>&lt;db&gt;_restore_&lt;suffix&gt;</code>, which
+  carries no comment and is dropped by that exact name only, never a
+  database carrying another owner's tag). That includes a restore the
+  deletion cut short, whose Job may have swapped the data in after the
+  restore stopped being followed: it is marked <code>Failed</code> and <code>cleanedUp</code>.
+  So do the scratch databases restore drills left (<code>&lt;db&gt;_drill_&lt;suffix&gt;</code>,
+  found by that exact name, see <a href="../../guides/drills/">Restore drills</a>).</li>
+<li>An instance being deleted settles its own backups and restores: the
+  <code>OdooBackup</code> and <code>OdooRestore</code> reconcilers leave them alone until the
+  instance is gone. The deletion waits for a running backup Job, records its
+  snapshot on the <code>OdooBackup</code> (or the reason it failed), and only then
+  removes the instance; a backup still <code>Running</code> once the instance is gone
+  is marked <code>Failed</code>. The deletion also releases the finalizer of the
+  instance's <code>OdooRestore</code>s, after it dropped what they made, so restores
+  deleted together with their instance (<code>kubectl delete
+  odoorestore,odoodeployment --all</code>, or an Argo CD or Helm uninstall) take
+  their kept databases with them as well.</li>
 <li><code>spec.database.name</code> and the <code>nameFromSecret</code> selector are immutable so a
   rename can never orphan or drop the wrong database. Changing the value inside
   the Secret that <code>nameFromSecret</code> points at stops the instance instead: phase
   <code>Failed</code>, <code>Degraded</code> reason <code>DatabaseNameChanged</code>.</li>
 <li><code>spec.odooFilestore.deletionPolicy</code> works the same way for the filestore PVC
   (Retain by default). The PVC is created once: changing
-  <code>spec.odooFilestore.size</code> or <code>storageClassName</code> later does not change it.</li>
+  <code>spec.odooFilestore.size</code> or <code>storageClassName</code> later does not change it.
+  When the database is dropped but the PVC is retained, the deletion first
+  runs, one at a time, the cleanup Job of every restore that left something
+  on it: the <code>filestore/&lt;db&gt;_prev_&lt;suffix&gt;</code> and
+  <code>filestore/&lt;db&gt;_restore_&lt;suffix&gt;</code> folders, the staging folder
+  <code>.odoo-operator/staging-&lt;suffix&gt;</code> and the journal
+  <code>.odoo-operator/restore-&lt;suffix&gt;.json</code>, exactly what a cleanup after
+  <code>keepPrevious</code> deletes (the instance's own <code>filestore/&lt;db&gt;</code> stays, with
+  the volume). A cleanup Job that fails, or cannot start because the
+  namespace is being deleted, is not tried again and does not hold the
+  deletion: that restore keeps <code>status.cleanedUp: false</code> and
+  <code>status.previous.filestore</code>, and its annotation
+  <code>odoo.abugharbia.com/files-kept</code> (and a <code>RestoreFilesKept</code> event) names
+  the paths left on the volume. With the database retained, all of it stays
+  with the database.</li>
 </ul>
 
 
